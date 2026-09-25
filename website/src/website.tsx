@@ -1,0 +1,126 @@
+import { useState } from "react";
+
+const RELEASES = "https://github.com/bharat2808/texthalo/releases/latest";
+const SOURCE = "https://github.com/bharat2808/texthalo";
+
+function Mark({ small = false }: { small?: boolean }) {
+  return (
+    <span className={`brand-mark${small ? " brand-mark-small" : ""}`} aria-hidden="true">
+      <span />
+    </span>
+  );
+}
+
+function Arrow({ diagonal = false }: { diagonal?: boolean }) {
+  return <span aria-hidden="true" className="arrow">{diagonal ? "↗" : "→"}</span>;
+}
+
+function SoundBars() {
+  return (
+    <div className="sound-bars" aria-hidden="true">
+      {[18, 31, 23, 43, 29, 55, 36, 48, 25, 39, 56, 28, 44, 21, 34, 49, 27, 40, 19, 33, 51, 24, 38, 17, 31, 45, 22, 37, 16].map((height, index) => (
+        <i key={index} style={{ height }} />
+      ))}
+    </div>
+  );
+}
+
+function ProductPreview() {
+  return (
+    <div className="preview-wrap" aria-label="Preview of TextHalo's floating speech player">
+      <div className="orbit orbit-one" />
+      <div className="orbit orbit-two" />
+      <div className="preview-label"><span className="live-dot" /> A quieter way to read</div>
+      <div className="selection-card">
+        <div className="selection-top"><span>YOUR WORK, UNINTERRUPTED</span><span>JUST NOW</span></div>
+        <p>“The secret of getting ahead is getting started.”</p>
+        <div className="selection-author">Mark Twain <span>·</span> selected text</div>
+      </div>
+      <div className="player-card">
+        <div className="player-head">
+          <div className="player-avatar"><Mark small /></div>
+          <div><strong>Reading aloud</strong><span>Apple voice · Samantha</span></div>
+          <button className="more-button" aria-label="More playback options">···</button>
+        </div>
+        <SoundBars />
+        <div className="player-controls"><span>0:08</span><div className="progress-track"><i /></div><span>0:21</span><button className="stop-button" aria-label="Stop playback">■</button></div>
+      </div>
+      <div className="preview-note"><span className="note-icon">⌘</span> Press your shortcut. Keep your place.</div>
+    </div>
+  );
+}
+
+function Website() {
+  const [menuOpen, setMenuOpen] = useState(false);
+
+  return (
+    <div className="site-shell">
+      <div className="announcement"><span className="announcement-dot" /> TextHalo is open source <span className="announcement-separator">·</span> Made for macOS <a href={SOURCE}>Explore the project <Arrow /></a></div>
+      <header className="site-header">
+        <a className="wordmark" href="#top" aria-label="TextHalo home"><Mark /><span>TextHalo</span></a>
+        <button className="menu-toggle" aria-label={menuOpen ? "Close menu" : "Open menu"} aria-expanded={menuOpen} onClick={() => setMenuOpen(!menuOpen)}>{menuOpen ? "×" : "☰"}</button>
+        <nav className={menuOpen ? "nav-open" : ""} aria-label="Main navigation">
+          <a href="#how-it-works" onClick={() => setMenuOpen(false)}>How it works</a>
+          <a href="#voices" onClick={() => setMenuOpen(false)}>Voices</a>
+          <a href="#privacy" onClick={() => setMenuOpen(false)}>Privacy</a>
+          <a className="nav-source" href={SOURCE} target="_blank" rel="noreferrer">Open source <Arrow diagonal /></a>
+          <a className="button button-dark nav-download" href={RELEASES} target="_blank" rel="noreferrer">Get TextHalo <Arrow /></a>
+        </nav>
+      </header>
+
+      <main id="top">
+        <section className="hero section-wrap">
+          <div className="hero-copy">
+            <div className="eyebrow"><span className="eyebrow-line" /> YOUR WORDS, IN A DIFFERENT WAY</div>
+            <h1>A little more<br /><em>room to listen.</em></h1>
+            <p className="hero-text">Select a passage. Press a shortcut. Let your Mac read while you think, stretch, or look away for a while.</p>
+            <div className="hero-actions">
+              <a className="button button-dark button-large" href={RELEASES} target="_blank" rel="noreferrer">Download for Mac <Arrow /></a>
+              <a className="text-link" href="#how-it-works">See how it works <Arrow /></a>
+            </div>
+            <div className="hero-meta"><span><i className="apple-mark">●</i> Built for macOS</span><span className="meta-divider" /><span>Free &amp; open source</span></div>
+          </div>
+          <ProductPreview />
+          <div className="hero-footnote"><span>01 / 03</span><span className="footnote-line" /><span>MAKE SPACE FOR A LISTEN</span></div>
+        </section>
+
+        <section className="ticker" aria-label="TextHalo benefits">
+          <div>YOUR PACE <b>✳</b> YOUR PLACE <b>✳</b> YOUR VOICE <b>✳</b> YOUR PACE <b>✳</b> YOUR PLACE <b>✳</b> YOUR VOICE <b>✳</b></div>
+        </section>
+
+        <section id="how-it-works" className="how section-wrap">
+          <div className="section-heading"><div><div className="eyebrow"><span className="eyebrow-line" /> SIMPLE BY DESIGN</div><h2>From selected to spoken<br /><em>in a single breath.</em></h2></div><p>TextHalo lives in your menu bar. It stays out of the way until you want to listen.</p></div>
+          <div className="steps-grid">
+            <article className="step-card"><div className="step-top"><span>01</span><span className="step-icon selection-icon">⌖</span></div><h3>Find your words</h3><p>Select text in the app you’re already using. An article, a draft, a long email — pick up wherever you are.</p><div className="mini-selection">“Pick up wherever you are.” <i /></div></article>
+            <article className="step-card"><div className="step-top"><span>02</span><span className="step-icon shortcut-icon">⌘<small>⇧ S</small></span></div><h3>Press your shortcut</h3><p>A quick keyboard shortcut starts reading. Your selection stays right where it is.</p><div className="mini-shortcut"><span>Read selection</span><kbd>⌘</kbd><kbd>⇧</kbd><kbd>S</kbd></div></article>
+            <article className="step-card step-card-accent"><div className="step-top"><span>03</span><span className="step-icon sound-icon">≈</span></div><h3>Settle in and listen</h3><p>Follow along in the floating player. Stop or change your voice whenever you like.</p><div className="mini-player"><div className="mini-play">▶</div><SoundBars /></div></article>
+          </div>
+        </section>
+
+        <section id="voices" className="voices-section">
+          <div className="voices section-wrap">
+            <div className="voices-copy"><div className="eyebrow eyebrow-light"><span className="eyebrow-line" /> A VOICE THAT FITS THE MOMENT</div><h2>Three ways to<br /><em>hear it.</em></h2><p>Start with a voice already on your Mac. When you want more, choose a local AI engine and find the sound that suits you.</p><a className="light-link" href={SOURCE} target="_blank" rel="noreferrer">See all supported voices <Arrow /></a></div>
+            <div className="engine-list">
+              <article className="engine-card engine-apple"><div className="engine-number">01</div><div className="engine-main"><div className="engine-icon system-icon">◖</div><div><h3>Apple voices</h3><p>Ready when you are. Uses voices installed on your Mac.</p></div></div><span className="engine-tag">READY TO GO</span></article>
+              <article className="engine-card"><div className="engine-number">02</div><div className="engine-main"><div className="engine-icon kokoro-icon">k</div><div><h3>Kokoro</h3><p>Lightweight, natural-sounding speech that runs locally.</p></div></div><span className="engine-tag">LOCAL AI</span></article>
+              <article className="engine-card"><div className="engine-number">03</div><div className="engine-main"><div className="engine-icon chatter-icon">✳</div><div><h3>Chatterbox</h3><p>Expressive multilingual speech with your own reference voice.</p></div></div><span className="engine-tag">LOCAL AI</span></article>
+              <p className="engine-footnote"><span>↳</span> AI models download on your Mac when you choose to use them.</p>
+            </div>
+          </div>
+          <div className="dark-orbit dark-orbit-a" /><div className="dark-orbit dark-orbit-b" />
+        </section>
+
+        <section id="privacy" className="privacy section-wrap">
+          <div className="privacy-art"><div className="privacy-ring ring-a"/><div className="privacy-ring ring-b"/><div className="privacy-center"><Mark /><span>ON YOUR MAC</span></div><div className="privacy-pill pill-top">LOCAL SPEECH</div><div className="privacy-pill pill-bottom">YOUR AUDIO STAYS YOURS</div></div>
+          <div className="privacy-copy"><div className="eyebrow"><span className="eyebrow-line" /> YOUR WORDS STAY YOURS</div><h2>Private by<br /><em>where it happens.</em></h2><p>Speech synthesis runs on your Mac. Your selected text isn’t sent to a cloud speech service. TextHalo only goes online to fetch the local models you choose.</p><div className="privacy-points"><div><span className="check-mark">✓</span><span><strong>Local by default</strong><small>Your text is spoken on your Mac.</small></span></div><div><span className="check-mark">✓</span><span><strong>You choose what to download</strong><small>AI model files stay in your local app data.</small></span></div></div><a className="text-link" href={`${SOURCE}/blob/master/README.md#text-capture-and-privacy`} target="_blank" rel="noreferrer">Read about privacy <Arrow /></a></div>
+        </section>
+
+        <section className="closing-cta"><div className="closing-inner"><div className="closing-mark"><Mark /></div><div className="eyebrow eyebrow-light"><span className="eyebrow-line" /> READY WHEN YOU ARE</div><h2>Give your eyes<br /><em>a little break.</em></h2><p>TextHalo is free, open source, and made for your Mac.</p><a className="button button-cream button-large" href={RELEASES} target="_blank" rel="noreferrer">Get TextHalo for macOS <Arrow /></a><span className="cta-version">Current version 0.1.3 <span>·</span> Requires macOS</span></div><div className="cta-decoration cta-dec-a"/><div className="cta-decoration cta-dec-b"/></section>
+      </main>
+
+      <footer className="site-footer"><a className="wordmark footer-wordmark" href="#top"><Mark /><span>TextHalo</span></a><span className="footer-copy">A little more room to listen.</span><div className="footer-links"><a href={SOURCE} target="_blank" rel="noreferrer">GitHub <Arrow diagonal /></a><a href={`${SOURCE}/blob/master/LICENSE-APACHE`} target="_blank" rel="noreferrer">Apache 2.0</a><a href={`${SOURCE}/issues/new`} target="_blank" rel="noreferrer">Feedback <Arrow diagonal /></a></div><span className="copyright">© {new Date().getFullYear()} TextHalo</span></footer>
+    </div>
+  );
+}
+
+export default Website;

@@ -9,8 +9,11 @@ lerna-debug.log*
 
 node_modules
 dist
+dist-website
 dist-ssr
 *.local
+.playwright-cli
+output/playwright
 
 # Throwaway experiments under spikes/ get their own Cargo target directories; keeping the
 # source is the point, keeping a 700 MB build tree is not.

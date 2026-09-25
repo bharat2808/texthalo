@@ -94,6 +94,17 @@ src-tauri/target/release/bundle/macos/TextHalo.app
 
 Copy `TextHalo.app` to **Applications**, launch it, and enable Accessibility access. Rebuilding can invalidate the previous permission grant. If capture stops working after a rebuild, remove the stale TextHalo entry in Accessibility settings and enable the rebuilt app again.
 
+## Website
+
+The standalone TextHalo marketing site is a separate React/Vite project in `website/`; it does not replace the desktop app interface.
+
+```bash
+npm run website:dev
+npm run website:build
+```
+
+The production static site is written to `dist-website/` and can be deployed to `texthalo.app` through a static hosting provider.
+
 ## Development checks
 
 ```bash

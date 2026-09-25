@@ -8,6 +8,8 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "typecheck": "tsc --noEmit",
+    "website:dev": "vite --config vite.website.config.ts",
+    "website:build": "tsc --noEmit -p website/tsconfig.json && vite build --config vite.website.config.ts",
     "preview": "vite preview",
     "tauri": "tauri"
   },
