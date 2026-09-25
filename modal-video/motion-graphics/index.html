@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=1280, initial-scale=1" />
+    <title>TextHalo — a little more room to listen</title>
+    <style>
+      :root {
+        --paper: #f5f4ef;
+        --ink: #18231f;
+        --muted: #707a72;
+        --green: #c8f06b;
+        --forest: #183c32;
+        --line: #e4e7de;
+        --display: "Manrope", "Avenir Next", -apple-system, sans-serif;
+        --body: "DM Sans", "Avenir Next", -apple-system, sans-serif;
+        --mono: "SF Mono", Menlo, monospace;
+      }
+      * { box-sizing: border-box; }
+      html, body { width: 1280px; height: 720px; margin: 0; overflow: hidden; }
+      body { background: var(--paper); color: var(--ink); font-family: var(--body); }
+      #film { position: relative; width: 1280px; height: 720px; overflow: hidden; background: var(--paper); }
+      .grain { position: absolute; inset: 0; opacity: .12; pointer-events: none; background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 180 180' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.12'/%3E%3C/svg%3E"); }
+      .masthead { position: absolute; z-index: 5; left: 78px; right: 78px; top: 47px; display: flex; align-items: center; justify-content: space-between; }
+      .brand { display: flex; align-items: center; gap: 11px; font: 800 22px/1 var(--display); letter-spacing: -.055em; }
+      .mark { position: relative; width: 31px; height: 31px; border: 2px solid var(--forest); border-radius: 50%; }
+      .mark::before { content: ""; position: absolute; width: 13px; height: 13px; left: 10px; top: 4px; border: 2px solid #7baf46; border-radius: 50%; }
+      .mark::after { content: ""; position: absolute; width: 5px; height: 5px; left: 6px; top: 17px; border-radius: 50%; background: var(--forest); }
+      .made-for { font: 10px var(--mono); color: #748074; letter-spacing: .08em; }
+      .scene { position: absolute; inset: 0; padding: 150px 78px 85px; opacity: 0; transform: translateY(12px); transition: opacity .35s ease, transform .5s cubic-bezier(.2,.75,.2,1); }
+      .scene.visible { opacity: 1; transform: translateY(0); }
+      .copy { position: absolute; left: 78px; top: 200px; width: 380px; }
+      .eyebrow { display: flex; align-items: center; gap: 11px; color: #667565; font: 10px var(--mono); letter-spacing: .12em; text-transform: uppercase; }
+      .eyebrow::before { content: ""; width: 24px; height: 1px; background: #92ad6e; }
+      h1 { max-width: 390px; margin: 23px 0 18px; font: 650 54px/.99 var(--display); letter-spacing: -.075em; }
+      h1 em { color: #678746; font-style: normal; }
+      .subcopy { max-width: 340px; margin: 0; color: #68736a; font-size: 16px; line-height: 1.65; }
+      .step-mark { position: absolute; left: 78px; bottom: 47px; display: flex; align-items: center; gap: 13px; color: #89938b; font: 10px var(--mono); letter-spacing: .08em; }
+      .step-mark strong { color: #304237; font-weight: 500; }
+      .step-line { width: 51px; height: 1px; background: #bac8ac; }
+      .window { position: absolute; left: 515px; top: 170px; width: 680px; height: 390px; overflow: hidden; border: 1px solid #e4e6df; border-radius: 13px; background: rgba(255,255,255,.9); box-shadow: 0 30px 80px rgba(31,47,36,.12); }
+      .window-bar { height: 43px; padding: 0 17px; display: flex; align-items: center; gap: 7px; background: #f8f8f5; border-bottom: 1px solid #eceee8; }
+      .traffic { width: 8px; height: 8px; border-radius: 50%; background: #d9ddd5; }
+      .address { height: 20px; width: 225px; margin-left: 23px; border: 1px solid #eceee8; border-radius: 6px; background: #fff; }
+      .document { padding: 35px 51px; }
+      .doc-kicker { color: #829080; font: 9px var(--mono); letter-spacing: .11em; }
+      .doc-title { margin: 15px 0 11px; font: 600 24px var(--display); letter-spacing: -.045em; }
+      .doc-meta { color: #919a90; font-size: 10px; }
+      .doc-rule { height: 1px; margin: 22px 0 20px; background: #eceee8; }
+      .doc-text { color: #68736b; font: 14px/1.9 var(--body); }
+      .quote-selection { position: relative; width: max-content; margin: 9px 0 7px; padding: 3px 8px; border-radius: 3px; background: rgba(200,240,107,.57); color: #26392d; font: 600 17px/1.5 var(--display); letter-spacing: -.025em; transform-origin: left center; }
+      .selection-caret { position: absolute; right: -3px; bottom: -1px; width: 2px; height: 25px; border-radius: 2px; background: #658b45; opacity: 0; }
+      .scene-1 .selection-caret { animation: caret .85s ease-in-out 1.15s 2; }
+      @keyframes caret { 0%,100% { opacity: 0; } 35%,65% { opacity: 1; } }
+      .shortcut-card { position: absolute; right: 70px; bottom: 30px; display: flex; align-items: center; gap: 17px; padding: 17px 20px; border: 1px solid #e7e9e2; border-radius: 10px; background: #fff; box-shadow: 0 15px 36px rgba(31,47,36,.12); opacity: 0; transform: translateY(12px) scale(.98); }
+      .scene-2.visible .shortcut-card { animation: card-in .55s .15s cubic-bezier(.2,.8,.2,1) forwards; }
+      @keyframes card-in { to { opacity: 1; transform: translateY(0) scale(1); } }
+      .shortcut-copy { display: grid; gap: 5px; color: #28382d; font-size: 12px; font-weight: 600; }
+      .shortcut-copy small { color: #879087; font-size: 9px; font-weight: 400; }
+      .keys { display: flex; align-items: center; gap: 5px; }
+      .key { min-width: 37px; height: 38px; display: grid; place-items: center; border: 1px solid #dfe3da; border-bottom-width: 3px; border-radius: 6px; background: #f8f9f5; color: #344238; font: 14px var(--mono); transition: transform .14s, border-bottom-width .14s, background .14s; }
+      .scene-2.visible .key { animation: keypress .5s 1.2s ease-in-out 1; }
+      .scene-2.visible .key:nth-child(2) { animation-delay: 1.33s; }
+      .scene-2.visible .key:nth-child(3) { animation-delay: 1.46s; }
+      @keyframes keypress { 45% { transform: translateY(2px); border-bottom-width: 1px; background: #eaf3dd; } }
+      .player-card { position: absolute; top: 270px; left: 608px; width: 460px; padding: 24px 26px 21px; border: 1px solid #eceee8; border-radius: 16px; background: #fff; box-shadow: 0 28px 75px rgba(31,47,36,.17); }
+      .player-head { display: flex; align-items: center; gap: 13px; }
+      .avatar { width: 44px; height: 44px; display: grid; place-items: center; border-radius: 12px; background: #edf4e4; }
+      .avatar .mark { transform: scale(.72); }
+      .player-name { display: grid; gap: 5px; }
+      .player-name strong { color: #26342b; font-size: 15px; font-weight: 650; }
+      .player-name span { color: #89938a; font-size: 11px; }
+      .more { margin-left: auto; color: #8a948b; font-size: 20px; letter-spacing: 2px; }
+      .waveform { height: 90px; margin: 17px 0 13px; display: flex; align-items: center; justify-content: space-between; gap: 4px; }
+      .bar { flex: 1; height: var(--height); min-width: 3px; border-radius: 4px; background: #a9cc78; transform: scaleY(.35); animation: wave .7s ease-in-out infinite alternate; animation-delay: var(--delay); }
+      .bar:nth-child(3n) { background: #456e4c; }
+      @keyframes wave { to { transform: scaleY(1); } }
+      .controls { display: flex; align-items: center; gap: 11px; color: #89938a; font: 10px var(--mono); }
+      .track { position: relative; height: 4px; flex: 1; overflow: hidden; border-radius: 10px; background: #e8ece3; }
+      .track-fill { width: 0; height: 100%; border-radius: inherit; background: #719849; }
+      .scene-3.visible .track-fill { animation: playback 3.35s linear .2s forwards; }
+      @keyframes playback { to { width: 67%; } }
+      .stop { width: 29px; height: 29px; margin-left: 6px; display: grid; place-items: center; border-radius: 50%; background: #eff1ec; color: #536056; font-size: 9px; }
+      .scene-3 .step-mark { color: #738076; }
+      .outro { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; background: var(--forest); color: #f2f4eb; opacity: 0; transition: opacity .7s ease; }
+      .outro.visible { opacity: 1; }
+      .outro .brand { gap: 16px; font-size: 35px; }
+      .outro .mark { width: 43px; height: 43px; border-color: #dce9cc; }
+      .outro .mark::before { width: 19px; height: 19px; left: 14px; top: 7px; border-color: var(--green); }
+      .outro .mark::after { left: 8px; top: 24px; background: #dce9cc; }
+      .outro h2 { margin: 34px 0 13px; text-align: center; font: 600 54px/1.02 var(--display); letter-spacing: -.07em; }
+      .outro h2 em { color: var(--green); font-style: normal; }
+      .outro p { margin: 0; color: #bec9bd; font-size: 14px; }
+      .orbit { position: absolute; width: 650px; height: 650px; border: 1px solid rgba(229,241,213,.09); border-radius: 50%; }
+      .orbit.two { width: 510px; height: 510px; border-style: dashed; }
+      .outro .brand, .outro h2, .outro p { position: relative; z-index: 1; }
+      .progress { position: absolute; left: 0; right: 0; bottom: 0; height: 4px; background: rgba(24,60,50,.1); }
+      .progress i { display: block; width: 0; height: 100%; background: #8aaa63; }
+      @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; } }
+    </style>
+  </head>
+  <body>
+    <main id="film" aria-label="TextHalo product video">
+      <div class="grain"></div>
+      <header class="masthead">
+        <div class="brand"><span class="mark" aria-hidden="true"></span><span>TextHalo</span></div>
+        <div class="made-for">A LITTLE MORE ROOM TO LISTEN</div>
+      </header>
+
+      <section class="scene scene-1" data-start="0">
+        <div class="copy">
+          <div class="eyebrow">01 &nbsp; / &nbsp; FIND YOUR WORDS</div>
+          <h1>Select a passage.<br /><em>Stay in your flow.</em></h1>
+          <p class="subcopy">Choose text in the app you’re already using. An article, a draft, a long email.</p>
+        </div>
+        <div class="window">
+          <div class="window-bar"><i class="traffic"></i><i class="traffic"></i><i class="traffic"></i><div class="address"></div></div>
+          <article class="document">
+            <div class="doc-kicker">A NOTE ON BEGINNINGS</div>
+            <div class="doc-title">Make room for a new idea</div>
+            <div class="doc-meta">A short passage · 2 min read</div>
+            <div class="doc-rule"></div>
+            <p class="doc-text">Some days, the best way forward is to pause and notice what’s already in front of you.</p>
+            <p class="quote-selection">“The secret of getting ahead is getting started.”<i class="selection-caret"></i></p>
+            <p class="doc-text">A few minutes with the right words can change the shape of an afternoon.</p>
+          </article>
+        </div>
+        <div class="step-mark"><strong>SELECT TEXT</strong><i class="step-line"></i><span>01 / 03</span></div>
+      </section>
+
+      <section class="scene scene-2" data-start="3.75">
+        <div class="copy">
+          <div class="eyebrow">02 &nbsp; / &nbsp; ONE QUICK SHORTCUT</div>
+          <h1>Press your<br /><em>shortcut.</em></h1>
+          <p class="subcopy">TextHalo reads your selection without pulling you away from what you’re doing.</p>
+        </div>
+        <div class="window">
+          <div class="window-bar"><i class="traffic"></i><i class="traffic"></i><i class="traffic"></i><div class="address"></div></div>
+          <article class="document">
+            <div class="doc-kicker">A NOTE ON BEGINNINGS</div>
+            <div class="doc-title">Make room for a new idea</div>
+            <div class="doc-meta">A short passage · 2 min read</div>
+            <div class="doc-rule"></div>
+            <p class="doc-text">Some days, the best way forward is to pause and notice what’s already in front of you.</p>
+            <p class="quote-selection">“The secret of getting ahead is getting started.”</p>
+            <p class="doc-text">A few minutes with the right words can change the shape of an afternoon.</p>
+          </article>
+          <div class="shortcut-card">
+            <div class="shortcut-copy">Read selection<small>TextHalo keyboard shortcut</small></div>
+            <div class="keys"><span class="key">⌘</span><span class="key">⇧</span><span class="key">S</span></div>
+          </div>
+        </div>
+        <div class="step-mark"><strong>PRESS ⌘ ⇧ S</strong><i class="step-line"></i><span>02 / 03</span></div>
+      </section>
+
+      <section class="scene scene-3" data-start="7.5">
+        <div class="copy">
+          <div class="eyebrow">03 &nbsp; / &nbsp; SETTLE IN AND LISTEN</div>
+          <h1>A little more<br /><em>room to listen.</em></h1>
+          <p class="subcopy">Follow along in the floating player. Keep your place and your pace.</p>
+        </div>
+        <div class="player-card">
+          <div class="player-head">
+            <div class="avatar"><span class="mark" aria-hidden="true"></span></div>
+            <div class="player-name"><strong>Reading aloud</strong><span>Apple voice · Samantha</span></div>
+            <div class="more">···</div>
+          </div>
+          <div class="waveform" aria-hidden="true"></div>
+          <div class="controls"><span>0:08</span><div class="track"><div class="track-fill"></div></div><span>0:21</span><span class="stop">■</span></div>
+        </div>
+        <div class="step-mark"><strong>LISTEN ALONG</strong><i class="step-line"></i><span>03 / 03</span></div>
+      </section>
+
+      <section class="outro">
+        <i class="orbit one"></i><i class="orbit two"></i>
+        <div class="brand"><span class="mark" aria-hidden="true"></span><span>TextHalo</span></div>
+        <h2>A little more room<br /><em>to listen.</em></h2>
+        <p>Free, open source, and made for macOS.</p>
+      </section>
+      <div class="progress"><i></i></div>
+    </main>
+    <script>
+      const TOTAL = 15;
+      const scenes = [...document.querySelectorAll(".scene")];
+      const outro = document.querySelector(".outro");
+      const fill = document.querySelector(".progress i");
+      const waveform = document.querySelector(".waveform");
+      const bars = Array.from({ length: 31 }, (_, i) => {
+        const bar = document.createElement("i");
+        bar.className = "bar";
+        bar.style.setProperty("--height", `${12 + Math.abs(Math.sin(i * .71)) * 57}px`);
+        bar.style.setProperty("--delay", `${(i % 8) * -0.11}s`);
+        waveform.append(bar);
+        return bar;
+      });
+      let startedAt = 0;
+      let paused = true;
+      const smooth = (x) => { x = Math.max(0, Math.min(1, x)); return x * x * (3 - 2 * x); };
+      function frame(now) {
+        if (paused) return;
+        const time = Math.min((now - startedAt) / 1000, TOTAL);
+        for (let i = 0; i < scenes.length; i++) {
+          const start = Number(scenes[i].dataset.start);
+          const next = i < scenes.length - 1 ? Number(scenes[i + 1].dataset.start) : 11.25;
+          const fadeIn = smooth((time - start) / .45);
+          const fadeOut = i === scenes.length - 1 ? 1 - smooth((time - 10.82) / .43) : 1 - smooth((time - (next - .42)) / .42);
+          const visible = fadeIn * fadeOut;
+          scenes[i].style.opacity = String(visible);
+          scenes[i].style.transform = `translateY(${(1 - fadeIn) * 14}px)`;
+          scenes[i].style.pointerEvents = visible > .1 ? "auto" : "none";
+          scenes[i].classList.toggle("visible", visible > .96);
+        }
+        const end = smooth((time - 11) / .7);
+        outro.style.opacity = String(end);
+        outro.classList.toggle("visible", end > .96);
+        fill.style.width = `${Math.min(100, (time / TOTAL) * 100)}%`;
+        const playTime = Math.max(0, time - 7.5);
+        bars.forEach((bar, i) => {
+          const height = 12 + (Math.sin(playTime * 8 + i * .71) ** 2) * 60;
+          bar.style.height = `${height}px`;
+        });
+        if (time < TOTAL) requestAnimationFrame(frame);
+        else paused = true;
+      }
+      window.startFilm = () => { paused = false; startedAt = performance.now(); requestAnimationFrame(frame); };
+      window.seekFilm = (seconds) => { paused = false; startedAt = performance.now() - seconds * 1000; frame(performance.now()); };
+      window.filmDuration = TOTAL;
+      window.seekFilm(0);
+      paused = true;
+    </script>
+  </body>
+</html>
