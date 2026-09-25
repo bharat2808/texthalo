@@ -25,27 +25,21 @@ function SoundBars() {
   );
 }
 
-function ProductPreview() {
+function ProductVideo() {
   return (
-    <div className="preview-wrap" aria-label="Preview of TextHalo's floating speech player">
-      <div className="orbit orbit-one" />
-      <div className="orbit orbit-two" />
-      <div className="preview-label"><span className="live-dot" /> A quieter way to read</div>
-      <div className="selection-card">
-        <div className="selection-top"><span>YOUR WORK, UNINTERRUPTED</span><span>JUST NOW</span></div>
-        <p>“The secret of getting ahead is getting started.”</p>
-        <div className="selection-author">Mark Twain <span>·</span> selected text</div>
-      </div>
-      <div className="player-card">
-        <div className="player-head">
-          <div className="player-avatar"><Mark small /></div>
-          <div><strong>Reading aloud</strong><span>Apple voice · Samantha</span></div>
-          <button className="more-button" aria-label="More playback options">···</button>
-        </div>
-        <SoundBars />
-        <div className="player-controls"><span>0:08</span><div className="progress-track"><i /></div><span>0:21</span><button className="stop-button" aria-label="Stop playback">■</button></div>
-      </div>
-      <div className="preview-note"><span className="note-icon">⌘</span> Press your shortcut. Keep your place.</div>
+    <div className="product-video">
+      <div className="product-video-label"><span className="live-dot" /> SEE TEXTHALO IN ACTION</div>
+      <video
+        controls
+        playsInline
+        preload="metadata"
+        poster="/videos/texthalo-product-demo-poster.png"
+        aria-label="TextHalo product demo with narration"
+      >
+        <source src="/videos/texthalo-product-demo.mp4" type="video/mp4" />
+        Your browser does not support embedded video.
+      </video>
+      <div className="product-video-caption"><span>15 SECOND PRODUCT TOUR</span><span>VOICEOVER · KOKORO</span></div>
     </div>
   );
 }
@@ -80,7 +74,7 @@ function Website() {
             </div>
             <div className="hero-meta"><span><i className="apple-mark">●</i> Built for macOS</span><span className="meta-divider" /><span>Free &amp; open source</span></div>
           </div>
-          <ProductPreview />
+          <ProductVideo />
           <div className="hero-footnote"><span>01 / 03</span><span className="footnote-line" /><span>MAKE SPACE FOR A LISTEN</span></div>
         </section>
 
