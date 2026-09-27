@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getVersion } from "@tauri-apps/api/app";
 import { open } from "@tauri-apps/plugin-dialog";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type Update } from "@tauri-apps/plugin-updater";
@@ -451,6 +452,7 @@ function Note({
 
 export default function App() {
   const [state, setState] = useState<UiState | null>(null);
+  const [appVersion, setAppVersion] = useState<string | null>(null);
   // The last word from an espeak-ng install attempt. Kept until the next attempt rather
   // than timed out, because the message is the only answer the user gets.
   const [espeakMessage, setEspeakMessage] = useState<string | null>(null);
@@ -478,6 +480,10 @@ export default function App() {
   const saveRevision = useRef(0);
   const pendingSaves = useRef(0);
   const updateDownload = useRef({ downloaded: 0, total: 0 });
+
+  useEffect(() => {
+    void getVersion().then(setAppVersion).catch(() => setAppVersion("unknown"));
+  }, []);
 
   const refreshHistory = useCallback(async () => {
     setHistoryLoading(true);
@@ -977,7 +983,7 @@ export default function App() {
             </Card>
 
             <Card title="About" icon={Icon.box()}>
-              <div className="card-note">Version 0.1.3 · Apache-2.0</div>
+              <div className="card-note">Version {appVersion ?? "…"} · Apache-2.0</div>
               <div className="inline">
                 <button className="plain" onClick={() => void checkForUpdates()} disabled={checkingUpdate || installingUpdate}>
                   {checkingUpdate ? "Checking…" : "Check for Updates"}
