@@ -6,6 +6,8 @@ TextHalo is a macOS menu bar text-to-speech app with Apple system voices and loc
 
 **Website:** [texthalo.app](https://texthalo.app)
 
+The website pricing page is available at `/pricing/`. It uses Neon Auth sign-in before starting Stripe Checkout; set `VITE_NEON_AUTH_URL` and `VITE_TEXTHALO_API_URL` for the website build, and allow the website origin in the server's `CORS_ALLOWED_ORIGINS`.
+
 ## Demo
 
 

@@ -1,4 +1,5 @@
 import { blogPosts, stories, type EditorialPage } from "./content";
+import { BillingSuccessPage, PricingPage, SignInPage } from "./billing";
 import Website from "./website";
 
 const SITE_URL = "https://texthalo.app";
@@ -7,6 +8,9 @@ const SOURCE = "https://github.com/bharat2808/texthalo";
 export function getSitePaths(): string[] {
   return [
     "/",
+    "/pricing/",
+    "/sign-in/",
+    "/account/billing/success/",
     "/demo/",
     "/blog/",
     ...blogPosts.map((page) => `/blog/${page.slug}/`),
@@ -49,6 +53,7 @@ function EditorialHeader() {
       <nav className="editorial-nav" aria-label="Main navigation">
         <a href="/#how-it-works">How it works</a>
         <a href="/#voices">Voices</a>
+        <a href="/pricing/">Pricing</a>
         <a href="/demo/">Demo</a>
         <a href="/stories/">Stories</a>
         <a href="/blog/">Blog</a>
@@ -111,6 +116,9 @@ function EditorialArticle({ page, kind }: { page: EditorialPage; kind: "blog" | 
 
 export function SitePage({ pathname }: { pathname: string }) {
   if (pathname === "/") return <Website />;
+  if (pathname === "/pricing/") return <PricingPage />;
+  if (pathname === "/sign-in/") return <SignInPage />;
+  if (pathname === "/account/billing/success/") return <BillingSuccessPage />;
   if (pathname === "/demo/") return <VideoWatchPage />;
   if (pathname === "/blog/") return <EditorialIndex kind="blog" />;
   if (pathname === "/stories/") return <EditorialIndex kind="stories" />;
@@ -169,6 +177,15 @@ const defaultMetadata = (path: string): SeoMetadata => ({
 export function getSeoMetadata(pathname: string): SeoMetadata {
   const path = normalizePath(pathname);
   if (path === "/") return defaultMetadata(path);
+  if (path === "/pricing/") {
+    return { ...defaultMetadata(path), title: "TextHalo Plans — Local Voices and Hosted Speech", description: "Compare TextHalo Free, Plus, and Creator plans. Keep local Apple, Kokoro, and Chatterbox voices, then add hosted Fish Audio credits when you need them." };
+  }
+  if (path === "/sign-in/") {
+    return { ...defaultMetadata(path), title: "Sign in to TextHalo", description: "Sign in or create a TextHalo account to continue to hosted voice checkout." };
+  }
+  if (path === "/account/billing/success/") {
+    return { ...defaultMetadata(path), title: "Checkout complete | TextHalo", description: "Return to TextHalo after checking out for hosted speech credits." };
+  }
   if (path === "/demo/") {
     const title = "TextHalo Mac App Demo — 15-Second Product Tour";
     const description = "Watch TextHalo read selected text aloud on Mac. This 15-second product tour shows the menu bar app, shortcut, and floating playback controls.";

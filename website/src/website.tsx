@@ -59,6 +59,7 @@ function Website() {
           <a href="#how-it-works" onClick={() => setMenuOpen(false)}>How it works</a>
           <a href="#voices" onClick={() => setMenuOpen(false)}>Voices</a>
           <a href="#privacy" onClick={() => setMenuOpen(false)}>Privacy</a>
+          <a href="/pricing/">Pricing</a>
           <a href="/demo/">Demo</a>
           <a href="/stories/">Stories</a>
           <a href="/blog/">Blog</a>
@@ -117,7 +118,7 @@ function Website() {
         <section className="closing-cta"><div className="closing-inner"><div className="closing-mark"><Mark /></div><div className="eyebrow eyebrow-light"><span className="eyebrow-line" /> READY WHEN YOU ARE</div><h2>Give your eyes<br /><em>a little break.</em></h2><p>TextHalo is free, open source, and made for your Mac.</p><a className="button button-cream button-large" href={DOWNLOAD} target="_blank" rel="noreferrer">Get TextHalo for macOS <Arrow /></a><span className="cta-version">Current version 0.1.4 <span>·</span> Requires macOS</span></div><div className="cta-decoration cta-dec-a"/><div className="cta-decoration cta-dec-b"/></section>
       </main>
 
-      <footer className="site-footer"><a className="wordmark footer-wordmark" href="#top"><Mark /><span>TextHalo</span></a><span className="footer-copy">A little more room to listen.</span><div className="footer-links"><a href="/demo/">Demo</a><a href="/stories/">Stories</a><a href="/blog/">Blog</a><a href={SOURCE} target="_blank" rel="noreferrer">GitHub <Arrow diagonal /></a><a href={`${SOURCE}/blob/master/LICENSE-APACHE`} target="_blank" rel="noreferrer">Apache 2.0</a><a href={`${SOURCE}/issues/new`} target="_blank" rel="noreferrer">Feedback <Arrow diagonal /></a></div><span className="copyright">© {new Date().getFullYear()} TextHalo</span></footer>
+      <footer className="site-footer"><a className="wordmark footer-wordmark" href="#top"><Mark /><span>TextHalo</span></a><span className="footer-copy">A little more room to listen.</span><div className="footer-links"><a href="/pricing/">Pricing</a><a href="/demo/">Demo</a><a href="/stories/">Stories</a><a href="/blog/">Blog</a><a href={SOURCE} target="_blank" rel="noreferrer">GitHub <Arrow diagonal /></a><a href={`${SOURCE}/blob/master/LICENSE-APACHE`} target="_blank" rel="noreferrer">Apache 2.0</a><a href={`${SOURCE}/issues/new`} target="_blank" rel="noreferrer">Feedback <Arrow diagonal /></a></div><span className="copyright">© {new Date().getFullYear()} TextHalo</span></footer>
     </div>
   );
 }
