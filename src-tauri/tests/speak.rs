@@ -160,7 +160,7 @@ fn a_selection_becomes_audible_speech() {
     //    over whatever the machine is doing — the assertion is about the spawn, not the
     //    sound (the sound is what the transcript below is for).
     spoken
-        .speak(&kokoro_settings("af_heart"), text)
+        .speak(&kokoro_settings("af_heart"), text, None)
         .expect("speak the selection");
     assert!(
         spoken.is_speaking(),
