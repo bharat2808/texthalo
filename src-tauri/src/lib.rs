@@ -13,6 +13,7 @@ pub mod engine_paths;
 pub mod engines;
 pub mod espeak;
 pub mod g2p;
+mod history;
 pub mod kokoro;
 pub mod lexicon;
 pub mod numbers;
@@ -55,6 +56,16 @@ pub struct AppState {
     pub spoken: spoken::Spoken,
     pub voices: Vec<Voice>,
     pub bindings: Mutex<Vec<shortcuts::Binding>>,
+}
+
+fn history_dir(app: &AppHandle) -> Result<std::path::PathBuf, String> {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("locate app data directory: {e}"))?
+        .join("audio-history");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("create audio history: {e}"))?;
+    Ok(dir)
 }
 
 #[derive(Serialize, Clone)]
@@ -143,7 +154,14 @@ fn job_status(
 
 /// Serialize synthesis per engine, keeping Stop and other engines independent. A canceled
 /// render may finish computing; only the current job is allowed to start playback.
-fn run_speech(app: &AppHandle, id: u64, settings: Settings, text: String, truncated: bool) {
+fn run_speech(
+    app: &AppHandle,
+    id: u64,
+    settings: Settings,
+    text: String,
+    truncated: bool,
+    archive: bool,
+) {
     let state = app.state::<AppState>();
     let _synthesis = state.synthesis.for_engine(settings.engine).lock().unwrap();
     if !state.job.lock().unwrap().is_current(id) {
@@ -156,25 +174,68 @@ fn run_speech(app: &AppHandle, id: u64, settings: Settings, text: String, trunca
         return;
     }
     if settings.engine == config::Engine::Apple {
+        let archive_path = archive
+            .then(|| history_dir(app).ok())
+            .flatten()
+            .and_then(|dir| history::reserve_audio_path(&dir, "aiff").ok());
         let result = {
             let job = state.job.lock().unwrap();
             if !job.is_current(id) {
                 return;
             }
-            state.spoken.speak(&settings, &text)
+            state
+                .spoken
+                .speak(&settings, &text, archive_path.as_deref())
         };
         match result {
-            Ok(report) => job_status(
-                app,
-                id,
-                Phase::Speaking,
-                Some(report.summary()),
-                Some(chars),
-            ),
+            Ok(report) => {
+                job_status(
+                    app,
+                    id,
+                    Phase::Speaking,
+                    Some(report.summary()),
+                    Some(chars),
+                );
+                while state.spoken.is_speaking() && state.job.lock().unwrap().is_current(id) {
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+                if state.job.lock().unwrap().is_current(id) {
+                    if let Some(path) = state.spoken.finish_apple_archive() {
+                        if let Ok(dir) = history_dir(app) {
+                            if let Err(error) = history::save_entry(
+                                &dir,
+                                &path,
+                                "Apple",
+                                settings.voice.as_deref().unwrap_or("System default"),
+                                &text,
+                                None,
+                            ) {
+                                eprintln!("[TextHalo] could not save Apple audio history: {error}");
+                                let _ = std::fs::remove_file(path);
+                            }
+                        }
+                    }
+                    job_status(
+                        app,
+                        id,
+                        Phase::Idle,
+                        Some(if truncated {
+                            format!("truncated to {} characters", settings.max_chars)
+                        } else {
+                            report.summary()
+                        }),
+                        Some(chars),
+                    );
+                }
+            }
             Err(error) => job_status(app, id, Phase::Error, Some(error), Some(chars)),
         }
         return;
     }
+    let history_root = archive.then(|| history_dir(app).ok()).flatten();
+    let mut recorder = history_root
+        .as_deref()
+        .and_then(|dir| history::PcmRecorder::new(dir).ok());
     {
         let mut job = state.job.lock().unwrap();
         if !job.is_current(id) {
@@ -187,6 +248,7 @@ fn run_speech(app: &AppHandle, id: u64, settings: Settings, text: String, trunca
         .stream_pcm(
             &settings,
             &text,
+            recorder.as_mut(),
             || !state.job.lock().unwrap().is_current(id),
             |player| {
                 let mut job = state.job.lock().unwrap();
@@ -207,15 +269,47 @@ fn run_speech(app: &AppHandle, id: u64, settings: Settings, text: String, trunca
     }
     job.streaming = false;
     match result {
-        Ok(report) => job.set(
-            Phase::Idle,
-            Some(if truncated {
-                format!("truncated to {} characters", settings.max_chars)
-            } else {
-                report.summary()
-            }),
-            Some(chars),
-        ),
+        Ok(report) => {
+            if let (Some(recorder), Some(dir)) = (recorder.take(), history_root.as_deref()) {
+                if let Some(path) = recorder.finish() {
+                    let (engine, voice) = match settings.engine {
+                        config::Engine::Kokoro => ("Kokoro", settings.kokoro.voice.clone()),
+                        config::Engine::Chatterbox => {
+                            let speaker = settings
+                                .chatterbox
+                                .ref_audio
+                                .as_deref()
+                                .unwrap_or("Built-in speaker");
+                            (
+                                "Chatterbox",
+                                format!("{speaker} · {}", settings.chatterbox.voice),
+                            )
+                        }
+                        config::Engine::Apple => unreachable!(),
+                    };
+                    if let Err(error) = history::save_entry(
+                        dir,
+                        &path,
+                        engine,
+                        &voice,
+                        &text,
+                        Some(report.seconds as f64),
+                    ) {
+                        eprintln!("[TextHalo] could not save audio history: {error}");
+                        let _ = std::fs::remove_file(path);
+                    }
+                }
+            }
+            job.set(
+                Phase::Idle,
+                Some(if truncated {
+                    format!("truncated to {} characters", settings.max_chars)
+                } else {
+                    report.summary()
+                }),
+                Some(chars),
+            )
+        }
         Err(error) => {
             state.spoken.stop();
             job.set(Phase::Error, Some(error), Some(chars));
@@ -272,14 +366,14 @@ fn speak_selection(app: &AppHandle, id: u64) {
     };
     let truncated = text.chars().count() > settings.max_chars;
     let text = text.chars().take(settings.max_chars).collect();
-    run_speech(app, id, settings, text, truncated);
+    run_speech(app, id, settings, text, truncated, true);
 }
 
 fn speak_given(app: &AppHandle, id: u64, text: String) {
     let settings = app.state::<AppState>().settings.lock().unwrap().clone();
     let truncated = text.chars().count() > settings.max_chars;
     let text = text.chars().take(settings.max_chars).collect();
-    run_speech(app, id, settings, text, truncated);
+    run_speech(app, id, settings, text, truncated, true);
 }
 
 fn show_settings(app: &AppHandle) {
@@ -361,7 +455,34 @@ fn preview_voice(
     }
     let sample =
         text.unwrap_or_else(|| "This is how I sound when reading your selection.".to_string());
-    std::thread::spawn(move || run_speech(&app, id, settings, sample, false));
+    std::thread::spawn(move || run_speech(&app, id, settings, sample, false, false));
+}
+
+#[tauri::command]
+fn get_audio_history(app: AppHandle) -> Result<Vec<history::Entry>, String> {
+    history::list(&history_dir(&app)?)
+}
+
+#[tauri::command]
+fn delete_audio_history(app: AppHandle, id: String) -> Result<(), String> {
+    history::delete(&history_dir(&app)?, &id)
+}
+
+#[tauri::command]
+fn clear_audio_history(app: AppHandle) -> Result<(), String> {
+    history::clear(&history_dir(&app)?)
+}
+
+#[tauri::command]
+fn play_audio_history(app: AppHandle, id: String) -> Result<(), String> {
+    let path = history::audio_path(&history_dir(&app)?, &id)?;
+    std::process::Command::new("/usr/bin/afplay")
+        .arg(path)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("could not play saved audio: {e}"))
 }
 
 #[tauri::command]
@@ -557,9 +678,8 @@ fn install_tray(app: &AppHandle) -> tauri::Result<()> {
             _ => {}
         });
 
-    if let Some(icon) = app.default_window_icon() {
-        builder = builder.icon(icon.clone()).icon_as_template(true);
-    }
+    let tray_icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray-template.png"))?;
+    builder = builder.icon(tray_icon).icon_as_template(true);
 
     builder.build(app)?;
     Ok(())
@@ -652,6 +772,10 @@ pub fn run() {
             speak_selection_now,
             speak_text,
             preview_voice,
+            get_audio_history,
+            delete_audio_history,
+            clear_audio_history,
+            play_audio_history,
             stop_speaking,
             install_engine,
             install_espeak_ng,
