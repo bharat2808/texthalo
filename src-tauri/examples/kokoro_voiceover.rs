@@ -14,11 +14,10 @@ fn main() {
         "Then settle in and listen.",
         "TextHalo. A little more room to listen.",
     ];
-    let mut settings = Settings::default();
-    settings.engine = Engine::Kokoro;
-    settings.kokoro.voice = "af_heart".to_string();
-    settings.kokoro.speed = 1.0;
-    settings.kokoro.keep_warm = true;
+    let settings = Settings {
+        engine: Engine::Kokoro,
+        ..Settings::default()
+    };
     let spoken = Arc::new(Spoken::new());
     for (index, line) in lines.iter().enumerate() {
         let path = destination.join(format!("line-{}.wav", index + 1));
