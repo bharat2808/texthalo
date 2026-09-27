@@ -234,6 +234,7 @@ fn normalize_locale(raw: &str) -> Option<String> {
 #[derive(Default)]
 pub struct Speaker {
     child: Mutex<Option<Child>>,
+    archive: Mutex<Option<(Child, std::path::PathBuf)>>,
 }
 
 impl Speaker {
@@ -244,10 +245,29 @@ impl Speaker {
     /// Start speaking, cancelling anything already in progress.
     ///
     /// `voice = None` uses the system default voice.
-    pub fn speak(&self, text: &str, voice: Option<&str>, rate: u32) -> Result<(), String> {
+    pub fn speak(
+        &self,
+        text: &str,
+        voice: Option<&str>,
+        rate: u32,
+        archive_path: Option<&std::path::Path>,
+    ) -> Result<(), String> {
         self.stop();
         if text.trim().is_empty() {
             return Err("nothing to speak".to_string());
+        }
+
+        if let Some(path) = archive_path {
+            if let Ok(mut archive) = archive_command(path, voice, rate) {
+                if let Some(mut stdin) = archive.stdin.take() {
+                    if stdin.write_all(text.as_bytes()).is_ok() {
+                        *self.archive.lock().unwrap() = Some((archive, path.to_path_buf()));
+                    } else {
+                        let _ = archive.kill();
+                        let _ = archive.wait();
+                    }
+                }
+            }
         }
 
         let mut cmd = Command::new(SAY);
@@ -259,11 +279,20 @@ impl Speaker {
             .stdout(Stdio::null())
             .stderr(Stdio::null());
 
-        let mut child = cmd.spawn().map_err(|e| format!("spawn {SAY}: {e}"))?;
+        let mut child = match cmd.spawn() {
+            Ok(child) => child,
+            Err(e) => {
+                self.stop_archive();
+                return Err(format!("spawn {SAY}: {e}"));
+            }
+        };
         if let Some(mut stdin) = child.stdin.take() {
-            stdin
-                .write_all(text.as_bytes())
-                .map_err(|e| format!("write to {SAY}: {e}"))?;
+            if let Err(error) = stdin.write_all(text.as_bytes()) {
+                let _ = child.kill();
+                let _ = child.wait();
+                self.stop_archive();
+                return Err(format!("write to {SAY}: {error}"));
+            }
             // stdin is dropped here, which is `say`'s cue that the text is complete.
         }
 
@@ -277,6 +306,28 @@ impl Speaker {
         if let Some(mut child) = guard.take() {
             let _ = child.kill();
             let _ = child.wait();
+        }
+        drop(guard);
+        self.stop_archive();
+    }
+
+    /// Wait for and return a complete archive rendered by the parallel `say -o` process.
+    pub fn finish_archive(&self) -> Option<std::path::PathBuf> {
+        let (mut child, path) = self.archive.lock().unwrap().take()?;
+        match child.wait() {
+            Ok(status) if status.success() => Some(path),
+            _ => {
+                let _ = std::fs::remove_file(path);
+                None
+            }
+        }
+    }
+
+    fn stop_archive(&self) {
+        if let Some((mut child, path)) = self.archive.lock().unwrap().take() {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = std::fs::remove_file(path);
         }
     }
 
@@ -295,6 +346,25 @@ impl Speaker {
             None => false,
         }
     }
+}
+
+fn archive_command(
+    path: &std::path::Path,
+    voice: Option<&str>,
+    rate: u32,
+) -> std::io::Result<Child> {
+    let mut cmd = Command::new(SAY);
+    if let Some(voice) = voice.filter(|v| !v.trim().is_empty()) {
+        cmd.arg("-v").arg(voice);
+    }
+    cmd.arg("-r")
+        .arg(rate.clamp(80, 500).to_string())
+        .arg("-o")
+        .arg(path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
 }
 
 /// Enumerate installed voices. `say -v ?` prints one voice per line as

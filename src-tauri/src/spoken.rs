@@ -120,8 +120,29 @@ impl Spoken {
 
     /// Speak `text` with whichever engine the settings name.
     pub fn speak(&self, settings: &Settings, text: &str) -> Result<Report, String> {
+        self.speak_with_archive(settings, text, None)
+    }
+
+    /// Speak while optionally rendering a parallel local archive of Apple audio.
+    pub fn speak_archived(
+        &self,
+        settings: &Settings,
+        text: &str,
+        archive_path: Option<&Path>,
+    ) -> Result<Report, String> {
+        self.speak_with_archive(settings, text, archive_path)
+    }
+
+    fn speak_with_archive(
+        &self,
+        settings: &Settings,
+        text: &str,
+        archive_path: Option<&Path>,
+    ) -> Result<Report, String> {
         match settings.engine {
-            Engine::Apple => self.speak_apple(text, settings.voice.as_deref(), settings.rate),
+            Engine::Apple => {
+                self.speak_apple(text, settings.voice.as_deref(), settings.rate, archive_path)
+            }
             Engine::Kokoro | Engine::Chatterbox => {
                 let wav = self.wav_path()?;
                 let report = self.render(settings, text, &wav)?;
@@ -141,7 +162,7 @@ impl Spoken {
         text: &str,
     ) -> Result<Report, String> {
         match settings.engine {
-            Engine::Apple => self.speak_apple(text, voice, rate),
+            Engine::Apple => self.speak_apple(text, voice, rate, None),
             Engine::Kokoro => {
                 let mut audition = settings.clone();
                 if let Some(voice) = voice {
@@ -161,8 +182,14 @@ impl Spoken {
         }
     }
 
-    fn speak_apple(&self, text: &str, voice: Option<&str>, rate: u32) -> Result<Report, String> {
-        self.speech.speak(text, voice, rate)?;
+    fn speak_apple(
+        &self,
+        text: &str,
+        voice: Option<&str>,
+        rate: u32,
+        archive_path: Option<&Path>,
+    ) -> Result<Report, String> {
+        self.speech.speak(text, voice, rate, archive_path)?;
         Ok(Report {
             chars: text.chars().count(),
             phonemes: 0,
@@ -171,6 +198,10 @@ impl Spoken {
             seconds: 0.0,
             dropped: Vec::new(),
         })
+    }
+
+    pub fn finish_apple_archive(&self) -> Option<PathBuf> {
+        self.speech.finish_archive()
     }
 
     /// Text → audio → WAV at `path`, without playing it. This is what the "speak to file"
@@ -246,6 +277,7 @@ impl Spoken {
         &self,
         settings: &Settings,
         text: &str,
+        mut archive: Option<&mut crate::history::PcmRecorder>,
         cancelled: C,
         mut start: P,
     ) -> Result<(Report, f64, f64), String>
@@ -303,6 +335,9 @@ impl Spoken {
                 }
                 if cancelled() {
                     return Ok(());
+                }
+                if let Some(recorder) = archive.as_deref_mut() {
+                    recorder.write(&samples);
                 }
                 received += 1;
                 player.push(samples, received == count);
@@ -703,6 +738,7 @@ mod tests {
             .stream_pcm(
                 &settings,
                 "Hello there. Good morning.",
+                None,
                 || false,
                 |player| {
                     starts += 1;
@@ -744,6 +780,7 @@ mod tests {
                 .stream_pcm(
                     &settings,
                     text,
+                    None,
                     || false,
                     |player| {
                         starts += 1;
@@ -772,6 +809,7 @@ mod tests {
             .stream_pcm(
                 &settings,
                 text,
+                None,
                 || cancelled.load(Ordering::SeqCst),
                 |player| {
                     starts += 1;
@@ -808,6 +846,7 @@ mod tests {
                 .stream_pcm(
                     &settings,
                     text,
+                    None,
                     || false,
                     |player| {
                         starts += 1;
@@ -835,6 +874,7 @@ mod tests {
             .stream_pcm(
                 &settings,
                 text,
+                None,
                 || cancelled.load(Ordering::SeqCst),
                 |player| {
                     starts += 1;
@@ -931,6 +971,7 @@ mod tests {
             .stream_pcm(
                 &settings,
                 "Hello there. Good morning. Have a nice day.",
+                None,
                 || stopped.load(Ordering::SeqCst),
                 |player| {
                     spoken.activate_pcm(player.clone());
@@ -966,6 +1007,7 @@ mod tests {
                 .stream_pcm(
                     &settings,
                     "Hello.",
+                    None,
                     || false,
                     |player| {
                         spoken.activate_pcm(player.clone());

@@ -1,4 +1,7 @@
-use kiegen_lib::{config::{Engine, Settings}, spoken::Spoken};
+use kiegen_lib::{
+    config::{Engine, KokoroSettings, Settings},
+    spoken::Spoken,
+};
 use std::{path::Path, sync::Arc};
 
 fn main() {
@@ -11,11 +14,16 @@ fn main() {
         "Then settle in and listen.",
         "TextHalo. A little more room to listen.",
     ];
-    let mut settings = Settings::default();
-    settings.engine = Engine::Kokoro;
-    settings.kokoro.voice = "af_heart".to_string();
-    settings.kokoro.speed = 1.0;
-    settings.kokoro.keep_warm = true;
+    let settings = Settings {
+        engine: Engine::Kokoro,
+        kokoro: KokoroSettings {
+            voice: "af_heart".to_string(),
+            speed: 1.0,
+            keep_warm: true,
+            ..KokoroSettings::default()
+        },
+        ..Settings::default()
+    };
     let spoken = Arc::new(Spoken::new());
     for (index, line) in lines.iter().enumerate() {
         let path = destination.join(format!("line-{}.wav", index + 1));

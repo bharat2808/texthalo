@@ -83,6 +83,16 @@ type InstallEvent = {
   message: string | null;
 };
 
+type AudioHistoryEntry = {
+  id: string;
+  createdAt: number;
+  engine: string;
+  voice: string;
+  text: string;
+  durationSeconds: number | null;
+  audioFile: string;
+};
+
 type Settings = {
   shortcuts: { speak: string; stop: string };
   engine: EngineId;
@@ -110,7 +120,7 @@ type UiState = {
 type Phase = "idle" | "capturing" | "preparing" | "speaking" | "error";
 type Status = { phase: Phase; message?: string | null; chars?: number | null };
 
-type Tab = "general" | "voice" | "shortcuts" | "capture";
+type Tab = "general" | "voice" | "shortcuts" | "capture" | "history";
 
 /* ── icons (16×16, currentColor) ───────────────────────────────────── */
 
@@ -137,6 +147,17 @@ const Icon = {
       "M10.121 12.596A6.48 6.48 0 0 0 12.025 8a6.48 6.48 0 0 0-1.904-4.596l-.707.707A5.48 5.48 0 0 1 11.025 8a5.48 5.48 0 0 1-1.61 3.89z",
       "M10.025 8a4.5 4.5 0 0 1-1.318 3.182L8 10.475A3.5 3.5 0 0 0 9.025 8c0-.966-.392-1.841-1.025-2.475l.707-.707A4.5 4.5 0 0 1 10.025 8M7 4a.5.5 0 0 0-.812-.39L3.825 5.5H1.5A.5.5 0 0 0 1 6v4a.5.5 0 0 0 .5.5h2.325l2.363 1.89A.5.5 0 0 0 7 12zM4.312 6.39 6 5.04v5.92L4.312 9.61A.5.5 0 0 0 4 9.5H2v-3h2a.5.5 0 0 0 .312-.11",
     ]),
+  history: () => (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path
+        d="M3.1 4.8A5.55 5.55 0 1 1 2.5 8M2.3 2.8v3.1h3.1M8 4.8V8l2.2 1.4"
+        stroke="currentColor"
+        strokeWidth="1.45"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  ),
   command: () =>
     ico([
       "M3.5 2A1.5 1.5 0 0 1 5 3.5V5H3.5a1.5 1.5 0 1 1 0-3M6 5V3.5A2.5 2.5 0 1 0 3.5 6H5v4H3.5A2.5 2.5 0 1 0 6 12.5V11h4v1.5a2.5 2.5 0 1 0 2.5-2.5H11V6h1.5A2.5 2.5 0 1 0 10 3.5V5zm4 1v4H6V6zm1-1V3.5A1.5 1.5 0 1 1 12.5 5zm0 6h1.5a1.5 1.5 0 1 1-1.5 1.5zm-6 0v1.5A1.5 1.5 0 1 1 3.5 11z",
@@ -448,12 +469,51 @@ export default function App() {
   // The last word from adding or deleting a reference voice. Kept rather than timed out: it is
   // the only answer the user gets, and a refusal here is a reason, not a transient toast.
   const [voiceMessage, setVoiceMessage] = useState<string | null>(null);
+  const [historyEntries, setHistoryEntries] = useState<AudioHistoryEntry[]>([]);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const [historyLoading, setHistoryLoading] = useState(false);
   const rateTimer = useRef<number | null>(null);
   const latestState = useRef(state);
   const saveTail = useRef<Promise<void>>(Promise.resolve());
   const saveRevision = useRef(0);
   const pendingSaves = useRef(0);
   const updateDownload = useRef({ downloaded: 0, total: 0 });
+
+  const refreshHistory = useCallback(async () => {
+    setHistoryLoading(true);
+    try {
+      setHistoryEntries(await invoke<AudioHistoryEntry[]>("get_audio_history"));
+      setHistoryError(null);
+    } catch (e) {
+      setHistoryError(String(e));
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (tab === "history") void refreshHistory();
+  }, [tab, refreshHistory]);
+
+  const deleteHistoryEntry = async (id: string) => {
+    try {
+      await invoke("delete_audio_history", { id });
+      setHistoryEntries((entries) => entries.filter((entry) => entry.id !== id));
+      setHistoryError(null);
+    } catch (e) {
+      setHistoryError(String(e));
+    }
+  };
+
+  const clearHistory = async () => {
+    try {
+      await invoke("clear_audio_history");
+      setHistoryEntries([]);
+      setHistoryError(null);
+    } catch (e) {
+      setHistoryError(String(e));
+    }
+  };
 
   const checkForUpdates = useCallback(async () => {
     setCheckingUpdate(true);
@@ -801,6 +861,7 @@ export default function App() {
     { id: "voice", title: "Voice", icon: Icon.speaker() },
     { id: "shortcuts", title: "Shortcuts", icon: Icon.command() },
     { id: "capture", title: "Capture", icon: Icon.textCursor() },
+    { id: "history", title: "History", icon: Icon.history() },
   ];
 
   const voiceRow = (voice: Voice) => (
@@ -1543,6 +1604,76 @@ export default function App() {
                 </span>
               </div>
             </Card>
+          </div>
+        ) : null}
+
+        {tab === "history" ? (
+          <div className="pane-inner">
+            <div className="history-heading">
+              <div>
+                <h1 className="pane-title">Audio History</h1>
+                <p className="pane-subtitle">Saved privately on this Mac · keeps the latest 50.</p>
+              </div>
+              <div className="inline">
+                <button className="plain" onClick={() => void refreshHistory()} disabled={historyLoading}>
+                  Refresh
+                </button>
+                <button className="plain" onClick={() => void clearHistory()} disabled={!historyEntries.length}>
+                  Clear all
+                </button>
+              </div>
+            </div>
+            {historyError ? <Note kind="error" icon={Icon.xCircle()}>{historyError}</Note> : null}
+            {historyLoading && !historyEntries.length ? (
+              <Card title="Loading audio history" icon={Icon.history()}>
+                <div className="card-note">Reading saved recordings…</div>
+              </Card>
+            ) : historyEntries.length ? (
+              <div className="history-list">
+                {historyEntries.map((entry) => (
+                  <article className="history-item" key={entry.id}>
+                    <div className="history-copy">
+                      <div className="history-meta">
+                        <strong>{entry.engine}</strong>
+                        <span>{entry.voice}</span>
+                        <time dateTime={new Date(entry.createdAt).toISOString()}>
+                          {new Intl.DateTimeFormat(undefined, {
+                            dateStyle: "medium",
+                            timeStyle: "short",
+                          }).format(entry.createdAt)}
+                        </time>
+                      </div>
+                      <p className="history-text">{entry.text}</p>
+                    </div>
+                    <div className="history-actions">
+                      <button
+                        className="plain"
+                        onClick={() =>
+                          void invoke("play_audio_history", { id: entry.id }).catch((e) =>
+                            setHistoryError(String(e)),
+                          )
+                        }
+                      >
+                        {Icon.play()} Play
+                      </button>
+                      <button
+                        className="plain"
+                        onClick={() => void deleteHistoryEntry(entry.id)}
+                        aria-label="Delete saved audio"
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            ) : (
+              <Card title="No saved audio yet" icon={Icon.history()}>
+                <div className="card-note">
+                  TextHalo will save completed speech here. Voice preview samples are not saved.
+                </div>
+              </Card>
+            )}
           </div>
         ) : null}
       </div>
