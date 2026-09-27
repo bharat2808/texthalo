@@ -28,13 +28,17 @@ export async function startCheckout(planId: "plus" | "creator"): Promise<void> {
     },
     body: JSON.stringify({ planId }),
   });
-  const result = await response.json().catch(() => null) as { url?: string; error?: string } | null;
+  const result = await response.json().catch(() => null) as { url?: string; error?: string; message?: string } | null;
   if (!response.ok || !result?.url) {
-    const message = result?.error === "billing_unavailable"
-      ? "Checkout is temporarily unavailable. Please try again soon."
-      : result?.error === "unknown_plan"
-        ? "This plan is not configured for checkout yet."
-        : "We couldn’t start checkout. Please try again.";
+    const messages: Record<string, string> = {
+      billing_unavailable: "Checkout is temporarily unavailable. Please try again soon.",
+      unknown_plan: "This plan is not configured for checkout yet.",
+      multiple_subscriptions: "We found more than one active TextHalo subscription. Please contact support so we can reconcile your plans.",
+      subscription_needs_attention: "Please update your payment method or resolve the existing subscription before changing plans.",
+      unsupported_subscription_plan: "We couldn’t match your current subscription to a TextHalo plan. Please contact support.",
+      checkout_in_progress: "A checkout is already open or still syncing. Finish it, or refresh in a moment before choosing another plan.",
+    };
+    const message = result?.error ? messages[result.error] ?? "We couldn’t start checkout. Please try again." : "We couldn’t start checkout. Please try again.";
     throw new Error(message);
   }
   window.location.assign(result.url);

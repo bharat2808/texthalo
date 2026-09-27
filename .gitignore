@@ -29,3 +29,4 @@ spikes/*/target/
 *.njsproj
 *.sln
 *.sw?
+website/.env

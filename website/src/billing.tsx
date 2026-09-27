@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { authClient, billingApiUrl, getAccessToken, startCheckout } from "./auth";
 
 type PlanId = "plus" | "creator";
@@ -48,25 +48,88 @@ const PLANS = [
   },
 ];
 
-const DOWNLOAD = "https://github.com/bharat2808/texthalo/releases/latest/download/TextHalo-macOS-aarch64.dmg";
+const SOURCE = "https://github.com/bharat2808/texthalo";
+const DOWNLOAD = `${SOURCE}/releases/latest/download/TextHalo-macOS-aarch64.dmg`;
+const TURNSTILE_SITE_KEY = import.meta.env.VITE_TURNSTILE_SITE_KEY?.trim() ?? "";
+
+declare global {
+  interface Window {
+    turnstile?: {
+      render: (container: HTMLElement, options: { sitekey: string; action: string; callback: (token: string) => void; "error-callback": () => void; "expired-callback": () => void }) => string;
+      remove: (widgetId: string) => void;
+    };
+  }
+}
 
 function Mark() {
   return <span className="brand-mark" aria-hidden="true"><span /></span>;
 }
 
 function BillingHeader() {
+  const [menuOpen, setMenuOpen] = useState(false);
+
   return <>
-    <div className="announcement"><span className="announcement-dot" /> TextHalo is open source <span className="announcement-separator">·</span> Made for macOS</div>
+    <div className="announcement"><span className="announcement-dot" /> TextHalo is open source <span className="announcement-separator">·</span> Made for macOS <a href={SOURCE} target="_blank" rel="noreferrer">Explore the project <span className="arrow">→</span></a></div>
     <header className="site-header billing-header">
       <a className="wordmark" href="/"><Mark /><span>TextHalo</span></a>
-      <nav aria-label="Main navigation">
-        <a href="/#how-it-works">How it works</a>
-        <a href="/#voices">Voices</a>
-        <a href="/pricing/" aria-current="page">Pricing</a>
-        <a className="button button-dark" href={DOWNLOAD}>Get TextHalo <span className="arrow">→</span></a>
+      <button className="menu-toggle" aria-label={menuOpen ? "Close menu" : "Open menu"} aria-expanded={menuOpen} onClick={() => setMenuOpen(!menuOpen)}>{menuOpen ? "×" : "☰"}</button>
+      <nav className={menuOpen ? "nav-open" : ""} aria-label="Main navigation">
+        <a href="/#how-it-works" onClick={() => setMenuOpen(false)}>How it works</a>
+        <a href="/#voices" onClick={() => setMenuOpen(false)}>Voices</a>
+        <a href="/#privacy" onClick={() => setMenuOpen(false)}>Privacy</a>
+        <a href="/pricing/" onClick={() => setMenuOpen(false)}>Pricing</a>
+        <a href="/demo/" onClick={() => setMenuOpen(false)}>Demo</a>
+        <a href="/stories/" onClick={() => setMenuOpen(false)}>Stories</a>
+        <a href="/blog/" onClick={() => setMenuOpen(false)}>Blog</a>
+        <a className="nav-source" href={SOURCE} target="_blank" rel="noreferrer">Open source <span className="arrow">↗</span></a>
+        <a className="button button-dark nav-download" href={DOWNLOAD} target="_blank" rel="noreferrer">Get TextHalo <span className="arrow">→</span></a>
       </nav>
     </header>
   </>;
+}
+
+function isLocalSignup() {
+  return typeof window !== "undefined" && ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname);
+}
+
+function TurnstileWidget({ active, onToken }: { active: boolean; onToken: (token: string) => void }) {
+  const container = useRef<HTMLDivElement>(null);
+  const onTokenRef = useRef(onToken);
+  onTokenRef.current = onToken;
+  useEffect(() => {
+    if (!active || !TURNSTILE_SITE_KEY || isLocalSignup() || !container.current) return;
+    let widgetId: string | undefined;
+    let cancelled = false;
+    const render = () => {
+      if (cancelled || !container.current || !window.turnstile) return;
+      widgetId = window.turnstile.render(container.current, {
+        sitekey: TURNSTILE_SITE_KEY,
+        action: "signup",
+        callback: (token) => onTokenRef.current(token),
+        "error-callback": () => onTokenRef.current(""),
+        "expired-callback": () => onTokenRef.current(""),
+      });
+    };
+    if (window.turnstile) render();
+    else {
+      let script = document.querySelector<HTMLScriptElement>("script[data-texthalo-turnstile]");
+      if (!script) {
+        script = document.createElement("script");
+        script.src = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
+        script.async = true;
+        script.defer = true;
+        script.dataset.texthaloTurnstile = "true";
+        document.head.appendChild(script);
+      }
+      script.addEventListener("load", render, { once: true });
+    }
+    return () => {
+      cancelled = true;
+      if (widgetId && window.turnstile) window.turnstile.remove(widgetId);
+    };
+  }, [active]);
+  if (!active || isLocalSignup()) return null;
+  return TURNSTILE_SITE_KEY ? <div className="turnstile-widget" data-action="turnstile-spin-v1" ref={container} /> : <p className="signin-config-note">Signup verification isn’t configured on this website.</p>;
 }
 
 function BillingFooter() {
@@ -154,17 +217,41 @@ function SignInContent() {
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [turnstileToken, setTurnstileToken] = useState("");
+  const [captchaEpoch, setCaptchaEpoch] = useState(0);
+  const [googleCaptchaRequested, setGoogleCaptchaRequested] = useState(false);
 
   useEffect(() => {
     const requestedPlan = new URLSearchParams(window.location.search).get("plan");
     if (requestedPlan === "plus" || requestedPlan === "creator") setPlan(requestedPlan);
   }, []);
 
+  async function verifySignupChallenge(token: string) {
+    if (isLocalSignup()) return;
+    if (!TURNSTILE_SITE_KEY || !billingApiUrl) throw new Error("Signup verification isn’t configured. Please try again later.");
+    const response = await fetch(`${billingApiUrl}/v1/auth/turnstile/verify`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token, action: "signup" }),
+    });
+    if (!response.ok) {
+      setTurnstileToken("");
+      setCaptchaEpoch((epoch) => epoch + 1);
+      throw new Error("Please complete the human verification and try again.");
+    }
+    setTurnstileToken("");
+    setCaptchaEpoch((epoch) => epoch + 1);
+  }
+
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setBusy(true);
     setError("");
     try {
+      if (mode === "sign-up") {
+        if (!isLocalSignup() && !turnstileToken) throw new Error("Please complete the human verification before creating your account.");
+        if (turnstileToken) await verifySignupChallenge(turnstileToken);
+      }
       const result = mode === "sign-in"
         ? await authClient.signIn.email({ email, password })
         : await authClient.signUp.email({ email, password, name: name.trim() || email.split("@")[0] });
@@ -176,10 +263,14 @@ function SignInContent() {
     }
   }
 
-  async function signInWithGoogle() {
+  async function completeGoogleSignIn(token?: string) {
     setBusy(true);
     setError("");
     try {
+      if (!isLocalSignup()) {
+        if (!token) throw new Error("Please complete the human verification to continue with Google.");
+        await verifySignupChallenge(token);
+      }
       const result = await authClient.signIn.social({
         provider: "google",
         callbackURL: plan ? `${window.location.origin}/sign-in/?plan=${plan}` : `${window.location.origin}/sign-in/`,
@@ -188,7 +279,17 @@ function SignInContent() {
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Google sign-in could not be started.");
       setBusy(false);
+      setGoogleCaptchaRequested(false);
     }
+  }
+
+  function signInWithGoogle() {
+    if (isLocalSignup()) {
+      void completeGoogleSignIn();
+      return;
+    }
+    if (turnstileToken) void completeGoogleSignIn(turnstileToken);
+    else setGoogleCaptchaRequested(true);
   }
 
   async function continueToCheckout() {
@@ -210,6 +311,10 @@ function SignInContent() {
 
   const selectedName = plan === "plus" ? "Plus" : plan === "creator" ? "Creator" : null;
   const signedInUser = session.data?.user;
+  const onTurnstileToken = (token: string) => {
+    setTurnstileToken(token);
+    if (token && googleCaptchaRequested) void completeGoogleSignIn(token);
+  };
 
   return <div className="site-shell"><BillingHeader /><main className="signin-page section-wrap">
     <div className="signin-decoration"><div className="privacy-ring ring-a"/><div className="privacy-ring ring-b"/><div className="privacy-center"><Mark /><span>TEXT HALO</span></div></div>
@@ -230,10 +335,11 @@ function SignInContent() {
           {mode === "sign-up" && <label>Your name<input autoComplete="name" value={name} onChange={(event) => setName(event.target.value)} maxLength={100} /></label>}
           <label>Email address<input type="email" autoComplete="email" required value={email} onChange={(event) => setEmail(event.target.value)} /></label>
           <label>Password<input type="password" autoComplete={mode === "sign-in" ? "current-password" : "new-password"} required minLength={8} value={password} onChange={(event) => setPassword(event.target.value)} /></label>
+          <TurnstileWidget key={captchaEpoch} active={mode === "sign-up" || googleCaptchaRequested} onToken={onTurnstileToken} />
           <button className="button button-dark button-plan" type="submit" disabled={busy}>{busy ? "Please wait…" : mode === "sign-in" ? "Sign in with email" : "Create your account"}<span className="arrow">→</span></button>
         </form>
         <div className="signin-divider"><span /> or <span /></div>
-        <button type="button" className="button google-button" disabled={busy} onClick={() => void signInWithGoogle()}><span className="google-g">G</span> Continue with Google</button>
+        <button type="button" className="button google-button" disabled={busy} onClick={signInWithGoogle}><span className="google-g">G</span> Continue with Google</button>
         {error && <p className="billing-error" role="alert">{error}</p>}
         <p className="signin-terms">TextHalo uses Neon Auth to manage your account and sign-in session.</p>
       </>}
