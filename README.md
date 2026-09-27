@@ -4,6 +4,12 @@
 
 TextHalo is a macOS menu bar text-to-speech app with Apple system voices and local AI speech through Kokoro and Chatterbox. Built with Rust, Tauri, React, and TypeScript, it keeps playback controls close without taking focus away from your work.
 
+**Website:** [texthalo.app](https://texthalo.app)
+
+## Demo
+
+[![Watch the TextHalo demo](website/public/videos/texthalo-product-demo-poster.png)](https://texthalo.app/videos/texthalo-product-demo.mp4)
+
 ## Features
 
 - **Read selected text** from other apps with a configurable global shortcut.
