@@ -8,7 +8,9 @@ TextHalo is a macOS menu bar text-to-speech app with Apple system voices and loc
 
 ## Demo
 
-[![Watch the TextHalo demo](website/public/videos/texthalo-product-demo-poster.png)](https://texthalo.app/videos/texthalo-product-demo.mp4)
+
+https://github.com/user-attachments/assets/f33d93bc-57c8-4afb-8db1-70b9fac76eca
+
 
 ## Features
 
