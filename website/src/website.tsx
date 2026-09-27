@@ -1,6 +1,7 @@
 import { useState } from "react";
 
 const RELEASES = "https://github.com/bharat2808/texthalo/releases/latest";
+const DOWNLOAD = `${RELEASES}/download/TextHalo-macOS-aarch64.dmg`;
 const SOURCE = "https://github.com/bharat2808/texthalo";
 
 function Mark({ small = false }: { small?: boolean }) {
@@ -40,6 +41,7 @@ function ProductVideo() {
         Your browser does not support embedded video.
       </video>
       <div className="product-video-caption"><span>15 SECOND PRODUCT TOUR</span><span>VOICEOVER · KOKORO</span></div>
+      <a className="video-watch-link" href="/demo/">Watch the product tour <Arrow /></a>
     </div>
   );
 }
@@ -57,8 +59,11 @@ function Website() {
           <a href="#how-it-works" onClick={() => setMenuOpen(false)}>How it works</a>
           <a href="#voices" onClick={() => setMenuOpen(false)}>Voices</a>
           <a href="#privacy" onClick={() => setMenuOpen(false)}>Privacy</a>
+          <a href="/demo/">Demo</a>
+          <a href="/stories/">Stories</a>
+          <a href="/blog/">Blog</a>
           <a className="nav-source" href={SOURCE} target="_blank" rel="noreferrer">Open source <Arrow diagonal /></a>
-          <a className="button button-dark nav-download" href={RELEASES} target="_blank" rel="noreferrer">Get TextHalo <Arrow /></a>
+          <a className="button button-dark nav-download" href={DOWNLOAD} target="_blank" rel="noreferrer">Get TextHalo <Arrow /></a>
         </nav>
       </header>
 
@@ -69,7 +74,7 @@ function Website() {
             <h1>A little more<br /><em>room to listen.</em></h1>
             <p className="hero-text">Select a passage. Press a shortcut. Let your Mac read while you think, stretch, or look away for a while.</p>
             <div className="hero-actions">
-              <a className="button button-dark button-large" href={RELEASES} target="_blank" rel="noreferrer">Download for Mac <Arrow /></a>
+              <a className="button button-dark button-large" href={DOWNLOAD} target="_blank" rel="noreferrer">Download for Mac <Arrow /></a>
               <a className="text-link" href="#how-it-works">See how it works <Arrow /></a>
             </div>
             <div className="hero-meta"><span><i className="apple-mark">●</i> Built for macOS</span><span className="meta-divider" /><span>Free &amp; open source</span></div>
@@ -109,10 +114,10 @@ function Website() {
           <div className="privacy-copy"><div className="eyebrow"><span className="eyebrow-line" /> YOUR WORDS STAY YOURS</div><h2>Private by<br /><em>where it happens.</em></h2><p>Speech synthesis runs on your Mac. Your selected text isn’t sent to a cloud speech service. TextHalo only goes online to fetch the local models you choose.</p><div className="privacy-points"><div><span className="check-mark">✓</span><span><strong>Local by default</strong><small>Your text is spoken on your Mac.</small></span></div><div><span className="check-mark">✓</span><span><strong>You choose what to download</strong><small>AI model files stay in your local app data.</small></span></div></div><a className="text-link" href={`${SOURCE}/blob/master/README.md#text-capture-and-privacy`} target="_blank" rel="noreferrer">Read about privacy <Arrow /></a></div>
         </section>
 
-        <section className="closing-cta"><div className="closing-inner"><div className="closing-mark"><Mark /></div><div className="eyebrow eyebrow-light"><span className="eyebrow-line" /> READY WHEN YOU ARE</div><h2>Give your eyes<br /><em>a little break.</em></h2><p>TextHalo is free, open source, and made for your Mac.</p><a className="button button-cream button-large" href={RELEASES} target="_blank" rel="noreferrer">Get TextHalo for macOS <Arrow /></a><span className="cta-version">Current version 0.1.3 <span>·</span> Requires macOS</span></div><div className="cta-decoration cta-dec-a"/><div className="cta-decoration cta-dec-b"/></section>
+        <section className="closing-cta"><div className="closing-inner"><div className="closing-mark"><Mark /></div><div className="eyebrow eyebrow-light"><span className="eyebrow-line" /> READY WHEN YOU ARE</div><h2>Give your eyes<br /><em>a little break.</em></h2><p>TextHalo is free, open source, and made for your Mac.</p><a className="button button-cream button-large" href={DOWNLOAD} target="_blank" rel="noreferrer">Get TextHalo for macOS <Arrow /></a><span className="cta-version">Current version 0.1.4 <span>·</span> Requires macOS</span></div><div className="cta-decoration cta-dec-a"/><div className="cta-decoration cta-dec-b"/></section>
       </main>
 
-      <footer className="site-footer"><a className="wordmark footer-wordmark" href="#top"><Mark /><span>TextHalo</span></a><span className="footer-copy">A little more room to listen.</span><div className="footer-links"><a href={SOURCE} target="_blank" rel="noreferrer">GitHub <Arrow diagonal /></a><a href={`${SOURCE}/blob/master/LICENSE-APACHE`} target="_blank" rel="noreferrer">Apache 2.0</a><a href={`${SOURCE}/issues/new`} target="_blank" rel="noreferrer">Feedback <Arrow diagonal /></a></div><span className="copyright">© {new Date().getFullYear()} TextHalo</span></footer>
+      <footer className="site-footer"><a className="wordmark footer-wordmark" href="#top"><Mark /><span>TextHalo</span></a><span className="footer-copy">A little more room to listen.</span><div className="footer-links"><a href="/demo/">Demo</a><a href="/stories/">Stories</a><a href="/blog/">Blog</a><a href={SOURCE} target="_blank" rel="noreferrer">GitHub <Arrow diagonal /></a><a href={`${SOURCE}/blob/master/LICENSE-APACHE`} target="_blank" rel="noreferrer">Apache 2.0</a><a href={`${SOURCE}/issues/new`} target="_blank" rel="noreferrer">Feedback <Arrow diagonal /></a></div><span className="copyright">© {new Date().getFullYear()} TextHalo</span></footer>
     </div>
   );
 }

@@ -136,6 +136,79 @@ body {
   margin: -10px 0 0;
 }
 
+.history-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.history-heading > div:first-child {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.history-heading .pane-subtitle {
+  margin: 0;
+}
+
+.history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.history-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 14px 16px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-card);
+  background: color-mix(in srgb, var(--control-bg) 50%, transparent);
+}
+
+.history-copy {
+  min-width: 0;
+}
+
+.history-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  color: var(--label-secondary);
+  font-size: 10px;
+}
+
+.history-meta strong {
+  color: var(--label);
+  font-size: 11px;
+}
+
+.history-meta time {
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.history-text {
+  display: -webkit-box;
+  overflow: hidden;
+  margin: 7px 0 0;
+  color: var(--label);
+  font-size: 12px;
+  line-height: 1.45;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.history-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 6px;
+}
+
 /* ─────────────────────────────── cards ─────────────────────────────── */
 
 .card {
