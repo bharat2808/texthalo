@@ -1,4 +1,7 @@
-use kiegen_lib::{config::{Engine, Settings}, spoken::Spoken};
+use kiegen_lib::{
+    config::{Engine, Settings},
+    spoken::Spoken,
+};
 use std::{path::Path, sync::Arc};
 
 fn main() {

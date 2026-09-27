@@ -151,7 +151,7 @@ pub fn list(dir: &Path) -> Result<Vec<Entry>, String> {
             }
         }
     }
-    entries.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    entries.sort_by_key(|entry| std::cmp::Reverse(entry.created_at));
     Ok(entries)
 }
 
