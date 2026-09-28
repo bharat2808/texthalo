@@ -1,9 +1,24 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { authClient, billingApiUrl, getAccessToken, startCheckout } from "./auth";
+import { authClient, billingApiHeaders, billingApiUrl, getAccessToken, promptSignIn, safeInternalReturnTo, startCheckout, startCreditTopupCheckout } from "./auth";
 
 type PlanId = "plus" | "creator";
 type Plan = { id: PlanId; creditsPerPeriod: number };
-type BillingStatus = { billingEnabled: boolean; plans: Plan[] };
+type CreditTopupPack = { id: string; priceCents: number; credits: number };
+type CreditBalanceBreakdown = { totalCredits: number; planCredits: number; topupCredits: number; otherCredits: number };
+type BillingStatus = { billingEnabled: boolean; plans: Plan[]; topups?: CreditTopupPack[] };
+type BillingAccount = {
+  availableCredits?: number;
+  creditBreakdown?: CreditBalanceBreakdown;
+  subscription?: { planId: string; status: string; currentPeriodEnd: string; cancelAtPeriodEnd: boolean } | null;
+};
+
+// Keep public pricing visible even if the billing API is temporarily offline.
+// The backend remains the authority when checkout starts.
+const PUBLIC_TOPUP_PACKS: CreditTopupPack[] = [
+  { id: "topup-5", priceCents: 500, credits: 30_000 },
+  { id: "topup-10", priceCents: 1_000, credits: 60_000 },
+  { id: "topup-20", priceCents: 2_000, credits: 120_000 },
+];
 
 const PLANS = [
   {
@@ -65,25 +80,70 @@ function Mark() {
   return <span className="brand-mark" aria-hidden="true"><span /></span>;
 }
 
-function BillingHeader() {
+export function SiteHeader() {
   const [menuOpen, setMenuOpen] = useState(false);
+  const accountMenuRef = useRef<HTMLDetailsElement>(null);
+  const session = authClient.useSession();
+
+  useEffect(() => {
+    function closeAccountMenu(event: PointerEvent) {
+      const menu = accountMenuRef.current;
+      if (menu?.open && event.target instanceof Node && !menu.contains(event.target)) menu.open = false;
+    }
+    function closeAccountMenuOnEscape(event: KeyboardEvent) {
+      if (event.key === "Escape" && accountMenuRef.current?.open) {
+        accountMenuRef.current.open = false;
+        accountMenuRef.current.querySelector("summary")?.focus();
+      }
+    }
+    document.addEventListener("pointerdown", closeAccountMenu);
+    document.addEventListener("keydown", closeAccountMenuOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeAccountMenu);
+      document.removeEventListener("keydown", closeAccountMenuOnEscape);
+    };
+  }, []);
+
+  async function signOutFromHeader() {
+    try {
+      await authClient.signOut();
+    } catch {
+      // Redirect even if an already-expired session cannot be cleared remotely.
+    } finally {
+      window.location.assign("/pricing/");
+    }
+  }
 
   return <>
     <div className="announcement"><span className="announcement-dot" /> TextHalo is open source <span className="announcement-separator">·</span> Made for macOS <a href={SOURCE} target="_blank" rel="noreferrer">Explore the project <span className="arrow">→</span></a></div>
     <header className="site-header billing-header">
       <a className="wordmark" href="/"><Mark /><span>TextHalo</span></a>
-      <button className="menu-toggle" aria-label={menuOpen ? "Close menu" : "Open menu"} aria-expanded={menuOpen} onClick={() => setMenuOpen(!menuOpen)}>{menuOpen ? "×" : "☰"}</button>
       <nav className={menuOpen ? "nav-open" : ""} aria-label="Main navigation">
         <a href="/#how-it-works" onClick={() => setMenuOpen(false)}>How it works</a>
         <a href="/#voices" onClick={() => setMenuOpen(false)}>Voices</a>
         <a href="/#privacy" onClick={() => setMenuOpen(false)}>Privacy</a>
         <a href="/pricing/" onClick={() => setMenuOpen(false)}>Pricing</a>
+        <a href="/account/billing/" onClick={() => setMenuOpen(false)}>Billing</a>
         <a href="/demo/" onClick={() => setMenuOpen(false)}>Demo</a>
         <a href="/stories/" onClick={() => setMenuOpen(false)}>Stories</a>
         <a href="/blog/" onClick={() => setMenuOpen(false)}>Blog</a>
         <a className="nav-source" href={SOURCE} target="_blank" rel="noreferrer">Open source <span className="arrow">↗</span></a>
         <a className="button button-dark nav-download" href={DOWNLOAD} target="_blank" rel="noreferrer">Get TextHalo <span className="arrow">→</span></a>
       </nav>
+      <div className="header-account-tools">
+        {session.data?.user ? <details ref={accountMenuRef} className="header-account">
+          <summary aria-label={`Signed in as ${session.data.user.email}`} title={session.data.user.email}>
+            <span className="header-account-email">{session.data.user.email}</span><span className="header-account-chevron" aria-hidden="true">⌄</span>
+          </summary>
+          <div className="header-account-menu">
+            <span className="header-account-label">SIGNED IN AS</span>
+            <strong>{session.data.user.email}</strong>
+            <a href="/account/billing/">Credits &amp; billing <span className="arrow">→</span></a>
+            <button type="button" onClick={() => void signOutFromHeader()}>Sign out</button>
+          </div>
+        </details> : <a className="header-signin" href="/sign-in/">Sign in <span className="arrow">→</span></a>}
+        <button className="menu-toggle" aria-label={menuOpen ? "Close menu" : "Open menu"} aria-expanded={menuOpen} onClick={() => setMenuOpen(!menuOpen)}>{menuOpen ? "×" : "☰"}</button>
+      </div>
     </header>
   </>;
 }
@@ -138,23 +198,60 @@ function BillingFooter() {
 
 function useBillingStatus() {
   const [status, setStatus] = useState<BillingStatus | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [unavailable, setUnavailable] = useState(false);
   useEffect(() => {
-    if (!billingApiUrl) return;
+    if (!billingApiUrl) {
+      setLoading(false);
+      setUnavailable(true);
+      return;
+    }
     const controller = new AbortController();
-    fetch(`${billingApiUrl}/v1/billing/plans`, { signal: controller.signal })
-      .then((response) => response.ok ? response.json() as Promise<BillingStatus> : null)
-      .then((result) => { if (result) setStatus(result); })
-      .catch(() => undefined);
+    fetch(`${billingApiUrl}/v1/billing/plans`, { headers: billingApiHeaders(), signal: controller.signal })
+      .then(async (response) => {
+        if (!response.ok) throw new Error("Billing service unavailable");
+        return await response.json() as BillingStatus;
+      })
+      .then((result) => setStatus(result))
+      .catch(() => { if (!controller.signal.aborted) setUnavailable(true); })
+      .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
   }, []);
-  return status;
+  return { status, loading, unavailable };
 }
 
 function PricingContent() {
   const session = authClient.useSession();
-  const billing = useBillingStatus();
+  const billingState = useBillingStatus();
+  const billing = billingState.status;
+  const [currentPlan, setCurrentPlan] = useState<PlanId | null>(null);
   const [busyPlan, setBusyPlan] = useState<PlanId | null>(null);
+  const [busyTopup, setBusyTopup] = useState<string | null>(null);
   const [error, setError] = useState("");
+  const [topupError, setTopupError] = useState("");
+
+  useEffect(() => {
+    if (!session.data?.user || !billingApiUrl) {
+      setCurrentPlan(null);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const token = await getAccessToken();
+        if (!token) return;
+        const response = await fetch(`${billingApiUrl}/v1/account`, { headers: billingApiHeaders({ Authorization: `Bearer ${token}` }) });
+        if (!response.ok) return;
+        const account = await response.json() as BillingAccount;
+        const subscription = account.subscription;
+        const isSubscribed = Boolean(subscription && ["active", "trialing", "past_due", "unpaid", "incomplete"].includes(subscription.status));
+        if (!cancelled) setCurrentPlan(isSubscribed && (subscription?.planId === "plus" || subscription?.planId === "creator") ? subscription.planId : null);
+      } catch {
+        // Pricing remains explorable when subscription details cannot be loaded.
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [session.data?.user?.id]);
 
   async function choosePlan(planId: PlanId) {
     setError("");
@@ -171,19 +268,40 @@ function PricingContent() {
     }
   }
 
-  const checkoutUnavailable = billing?.billingEnabled === false;
+  async function chooseTopup(pack: CreditTopupPack) {
+    setTopupError("");
+    if (!session.data?.user) {
+      window.location.assign(`/sign-in/?${new URLSearchParams({ topup: pack.id }).toString()}`);
+      return;
+    }
+    setBusyTopup(pack.id);
+    try {
+      await startCreditTopupCheckout(pack.id);
+    } catch (cause) {
+      setTopupError(cause instanceof Error ? cause.message : "We couldn’t start the credit purchase. Please try again.");
+      setBusyTopup(null);
+    }
+  }
 
-  return <div className="site-shell"><BillingHeader /><main className="pricing-page section-wrap">
+  const checkoutUnavailable = billing?.billingEnabled === false;
+  const topupPacks = billing?.topups?.length ? billing.topups : PUBLIC_TOPUP_PACKS;
+  const signedIn = Boolean(session.data?.user);
+  const topupCheckoutUnavailable = billingState.loading || billingState.unavailable || billing?.billingEnabled !== true || !billing?.topups?.length || !billingApiUrl;
+
+  return <div className="site-shell"><SiteHeader /><main className="pricing-page section-wrap">
     <div className="eyebrow"><span className="eyebrow-line" /> A VOICE THAT FITS YOUR WORKFLOW</div>
     <h1>Start free.<br /><em>Listen for longer.</em></h1>
     <p className="pricing-intro">Every plan includes TextHalo’s local voices. Add Fish Audio hosted generation when you want the convenience of cloud voices and monthly usage credits.</p>
     <div className="plan-grid">
       {PLANS.map((plan) => {
         const paid = plan.id !== "free";
+        const isCurrentPlan = paid && plan.id === currentPlan;
         const missingPlan = paid && billing?.billingEnabled && !billing.plans.some((item) => item.id === plan.id);
-        const disabled = paid && (checkoutUnavailable || missingPlan || busyPlan !== null);
-        return <article key={plan.id} className={`plan-card${plan.id === "creator" ? " plan-card-featured" : ""}`}>
+        const disabled = paid && (checkoutUnavailable || missingPlan || busyPlan !== null || busyTopup !== null);
+        const actionLabel = isCurrentPlan ? "Manage current plan" : currentPlan ? `Switch to ${plan.name}` : plan.action;
+        return <article key={plan.id} className={`plan-card${plan.id === "creator" ? " plan-card-featured" : ""}${isCurrentPlan ? " plan-card-current" : ""}`}>
           {plan.id === "creator" && <span className="plan-ribbon">FOR YOUR CREATIVE WORK</span>}
+          {isCurrentPlan && <span className="plan-current-badge">CURRENT PLAN</span>}
           <div className="plan-name">{plan.name}</div>
           <div className="plan-price">{plan.price}<span>{paid ? "/ month" : ""}</span></div>
           <p className="plan-description">{plan.description}</p>
@@ -191,16 +309,36 @@ function PricingContent() {
           {plan.id === "free"
             ? <a className="button button-plan button-plan-light" href={DOWNLOAD}>Download TextHalo <span className="arrow">→</span></a>
             : <button className={`button button-plan${plan.id === "creator" ? " button-plan-dark" : " button-plan-light"}`} type="button" disabled={disabled} onClick={() => void choosePlan(plan.id)}>
-                {busyPlan === plan.id ? "Opening checkout…" : plan.action}<span className="arrow">→</span>
+                {busyPlan === plan.id ? "Opening checkout…" : actionLabel}<span className="arrow">→</span>
               </button>}
-          {paid && <small className="plan-note">{checkoutUnavailable ? "Checkout is temporarily unavailable." : missingPlan ? "Checkout setup is pending for this plan." : "Monthly checkout is processed securely by Stripe."}</small>}
+          {paid && <small className="plan-note">{checkoutUnavailable ? "Checkout is temporarily unavailable." : missingPlan ? "Checkout setup is pending for this plan." : isCurrentPlan ? "Manage your subscription securely with Stripe." : currentPlan ? "Plan changes are confirmed securely with Stripe." : "Monthly checkout is processed securely by Stripe."}</small>}
         </article>;
       })}
     </div>
     {error && <p className="billing-error" role="alert">{error}</p>}
+    <section className="credit-topup-panel pricing-topup-panel" aria-labelledby="pricing-topup-heading">
+      <div className="eyebrow"><span className="eyebrow-line" /> ONE-TIME HOSTED AUDIO</div>
+      <h2 id="pricing-topup-heading">Need a few more minutes?</h2>
+      <p>Buy a credit pack without starting a monthly plan. Available to Free, Plus, and Creator accounts.</p>
+      <div className="credit-topup-grid">{topupPacks.map((pack) => {
+        const price = new Intl.NumberFormat(undefined, { style: "currency", currency: "USD", maximumFractionDigits: 2 }).format(pack.priceCents / 100);
+        const estimatedMinutes = Math.round((pack.credits * 1000) / (450 * 900));
+        return <article className="credit-topup-option" key={pack.id}>
+          <strong>{pack.credits.toLocaleString()} credits</strong>
+          <span>About {estimatedMinutes} minutes of English audio*</span>
+          <button className="button button-dark" type="button" disabled={busyTopup !== null || busyPlan !== null || (signedIn && topupCheckoutUnavailable)} onClick={() => void chooseTopup(pack)}>
+            {busyTopup === pack.id ? "Opening checkout…" : signedIn ? `Buy for ${price}` : `Sign in to buy · ${price}`}<span className="arrow">→</span>
+          </button>
+        </article>;
+      })}</div>
+      {!signedIn && <small className="credit-topup-note">Sign in or create an account to continue to secure checkout. Packs are available to Free, Plus, and Creator accounts.</small>}
+      {signedIn && topupCheckoutUnavailable && <p className="credit-topup-unavailable" role="status">{billingState.loading ? "Checking credit-pack checkout…" : "The checkout service is temporarily unavailable. Your pack selection is shown; please try again shortly."}</p>}
+      <small className="credit-topup-note">Purchased top-up credits don’t expire. Monthly plan credits are used first and expire at the end of the billing period.</small>
+      {topupError && <p className="billing-error" role="alert">{topupError}</p>}
+    </section>
     <p className="credit-estimate">* Audio length is an estimate based on about 900 characters of English per spoken minute. Credits are charged by text length, so actual time varies with language, wording, and voice.</p>
     <section className="local-voice-note"><span className="local-note-mark"><Mark /></span><div><strong>Local cloning and hosted cloning are different.</strong><p>Chatterbox’s built-in voice cloning runs on your Mac and is included with Free. Saved Fish Audio clones are hosted by Fish Audio and are included with Creator, up to five.</p></div></section>
-    <p className="pricing-footnote">Local speech synthesis runs on your Mac; its speed depends on your device. Hosted Fish Audio credits refresh each billing period and unused credits expire at period end.</p>
+    <p className="pricing-footnote">Local speech synthesis runs on your Mac; its speed depends on your device. Unused monthly plan credits expire at period end; purchased top-up credits don’t expire.</p>
   </main><BillingFooter /></div>;
 }
 
@@ -210,8 +348,12 @@ export function PricingPage() {
 
 function SignInContent() {
   const session = authClient.useSession();
-  const [mode, setMode] = useState<"sign-in" | "sign-up">("sign-in");
+  const [mode, setMode] = useState<"sign-in" | "sign-up" | "forgot-password">("sign-in");
   const [plan, setPlan] = useState<PlanId | null>(null);
+  const [topupId, setTopupId] = useState<string | null>(null);
+  const [returnTo, setReturnTo] = useState<string | null>(null);
+  const [sessionExpired, setSessionExpired] = useState(false);
+  const [accountNotLinked, setAccountNotLinked] = useState(false);
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -220,10 +362,17 @@ function SignInContent() {
   const [turnstileToken, setTurnstileToken] = useState("");
   const [captchaEpoch, setCaptchaEpoch] = useState(0);
   const [googleCaptchaRequested, setGoogleCaptchaRequested] = useState(false);
+  const [resetEmailSent, setResetEmailSent] = useState(false);
 
   useEffect(() => {
     const requestedPlan = new URLSearchParams(window.location.search).get("plan");
     if (requestedPlan === "plus" || requestedPlan === "creator") setPlan(requestedPlan);
+    const params = new URLSearchParams(window.location.search);
+    setTopupId(params.get("topup"));
+    if (params.get("mode") === "forgot-password") setMode("forgot-password");
+    setReturnTo(safeInternalReturnTo(params.get("returnTo")));
+    setSessionExpired(params.get("reason") === "session-expired");
+    setAccountNotLinked(params.get("error") === "account_not_linked");
   }, []);
 
   async function verifySignupChallenge(token: string) {
@@ -231,7 +380,7 @@ function SignInContent() {
     if (!TURNSTILE_SITE_KEY || !billingApiUrl) throw new Error("Signup verification isn’t configured. Please try again later.");
     const response = await fetch(`${billingApiUrl}/v1/auth/turnstile/verify`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: billingApiHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({ token, action: "signup" }),
     });
     if (!response.ok) {
@@ -256,8 +405,30 @@ function SignInContent() {
         ? await authClient.signIn.email({ email, password })
         : await authClient.signUp.email({ email, password, name: name.trim() || email.split("@")[0] });
       if (result.error) throw new Error(result.error.message || "Please check your details and try again.");
+      if (returnTo && !accountNotLinked) {
+        window.location.assign(returnTo);
+        return;
+      }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "We couldn’t sign you in. Please try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function requestPasswordReset(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setBusy(true);
+    setError("");
+    try {
+      const result = await authClient.requestPasswordReset({
+        email,
+        redirectTo: `${window.location.origin}/reset-password/`,
+      });
+      if (result.error) throw new Error("We couldn’t send the reset email. Please try again.");
+      setResetEmailSent(true);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "We couldn’t send the reset email. Please try again.");
     } finally {
       setBusy(false);
     }
@@ -273,7 +444,14 @@ function SignInContent() {
       }
       const result = await authClient.signIn.social({
         provider: "google",
-        callbackURL: plan ? `${window.location.origin}/sign-in/?plan=${plan}` : `${window.location.origin}/sign-in/`,
+        callbackURL: (() => {
+          const params = new URLSearchParams();
+          if (plan) params.set("plan", plan);
+          if (topupId) params.set("topup", topupId);
+          if (returnTo) params.set("returnTo", returnTo);
+          const query = params.toString();
+          return `${window.location.origin}/sign-in/${query ? `?${query}` : ""}`;
+        })(),
       });
       if (result.error) throw new Error(result.error.message || "Google sign-in could not be started.");
     } catch (cause) {
@@ -304,6 +482,18 @@ function SignInContent() {
     }
   }
 
+  async function continueToTopup() {
+    if (!topupId) return;
+    setBusy(true);
+    setError("");
+    try {
+      await startCreditTopupCheckout(topupId);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "We couldn’t start the credit purchase. Please try again.");
+      setBusy(false);
+    }
+  }
+
   async function signOut() {
     await authClient.signOut();
     window.location.assign("/pricing/");
@@ -316,32 +506,43 @@ function SignInContent() {
     if (token && googleCaptchaRequested) void completeGoogleSignIn(token);
   };
 
-  return <div className="site-shell"><BillingHeader /><main className="signin-page section-wrap">
+  return <div className="site-shell"><SiteHeader /><main className="signin-page section-wrap">
     <div className="signin-decoration"><div className="privacy-ring ring-a"/><div className="privacy-ring ring-b"/><div className="privacy-center"><Mark /><span>TEXT HALO</span></div></div>
     <section className="signin-panel">
       <div className="eyebrow"><span className="eyebrow-line" /> YOUR WORDS, YOUR ACCOUNT</div>
-      <h1>{selectedName ? <>One small step<br /><em>to {selectedName}.</em></> : <>Welcome<br /><em>to TextHalo.</em></>}</h1>
-      <p className="signin-intro">{selectedName ? `Sign in or create your account to continue to the ${selectedName} checkout.` : "Sign in to manage your hosted voices and monthly credits."}</p>
+      <h1>{mode === "forgot-password" ? <>Forgot your<br /><em>password?</em></> : selectedName ? <>One small step<br /><em>to {selectedName}.</em></> : <>Welcome<br /><em>to TextHalo.</em></>}</h1>
+      <p className="signin-intro">{mode === "forgot-password" ? "Enter your account email and we’ll send a link to reset your password." : selectedName ? `Sign in or create your account to continue to the ${selectedName} checkout.` : topupId ? "Sign in or create your account to continue to your one-time hosted audio credit pack." : "Sign in to manage your hosted voices and monthly credits."}</p>
       {signedInUser ? <div className="signed-in-card">
         <span className="signed-in-check">✓</span><div><strong>You’re signed in</strong><span>{signedInUser.email}</span></div>
-        {plan ? <button className="button button-dark button-plan" disabled={busy} onClick={() => void continueToCheckout()}>{busy ? "Opening checkout…" : `Continue to ${selectedName} checkout`}<span className="arrow">→</span></button> : <a className="button button-dark button-plan" href="/pricing/">View plans <span className="arrow">→</span></a>}
+        {accountNotLinked && <p className="signin-account-alert" role="status">Google sign-in couldn’t be linked because Neon Auth rejected the callback. Your TextHalo account is still signed in and works with your password.</p>}
+        {error && <p className="billing-error" role="alert">{error}</p>}
+        {plan ? <button className="button button-dark button-plan" disabled={busy} onClick={() => void continueToCheckout()}>{busy ? "Opening checkout…" : `Continue to ${selectedName} checkout`}<span className="arrow">→</span></button> : topupId ? <button className="button button-dark button-plan" disabled={busy} onClick={() => void continueToTopup()}>{busy ? "Opening checkout…" : "Continue to credit pack checkout"}<span className="arrow">→</span></button> : returnTo ? <a className="button button-dark button-plan" href={returnTo}>Continue to your account <span className="arrow">→</span></a> : <a className="button button-dark button-plan" href="/pricing/">View plans <span className="arrow">→</span></a>}
         <button className="signin-signout" type="button" onClick={() => void signOut()}>Sign out</button>
       </div> : <>
-        <div className="signin-tabs" role="tablist" aria-label="Account access">
-          <button type="button" role="tab" aria-selected={mode === "sign-in"} onClick={() => { setMode("sign-in"); setError(""); }}>Sign in</button>
-          <button type="button" role="tab" aria-selected={mode === "sign-up"} onClick={() => { setMode("sign-up"); setError(""); }}>Create account</button>
-        </div>
-        <form className="signin-form" onSubmit={(event) => void submit(event)}>
-          {mode === "sign-up" && <label>Your name<input autoComplete="name" value={name} onChange={(event) => setName(event.target.value)} maxLength={100} /></label>}
+        {mode === "forgot-password" ? resetEmailSent ? <div className="signed-in-card reset-confirmation"><strong>Check your email</strong><span>If there’s an account for {email}, a password reset link is on its way.</span></div> : <form className="signin-form" onSubmit={(event) => void requestPasswordReset(event)}>
           <label>Email address<input type="email" autoComplete="email" required value={email} onChange={(event) => setEmail(event.target.value)} /></label>
-          <label>Password<input type="password" autoComplete={mode === "sign-in" ? "current-password" : "new-password"} required minLength={8} value={password} onChange={(event) => setPassword(event.target.value)} /></label>
-          <TurnstileWidget key={captchaEpoch} active={mode === "sign-up" || googleCaptchaRequested} onToken={onTurnstileToken} />
-          <button className="button button-dark button-plan" type="submit" disabled={busy}>{busy ? "Please wait…" : mode === "sign-in" ? "Sign in with email" : "Create your account"}<span className="arrow">→</span></button>
-        </form>
-        <div className="signin-divider"><span /> or <span /></div>
-        <button type="button" className="button google-button" disabled={busy} onClick={signInWithGoogle}><span className="google-g">G</span> Continue with Google</button>
+          <button className="button button-dark button-plan" type="submit" disabled={busy}>{busy ? "Sending link…" : "Send reset link"}<span className="arrow">→</span></button>
+        </form> : <>
+          <div className="signin-tabs" role="tablist" aria-label="Account access">
+            <button type="button" role="tab" aria-selected={mode === "sign-in"} onClick={() => { setMode("sign-in"); setError(""); }}>Sign in</button>
+            <button type="button" role="tab" aria-selected={mode === "sign-up"} onClick={() => { setMode("sign-up"); setError(""); }}>Create account</button>
+          </div>
+          <form className="signin-form" onSubmit={(event) => void submit(event)}>
+            {mode === "sign-up" && <label>Your name<input autoComplete="name" value={name} onChange={(event) => setName(event.target.value)} maxLength={100} /></label>}
+            <label>Email address<input type="email" autoComplete="email" required value={email} onChange={(event) => setEmail(event.target.value)} /></label>
+            {mode === "sign-in" && <label>Password<input type="password" autoComplete="current-password" required minLength={8} value={password} onChange={(event) => setPassword(event.target.value)} /></label>}
+            {mode === "sign-up" && <label>Password<input type="password" autoComplete="new-password" required minLength={8} value={password} onChange={(event) => setPassword(event.target.value)} /></label>}
+            <TurnstileWidget key={captchaEpoch} active={mode === "sign-up" || googleCaptchaRequested} onToken={onTurnstileToken} />
+            <button className="button button-dark button-plan" type="submit" disabled={busy}>{busy ? "Please wait…" : mode === "sign-in" ? "Sign in with email" : "Create your account"}<span className="arrow">→</span></button>
+          </form>
+          {mode === "sign-in" && <button type="button" className="signin-forgot" onClick={() => { setMode("forgot-password"); setError(""); setResetEmailSent(false); }}>Forgot password?</button>}
+          {!accountNotLinked && <><div className="signin-divider"><span /> or <span /></div>
+          <button type="button" className="button google-button" disabled={busy} onClick={signInWithGoogle}><span className="google-g">G</span> Continue with Google</button></>}
+        </>}
+        {sessionExpired && !signedInUser && <p className="signin-config-note" role="status">Your session expired. Sign in again to continue.</p>}
+        {accountNotLinked && !signedInUser && <p className="signin-config-note" role="status">Google sign-in isn’t available for this existing password account right now: Neon Auth is rejecting the OAuth callback. Sign in with your email and password below to continue.</p>}
         {error && <p className="billing-error" role="alert">{error}</p>}
-        <p className="signin-terms">TextHalo uses Neon Auth to manage your account and sign-in session.</p>
+        {mode === "forgot-password" ? <button type="button" className="text-link signin-back" onClick={() => { setMode("sign-in"); setError(""); }}>← Back to sign in</button> : <p className="signin-terms">TextHalo uses Neon Auth to manage your account and sign-in session.</p>}
       </>}
       {!billingApiUrl && selectedName && <p className="signin-config-note">Checkout connection is not configured on this website.</p>}
       <a className="text-link signin-back" href="/pricing/">← Back to plans</a>
@@ -353,11 +554,72 @@ export function SignInPage() {
   return <SignInContent />;
 }
 
+export function PasswordResetPage() {
+  const [status, setStatus] = useState<"checking" | "ready" | "invalid" | "updated">("checking");
+  const [token, setToken] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const resetToken = params.get("token");
+    if (!resetToken || params.has("error")) setStatus("invalid");
+    else {
+      setToken(resetToken);
+      setStatus("ready");
+    }
+  }, []);
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (password !== confirmPassword) {
+      setError("Those passwords don’t match.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      const result = await authClient.resetPassword({ newPassword: password, token });
+      if (result.error) throw new Error("This reset link is invalid or expired. Request a new one to continue.");
+      setStatus("updated");
+      window.history.replaceState(null, "", "/reset-password/");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "We couldn’t reset your password. Please request a new link.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return <div className="site-shell"><SiteHeader /><main className="signin-page section-wrap">
+    <div className="signin-decoration"><div className="privacy-ring ring-a"/><div className="privacy-ring ring-b"/><div className="privacy-center"><Mark /><span>TEXT HALO</span></div></div>
+    <section className="signin-panel">
+      <div className="eyebrow"><span className="eyebrow-line" /> ACCOUNT SECURITY</div>
+      {status === "updated" ? <><h1>Password<br /><em>updated.</em></h1><p className="signin-intro">Your password has been changed. Sign in with your new password.</p><a className="button button-dark button-plan" href="/sign-in/">Back to sign in <span className="arrow">→</span></a></> : status === "invalid" ? <><h1>That link<br /><em>has expired.</em></h1><p className="signin-intro">Request a new password reset link and we’ll send you a fresh one.</p><a className="button button-dark button-plan" href="/sign-in/?mode=forgot-password">Request another link <span className="arrow">→</span></a></> : <>
+        <h1>Choose a new<br /><em>password.</em></h1>
+        <p className="signin-intro">Use at least 8 characters for your new password.</p>
+        {status === "ready" && <form className="signin-form" onSubmit={(event) => void submit(event)}>
+          <label>New password<input type="password" autoComplete="new-password" required minLength={8} maxLength={128} value={password} onChange={(event) => setPassword(event.target.value)} /></label>
+          <label>Confirm new password<input type="password" autoComplete="new-password" required minLength={8} maxLength={128} value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} /></label>
+          <button className="button button-dark button-plan" type="submit" disabled={busy}>{busy ? "Updating password…" : "Update password"}<span className="arrow">→</span></button>
+        </form>}
+        {error && <p className="billing-error" role="alert">{error}</p>}
+      </>}
+      <a className="text-link signin-back" href="/sign-in/">← Back to sign in</a>
+    </section>
+  </main><BillingFooter /></div>;
+}
+
 function BillingSuccessContent() {
   const session = authClient.useSession();
+  const billing = useBillingStatus().status;
   const [credits, setCredits] = useState<number | null>(null);
+  const [creditBreakdown, setCreditBreakdown] = useState<CreditBalanceBreakdown | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [busyTopup, setBusyTopup] = useState<string | null>(null);
+  const [topupError, setTopupError] = useState("");
 
   async function refreshBalance() {
     if (!billingApiUrl || !session.data?.user) return;
@@ -365,11 +627,20 @@ function BillingSuccessContent() {
     setError("");
     try {
       const token = await getAccessToken();
-      if (!token) throw new Error("Please sign in to view your account balance.");
-      const response = await fetch(`${billingApiUrl}/v1/account`, { headers: { Authorization: `Bearer ${token}` } });
+      const returnTo = `${window.location.pathname}${window.location.search}`;
+      if (!token) {
+        await promptSignIn({ returnTo });
+        return;
+      }
+      const response = await fetch(`${billingApiUrl}/v1/account`, { headers: billingApiHeaders({ Authorization: `Bearer ${token}` }) });
+      if (response.status === 401) {
+        await promptSignIn({ returnTo });
+        return;
+      }
       if (!response.ok) throw new Error("We couldn’t read your account balance yet.");
-      const account = await response.json() as { availableCredits?: number };
+      const account = await response.json() as { availableCredits?: number; creditBreakdown?: CreditBalanceBreakdown };
       setCredits(typeof account.availableCredits === "number" ? account.availableCredits : null);
+      setCreditBreakdown(account.creditBreakdown ?? null);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "We couldn’t read your account balance yet.");
     } finally {
@@ -377,21 +648,175 @@ function BillingSuccessContent() {
     }
   }
 
+  async function buyCredits(pack: CreditTopupPack) {
+    setBusyTopup(pack.id);
+    setTopupError("");
+    try {
+      await startCreditTopupCheckout(pack.id);
+    } catch (cause) {
+      setTopupError(cause instanceof Error ? cause.message : "We couldn’t start the credit purchase. Please try again.");
+      setBusyTopup(null);
+    }
+  }
+
   useEffect(() => {
     if (session.data?.user) void refreshBalance();
   }, [session.data?.user?.id]);
 
-  return <div className="site-shell"><BillingHeader /><main className="billing-success section-wrap">
+  return <div className="site-shell"><SiteHeader /><main className="billing-success section-wrap">
     <div className="success-orbit"><span>✓</span></div>
     <div className="eyebrow"><span className="eyebrow-line" /> THANK YOU FOR CHOOSING TEXTHALO</div>
     <h1>You’re back.<br /><em>Let’s listen.</em></h1>
     <p className="success-copy">Stripe has returned you to TextHalo. Your hosted speech credits are added after Stripe confirms the payment.</p>
-    {session.data?.user ? <div className="balance-card"><span>AVAILABLE CREDITS</span><strong>{credits === null ? (loading ? "Checking…" : "—") : credits.toLocaleString()}</strong>{credits === 0 && <small>Credits may take a moment to appear while Stripe sends its payment confirmation.</small>}<button className="text-link" type="button" disabled={loading} onClick={() => void refreshBalance()}>{loading ? "Refreshing…" : "Refresh balance"}<span className="arrow">→</span></button></div> : <a className="button button-dark button-large success-signin" href="/sign-in/">Sign in to view your account <span className="arrow">→</span></a>}
+    {session.data?.user ? <>
+      <div className="balance-card"><span>AVAILABLE CREDITS</span><strong>{credits === null ? (loading ? "Checking…" : "—") : credits.toLocaleString()}</strong><small className="balance-owner">Balance for <strong>{session.data.user.email}</strong></small>
+        {creditBreakdown && <div className="credit-breakdown" aria-label="Credit balance details">
+          <span>Monthly plan remaining<strong>{creditBreakdown.planCredits.toLocaleString()}</strong></span>
+          <span>Top-up credits remaining<strong>{creditBreakdown.topupCredits.toLocaleString()}</strong></span>
+          {creditBreakdown.otherCredits > 0 && <span>Other credits<strong>{creditBreakdown.otherCredits.toLocaleString()}</strong></span>}
+        </div>}
+        {credits === 0 && <small>Credits may take a moment to appear while Stripe sends its payment confirmation.</small>}<button className="text-link" type="button" disabled={loading} onClick={() => void refreshBalance()}>{loading ? "Refreshing…" : "Refresh balance"}<span className="arrow">→</span></button>
+      </div>
+      {billing?.billingEnabled && billing.topups && billing.topups.length > 0 && <section className="credit-topup-panel" aria-labelledby="topup-heading">
+        <div className="eyebrow"><span className="eyebrow-line" /> NEED MORE HOSTED AUDIO?</div>
+        <h2 id="topup-heading">Add a credit pack.</h2>
+        <p>One-time purchases work with Free, Plus, and Creator. Top-up credits don’t expire; monthly plan credits are used first.</p>
+        <div className="credit-topup-grid">{billing.topups.map((pack) => {
+          const price = new Intl.NumberFormat(undefined, { style: "currency", currency: "USD", maximumFractionDigits: 2 }).format(pack.priceCents / 100);
+          const estimatedMinutes = Math.round((pack.credits * 1000) / (450 * 900));
+          return <article className="credit-topup-option" key={pack.id}>
+            <strong>{pack.credits.toLocaleString()} credits</strong>
+            <span>About {estimatedMinutes} minutes of English audio*</span>
+            <button className="button button-dark" type="button" disabled={busyTopup !== null} onClick={() => void buyCredits(pack)}>
+              {busyTopup === pack.id ? "Opening checkout…" : `Buy for ${price}`}<span className="arrow">→</span>
+            </button>
+          </article>;
+        })}</div>
+        <small className="credit-topup-note">*Audio time is an estimate. Actual length varies with text, language, and voice.</small>
+        {topupError && <p className="billing-error" role="alert">{topupError}</p>}
+      </section>}
+    </> : <a className="button button-dark button-large success-signin" href="/sign-in/">Sign in to view your account <span className="arrow">→</span></a>}
     {error && <p className="billing-error" role="alert">{error}</p>}
-    <div className="success-actions"><a className="button button-dark button-large" href="/pricing/">View plans <span className="arrow">→</span></a><a className="text-link" href="/">Return home <span className="arrow">→</span></a></div>
+    <div className="success-actions"><a className="button button-dark button-large" href="/account/billing/">View billing account <span className="arrow">→</span></a><a className="text-link" href="/">Return home <span className="arrow">→</span></a></div>
   </main><BillingFooter /></div>;
 }
 
 export function BillingSuccessPage() {
   return <BillingSuccessContent />;
+}
+
+function BillingAccountContent() {
+  const session = authClient.useSession();
+  const billingState = useBillingStatus();
+  const [account, setAccount] = useState<BillingAccount | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [actionError, setActionError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [busyTopup, setBusyTopup] = useState<string | null>(null);
+
+  async function refreshAccount() {
+    if (!billingApiUrl || !session.data?.user) return;
+    setLoading(true);
+    setError("");
+    try {
+      const token = await getAccessToken();
+      if (!token) {
+        await promptSignIn({ returnTo: "/account/billing/" });
+        return;
+      }
+      const response = await fetch(`${billingApiUrl}/v1/account`, { headers: billingApiHeaders({ Authorization: `Bearer ${token}` }) });
+      if (response.status === 401) {
+        await promptSignIn({ returnTo: "/account/billing/" });
+        return;
+      }
+      if (!response.ok) throw new Error("We couldn’t load your account details. Please try again.");
+      setAccount(await response.json() as BillingAccount);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "We couldn’t load your account details. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function manageSubscription(planId: string) {
+    if (planId !== "plus" && planId !== "creator") return;
+    setBusy(true);
+    setActionError("");
+    try {
+      await startCheckout(planId);
+    } catch (cause) {
+      setActionError(cause instanceof Error ? cause.message : "We couldn’t open your billing settings. Please try again.");
+      setBusy(false);
+    }
+  }
+
+  async function buyCredits(pack: CreditTopupPack) {
+    setBusyTopup(pack.id);
+    setActionError("");
+    try {
+      await startCreditTopupCheckout(pack.id);
+    } catch (cause) {
+      setActionError(cause instanceof Error ? cause.message : "We couldn’t start the credit purchase. Please try again.");
+      setBusyTopup(null);
+    }
+  }
+
+  useEffect(() => {
+    if (session.data?.user) void refreshAccount();
+  }, [session.data?.user?.id]);
+
+  const subscription = account?.subscription ?? null;
+  const planName = subscription?.planId === "plus" ? "Plus" : subscription?.planId === "creator" ? "Creator" : null;
+  const periodEnd = subscription?.currentPeriodEnd ? new Date(subscription.currentPeriodEnd) : null;
+  const hasActivePlan = Boolean(subscription && ["active", "trialing", "past_due", "unpaid", "incomplete"].includes(subscription.status));
+
+  return <div className="site-shell"><SiteHeader /><main className="billing-success billing-account-page section-wrap">
+    <div className="success-orbit"><span>◉</span></div>
+    <div className="eyebrow"><span className="eyebrow-line" /> YOUR TEXTHALO ACCOUNT</div>
+    <h1>Credits &amp;<br /><em>billing.</em></h1>
+    <p className="success-copy">Plan details and hosted audio credits for {session.data?.user?.email ?? "your account"}.</p>
+    {session.isPending ? <p className="billing-account-message">Checking your sign-in…</p> : session.data?.user ? <>
+      <section className="balance-card billing-account-balance" aria-label="Credit balance">
+        <span>AVAILABLE CREDITS</span>
+        <strong>{account?.availableCredits === undefined ? loading ? "Checking…" : "—" : account.availableCredits.toLocaleString()}</strong>
+        <small className="balance-owner">Balance for <strong>{session.data.user.email}</strong></small>
+        {account?.creditBreakdown && <div className="credit-breakdown" aria-label="Credit balance details">
+          <span>Monthly plan remaining<strong>{account.creditBreakdown.planCredits.toLocaleString()}</strong></span>
+          <span>Top-up credits remaining<strong>{account.creditBreakdown.topupCredits.toLocaleString()}</strong></span>
+          {account.creditBreakdown.otherCredits > 0 && <span>Other credits<strong>{account.creditBreakdown.otherCredits.toLocaleString()}</strong></span>}
+        </div>}
+        <button className="text-link" type="button" disabled={loading} onClick={() => void refreshAccount()}>{loading ? "Refreshing…" : "Refresh balance"}<span className="arrow">→</span></button>
+      </section>
+      <section className="account-plan-card" aria-labelledby="account-plan-heading">
+        <div className="eyebrow"><span className="eyebrow-line" /> SUBSCRIPTION</div>
+        <h2 id="account-plan-heading">{loading && !account ? "Loading your plan…" : account ? planName ?? "Free plan" : "Plan details unavailable"}</h2>
+        {hasActivePlan && subscription ? <>
+          <p>Status: <strong>{subscription.status.replace(/_/g, " ")}</strong>{periodEnd && !Number.isNaN(periodEnd.getTime()) ? <> · {subscription.cancelAtPeriodEnd ? "Access through " : "Renews "}{periodEnd.toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" })}</> : null}</p>
+          <div className="account-plan-actions">
+            <button className="button button-dark" type="button" disabled={busy || busyTopup !== null} onClick={() => void manageSubscription(subscription.planId)}>{busy ? "Opening Stripe…" : "Manage subscription"}<span className="arrow">→</span></button>
+            {subscription.planId === "plus" && <button className="button button-plan-light" type="button" disabled={busy || busyTopup !== null} onClick={() => void manageSubscription("creator")}>Upgrade to Creator <span className="arrow">→</span></button>}
+          </div>
+        </> : account ? <><p>You’re using the Free plan. Choose a hosted audio plan whenever you need Fish Audio voices and monthly credits.</p><a className="button button-plan-light" href="/pricing/">Compare plans <span className="arrow">→</span></a></> : null}
+      </section>
+      {billingState.status?.billingEnabled && billingState.status.topups && billingState.status.topups.length > 0 ? <section className="credit-topup-panel" aria-labelledby="account-topup-heading">
+        <div className="eyebrow"><span className="eyebrow-line" /> ONE-TIME HOSTED AUDIO</div>
+        <h2 id="account-topup-heading">Add a credit pack.</h2>
+        <p>Top-up credits are separate from your monthly plan balance and don’t expire.</p>
+        <div className="credit-topup-grid">{billingState.status.topups.map((pack) => {
+          const price = new Intl.NumberFormat(undefined, { style: "currency", currency: "USD", maximumFractionDigits: 2 }).format(pack.priceCents / 100);
+          const estimatedMinutes = Math.round((pack.credits * 1000) / (450 * 900));
+          return <article className="credit-topup-option" key={pack.id}><strong>{pack.credits.toLocaleString()} credits</strong><span>About {estimatedMinutes} minutes of English audio*</span><button className="button button-dark" type="button" disabled={busyTopup !== null || busy} onClick={() => void buyCredits(pack)}>{busyTopup === pack.id ? "Opening checkout…" : `Buy for ${price}`}<span className="arrow">→</span></button></article>;
+        })}</div>
+        <small className="credit-topup-note">Monthly plan credits are used first and expire at the end of your billing period. Top-up credits don’t expire.</small>
+      </section> : <section className="credit-topup-panel" aria-labelledby="account-topup-heading"><div className="eyebrow"><span className="eyebrow-line" /> ONE-TIME HOSTED AUDIO</div><h2 id="account-topup-heading">Add a credit pack.</h2><p className="credit-topup-unavailable" role="status">{billingState.loading ? "Loading available credit packs…" : billingState.unavailable ? "Credit packs are temporarily unavailable while the billing service reconnects. Please refresh in a moment." : "One-time credit packs are not available right now."}</p></section>}
+    </> : <><p className="billing-account-message">Sign in to see the plan and credits for your account.</p><a className="button button-dark button-large success-signin" href="/sign-in/?returnTo=%2Faccount%2Fbilling%2F">Sign in to view billing <span className="arrow">→</span></a></>}
+    {error && <p className="billing-error" role="alert">{error}</p>}
+    {actionError && <p className="billing-error" role="alert">{actionError}</p>}
+    <div className="success-actions"><a className="text-link" href="/pricing/">Change plan <span className="arrow">→</span></a><a className="text-link" href="/">Return home <span className="arrow">→</span></a></div>
+  </main><BillingFooter /></div>;
+}
+
+export function BillingAccountPage() {
+  return <BillingAccountContent />;
 }

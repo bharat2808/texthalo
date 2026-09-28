@@ -1,5 +1,5 @@
 import { blogPosts, stories, type EditorialPage } from "./content";
-import { BillingSuccessPage, PricingPage, SignInPage } from "./billing";
+import { BillingAccountPage, BillingSuccessPage, PasswordResetPage, PricingPage, SignInPage } from "./billing";
 import Website from "./website";
 
 const SITE_URL = "https://texthalo.app";
@@ -10,6 +10,8 @@ export function getSitePaths(): string[] {
     "/",
     "/pricing/",
     "/sign-in/",
+    "/reset-password/",
+    "/account/billing/",
     "/account/billing/success/",
     "/demo/",
     "/blog/",
@@ -118,6 +120,8 @@ export function SitePage({ pathname }: { pathname: string }) {
   if (pathname === "/") return <Website />;
   if (pathname === "/pricing/") return <PricingPage />;
   if (pathname === "/sign-in/") return <SignInPage />;
+  if (pathname === "/reset-password/") return <PasswordResetPage />;
+  if (pathname === "/account/billing/") return <BillingAccountPage />;
   if (pathname === "/account/billing/success/") return <BillingSuccessPage />;
   if (pathname === "/demo/") return <VideoWatchPage />;
   if (pathname === "/blog/") return <EditorialIndex kind="blog" />;
@@ -182,6 +186,12 @@ export function getSeoMetadata(pathname: string): SeoMetadata {
   }
   if (path === "/sign-in/") {
     return { ...defaultMetadata(path), title: "Sign in to TextHalo", description: "Sign in or create a TextHalo account to continue to hosted voice checkout." };
+  }
+  if (path === "/reset-password/") {
+    return { ...defaultMetadata(path), title: "Reset your password | TextHalo", description: "Choose a new password for your TextHalo account." };
+  }
+  if (path === "/account/billing/") {
+    return { ...defaultMetadata(path), title: "Credits & billing | TextHalo", description: "View your TextHalo plan, monthly and top-up credits, and billing settings." };
   }
   if (path === "/account/billing/success/") {
     return { ...defaultMetadata(path), title: "Checkout complete | TextHalo", description: "Return to TextHalo after checking out for hosted speech credits." };

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { SiteHeader } from "./billing";
 
 const RELEASES = "https://github.com/bharat2808/texthalo/releases/latest";
 const DOWNLOAD = `${RELEASES}/download/TextHalo-macOS-aarch64.dmg`;
@@ -47,26 +47,9 @@ function ProductVideo() {
 }
 
 function Website() {
-  const [menuOpen, setMenuOpen] = useState(false);
-
   return (
     <div className="site-shell">
-      <div className="announcement"><span className="announcement-dot" /> TextHalo is open source <span className="announcement-separator">·</span> Made for macOS <a href={SOURCE}>Explore the project <Arrow /></a></div>
-      <header className="site-header">
-        <a className="wordmark" href="#top" aria-label="TextHalo home"><Mark /><span>TextHalo</span></a>
-        <button className="menu-toggle" aria-label={menuOpen ? "Close menu" : "Open menu"} aria-expanded={menuOpen} onClick={() => setMenuOpen(!menuOpen)}>{menuOpen ? "×" : "☰"}</button>
-        <nav className={menuOpen ? "nav-open" : ""} aria-label="Main navigation">
-          <a href="#how-it-works" onClick={() => setMenuOpen(false)}>How it works</a>
-          <a href="#voices" onClick={() => setMenuOpen(false)}>Voices</a>
-          <a href="#privacy" onClick={() => setMenuOpen(false)}>Privacy</a>
-          <a href="/pricing/">Pricing</a>
-          <a href="/demo/">Demo</a>
-          <a href="/stories/">Stories</a>
-          <a href="/blog/">Blog</a>
-          <a className="nav-source" href={SOURCE} target="_blank" rel="noreferrer">Open source <Arrow diagonal /></a>
-          <a className="button button-dark nav-download" href={DOWNLOAD} target="_blank" rel="noreferrer">Get TextHalo <Arrow /></a>
-        </nav>
-      </header>
+      <SiteHeader />
 
       <main id="top">
         <section className="hero section-wrap">
