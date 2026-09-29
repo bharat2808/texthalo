@@ -1,24 +1,20 @@
 //! Authenticated TextHalo API client used by the hosted Fish Audio engine.
 use futures_util::{SinkExt, StreamExt};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-use keyring::Entry;
 use sha2::{Digest, Sha256};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{net::SocketAddr, sync::{Arc, Mutex, OnceLock}, time::Duration};
-use tauri_plugin_stronghold::stronghold::Stronghold;
 use tauri::{AppHandle, Emitter, Manager};
+use tauri_plugin_secure_storage::{OptionsRequest, SecureStorageExt};
 use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::TcpListener};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
-const SERVICE: &str = "com.kiegen.texthalo";
-const LEGACY_ACCOUNT: &str = "desktop-access-token";
-const VAULT_KEY_ACCOUNT: &str = "stronghold-vault-key";
-const VAULT_CLIENT: &[u8] = b"texthalo-auth";
-const CREDENTIALS_KEY: &[u8] = b"desktop-credentials-v1";
+const CREDENTIALS_KEY: &str = "desktop-credentials-v1";
 static TOKEN_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 static CREDENTIAL_CACHE: OnceLock<Mutex<Option<DesktopCredentials>>> = OnceLock::new();
-static AUTH_VAULT: OnceLock<Mutex<Stronghold>> = OnceLock::new();
+static APP_HANDLE: OnceLock<AppHandle> = OnceLock::new();
+static SIGNIN_CANCEL: Mutex<Option<tokio::sync::oneshot::Sender<()>>> = Mutex::new(None);
 
 pub fn api_origin() -> Option<String> {
     let configured = option_env!("TEXTHALO_API_BASE_URL")
@@ -52,46 +48,20 @@ pub fn api_origin() -> Option<String> {
 pub fn service_configured() -> bool {
     api_origin().is_some()
 }
-fn keychain_entry(account: &str) -> Result<Entry, String> {
-    Entry::new(SERVICE, account).map_err(|_| "Could not access the macOS Keychain.".to_string())
+/// Remember the app handle without touching the Keychain. Secure-storage access is
+/// deferred until the user opens Account or signs in, so startup cannot trigger prompts.
+pub fn initialize_secure_storage(app: &AppHandle) {
+    let _ = APP_HANDLE.set(app.clone());
 }
 
-/// Initialize Stronghold once at application startup. Its encryption key is a random
-/// 256-bit value held in Keychain; only the encrypted snapshot lives in app-local data.
-pub fn initialize_auth_vault(app: &tauri::AppHandle) -> Result<(), String> {
-    if AUTH_VAULT.get().is_some() { return Ok(()); }
-
-    let key_entry = keychain_entry(VAULT_KEY_ACCOUNT)?;
-    let password = match key_entry.get_password() {
-        Ok(encoded) => URL_SAFE_NO_PAD.decode(encoded).map_err(|_| "The secure sign-in vault key is invalid.".to_string())?,
-        Err(keyring::Error::NoEntry) => {
-            let mut key = Vec::with_capacity(32);
-            key.extend_from_slice(uuid::Uuid::new_v4().as_bytes());
-            key.extend_from_slice(uuid::Uuid::new_v4().as_bytes());
-            key_entry.set_password(&URL_SAFE_NO_PAD.encode(&key)).map_err(|_| "Could not securely initialize sign-in storage in Keychain.".to_string())?;
-            key
-        }
-        Err(_) => return Err("Could not access the sign-in vault key in Keychain.".into()),
-    };
-    if password.len() != 32 { return Err("The secure sign-in vault key has an invalid length.".into()); }
-
-    let directory = app.path().app_local_data_dir().map_err(|_| "Could not locate secure app storage.".to_string())?;
-    std::fs::create_dir_all(&directory).map_err(|_| "Could not prepare secure app storage.".to_string())?;
-    let vault = Stronghold::new(directory.join("desktop-auth.hold"), password)
-        .map_err(|_| "Could not open the encrypted sign-in vault.".to_string())?;
-    let _ = vault.load_client(VAULT_CLIENT).or_else(|_| vault.create_client(VAULT_CLIENT))
-        .map_err(|_| "Could not open the encrypted sign-in vault.".to_string())?;
-    AUTH_VAULT.set(Mutex::new(vault)).map_err(|_| "The sign-in vault was already initialized.".to_string())?;
-    Ok(())
+fn secure_storage_app() -> Result<&'static AppHandle, String> {
+    APP_HANDLE.get().ok_or_else(|| "Secure sign-in storage is not ready. Restart TextHalo and try again.".to_string())
 }
 
-fn auth_vault() -> Result<&'static Mutex<Stronghold>, String> {
-    AUTH_VAULT.get().ok_or_else(|| "Secure sign-in storage is not ready. Restart TextHalo and try again.".to_string())
+fn storage_request(data: Option<String>) -> OptionsRequest {
+    OptionsRequest { prefixed_key: Some(CREDENTIALS_KEY.into()), data, sync: Some(true), keychain_access: None }
 }
 
-fn legacy_token_entry() -> Result<Entry, String> {
-    keychain_entry(LEGACY_ACCOUNT)
-}
 pub fn is_signed_in() -> bool {
     read_credentials().is_ok()
 }
@@ -102,39 +72,24 @@ fn read_credentials() -> Result<DesktopCredentials, String> {
     let cache = CREDENTIAL_CACHE.get_or_init(|| Mutex::new(None));
     let mut cached = cache.lock().map_err(|_| "Could not access the saved TextHalo sign-in.".to_string())?;
     if let Some(credentials) = cached.as_ref() { return Ok(credentials.clone()); }
-    let stronghold = auth_vault()?.lock().map_err(|_| "Could not access secure sign-in storage.".to_string())?;
-    let store = stronghold.get_client(VAULT_CLIENT)
-        .map_err(|_| "Could not open secure sign-in storage.".to_string())?.store();
-    let stored = store.get(CREDENTIALS_KEY).map_err(|_| "Could not read secure sign-in storage.".to_string())?;
-    let raw = if let Some(bytes) = stored {
-        String::from_utf8(bytes).map_err(|_| "Your saved sign-in needs renewal. Sign in again from the Account screen.".to_string())?
-    } else {
-        // One-time migration from the previous direct-Keychain token storage.
-        let raw = legacy_token_entry()?.get_password().map_err(|_| "Sign in to use Fish Audio voices.".to_string())?;
-        let migrated: DesktopCredentials = serde_json::from_str(&raw).map_err(|_| "Your desktop sign-in needs renewal. Sign in again from the Account screen.".to_string())?;
-        store.insert(CREDENTIALS_KEY.to_vec(), raw.as_bytes().to_vec(), None)
-            .map_err(|_| "Could not migrate your sign-in into encrypted storage.".to_string())?;
-        stronghold.save().map_err(|_| "Could not save your sign-in in encrypted storage.".to_string())?;
-        drop(stronghold);
-        let _ = legacy_token_entry().and_then(|entry| entry.delete_credential().map_err(|_| "legacy credential cleanup failed".to_string()));
-        *cached = Some(migrated.clone());
-        return Ok(migrated);
-    };
+    let app = secure_storage_app()?;
+    let stored = app.secure_storage().get_item(app.clone(), storage_request(None))
+        .map_err(|_| "Could not read secure sign-in storage.".to_string())?.data;
+    let raw = stored.ok_or_else(|| "Sign in to use Fish Audio voices.".to_string())?;
     let credentials: DesktopCredentials = serde_json::from_str(&raw).map_err(|_| "Your desktop sign-in needs renewal. Sign in again from the Account screen.".to_string())?;
-    drop(stronghold);
     *cached = Some(credentials.clone());
     Ok(credentials)
 }
 #[tauri::command]
-pub fn desktop_is_signed_in() -> bool { is_signed_in() }
+pub fn desktop_is_signed_in(app: AppHandle) -> bool {
+    initialize_secure_storage(&app);
+    is_signed_in()
+}
 fn write_credentials(credentials: &DesktopCredentials) -> Result<(), String> {
     let serialized = serde_json::to_string(credentials).map_err(|_| "Could not prepare your secure sign-in.".to_string())?;
-    let stronghold = auth_vault()?.lock().map_err(|_| "Could not access secure sign-in storage.".to_string())?;
-    let client = stronghold.get_client(VAULT_CLIENT).map_err(|_| "Could not open secure sign-in storage.".to_string())?;
-    client.store().insert(CREDENTIALS_KEY.to_vec(), serialized.into_bytes(), None)
+    let app = secure_storage_app()?;
+    app.secure_storage().set_item(app.clone(), storage_request(Some(serialized)))
         .map_err(|_| "Could not securely save your sign-in.".to_string())?;
-    stronghold.save().map_err(|_| "Could not save your sign-in in encrypted storage.".to_string())?;
-    drop(stronghold);
     *CREDENTIAL_CACHE.get_or_init(|| Mutex::new(None)).lock().map_err(|_| "Could not access the saved TextHalo sign-in.".to_string())? = Some(credentials.clone());
     Ok(())
 }
@@ -156,15 +111,9 @@ async fn access_token(force_refresh: bool) -> Result<String, String> {
 }
 fn unix_now() -> u64 { std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs() }
 pub fn clear_token() -> Result<(), String> {
-    let stronghold = auth_vault()?.lock().map_err(|_| "Could not access secure sign-in storage.".to_string())?;
-    let client = stronghold.get_client(VAULT_CLIENT).map_err(|_| "Could not open secure sign-in storage.".to_string())?;
-    client.store().delete(CREDENTIALS_KEY).map_err(|_| "Could not remove the saved sign-in from encrypted storage.".to_string())?;
-    stronghold.save().map_err(|_| "Could not save the sign-out to encrypted storage.".to_string())?;
-    drop(stronghold);
-    let _ = legacy_token_entry().and_then(|entry| match entry.delete_credential() {
-        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-        Err(_) => Err("legacy credential cleanup failed".to_string()),
-    });
+    let app = secure_storage_app()?;
+    app.secure_storage().remove_item(app.clone(), storage_request(None))
+        .map_err(|_| "Could not remove the saved sign-in from secure storage.".to_string())?;
     if let Some(cache) = CREDENTIAL_CACHE.get() {
         *cache.lock().map_err(|_| "Could not access the saved TextHalo sign-in.".to_string())? = None;
     }
@@ -222,6 +171,8 @@ async fn json_request(
 
 #[tauri::command]
 pub async fn begin_desktop_signin(app: AppHandle) -> Result<String, String> {
+    initialize_secure_storage(&app);
+    cancel_desktop_signin_inner();
     let listener = TcpListener::bind("127.0.0.1:0").await.map_err(|_| "Could not start secure app sign-in. Please try again.".to_string())?;
     let address = listener.local_addr().map_err(|_| "Could not start secure app sign-in.".to_string())?;
     let redirect_uri = format!("http://127.0.0.1:{}/desktop-auth-callback", address.port());
@@ -242,16 +193,34 @@ pub async fn begin_desktop_signin(app: AppHandle) -> Result<String, String> {
     web.set_path("/desktop-connect/");
     web.query_pairs_mut().append_pair("redirect_uri", &redirect_uri).append_pair("state", &state).append_pair("code_challenge", &challenge);
     let url = web.to_string();
+    let (cancel, cancelled) = tokio::sync::oneshot::channel();
+    *SIGNIN_CANCEL.lock().map_err(|_| "Could not start secure app sign-in.".to_string())? = Some(cancel);
     tauri::async_runtime::spawn(async move {
-        let result = tokio::time::timeout(Duration::from_secs(120), accept_desktop_callback(listener, address, redirect_uri, state, verifier)).await;
+        let result = tokio::select! {
+            _ = cancelled => Err("Sign-in cancelled.".to_string()),
+            result = tokio::time::timeout(Duration::from_secs(120), accept_desktop_callback(listener, address, redirect_uri, state, verifier)) => {
+                match result { Ok(result) => result, Err(_) => Err("Sign-in timed out. Start again from TextHalo.".to_string()) }
+            }
+        };
+        if let Ok(mut pending) = SIGNIN_CANCEL.lock() { *pending = None; }
         let payload = match result {
-            Ok(Ok(())) => json!({"success": true}),
-            Ok(Err(message)) => json!({"success": false, "message": message}),
-            Err(_) => json!({"success": false, "message": "Sign-in timed out. Start again from TextHalo."}),
+            Ok(()) => json!({"success": true}),
+            Err(message) => json!({"success": false, "message": message}),
         };
         let _ = app.emit("texthalo:desktop-auth", payload);
     });
     Ok(url)
+}
+
+fn cancel_desktop_signin_inner() {
+    if let Ok(mut pending) = SIGNIN_CANCEL.lock() {
+        if let Some(cancel) = pending.take() { let _ = cancel.send(()); }
+    }
+}
+
+#[tauri::command]
+pub fn cancel_desktop_signin() {
+    cancel_desktop_signin_inner();
 }
 
 async fn accept_desktop_callback(listener: TcpListener, expected_addr: SocketAddr, redirect_uri: String, expected_state: String, verifier: String) -> Result<(), String> {

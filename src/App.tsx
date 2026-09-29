@@ -6,6 +6,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import appLogo from "../src-tauri/icons/icon.png";
 import "./App.css";
 
 /* ── types mirroring the Rust side ─────────────────────────────────── */
@@ -486,7 +487,6 @@ export default function App() {
   const [account, setAccount] = useState<HostedAccount | null>(null);
   const [accountEmail, setAccountEmail] = useState("");
   const [accountBusy, setAccountBusy] = useState(false);
-  const [accountMessage, setAccountMessage] = useState("");
   const [accountError, setAccountError] = useState("");
   const [hostedVoices, setHostedVoices] = useState<HostedVoice[]>([]);
   const [hostedQuery, setHostedQuery] = useState("");
@@ -516,13 +516,11 @@ export default function App() {
       if (!(await invoke<boolean>("desktop_is_signed_in"))) {
         setAccount(null);
         setAccountEmail("");
-        setAccountMessage("");
         return;
       }
       const next = await invoke<HostedAccount>("desktop_account");
       setAccount(next);
       setAccountEmail(next.accountEmail ?? "");
-      setAccountMessage("");
     } catch (cause) {
       setAccount(null);
       setAccountError(cause instanceof Error ? cause.message : String(cause));
@@ -551,9 +549,10 @@ export default function App() {
     let unlisten: (() => void) | undefined;
     void listen<{ success: boolean; message?: string }>("texthalo:desktop-auth", (event) => {
       if (event.payload.success) {
-        setAccountMessage("You’re signed in.");
         setAccountError("");
         void refreshHostedAccount();
+      } else if (event.payload.message === "Sign-in cancelled.") {
+        setAccountError("");
       } else if (event.payload.message) setAccountError(event.payload.message);
       setAccountBusy(false);
     }).then((off) => { unlisten = off; });
@@ -947,14 +946,22 @@ export default function App() {
   };
 
   const beginDesktopSignIn = async () => {
-    setAccountBusy(true); setAccountError(""); setAccountMessage("");
+    setAccountBusy(true); setAccountError("");
     try {
       const url = await invoke<string>("begin_desktop_signin");
       await openUrl(url);
-      setAccountMessage("Finish signing in in your browser. TextHalo will connect automatically when you return.");
     } catch (cause) {
+      void invoke("cancel_desktop_signin").catch(() => {});
       setAccountError(cause instanceof Error ? cause.message : String(cause));
       setAccountBusy(false);
+    }
+  };
+
+  const cancelDesktopSignIn = async () => {
+    try { await invoke("cancel_desktop_signin"); }
+    finally {
+      setAccountBusy(false);
+      setAccountError("");
     }
   };
 
@@ -963,7 +970,7 @@ export default function App() {
     try {
       await invoke("stop_speaking");
       await invoke("desktop_sign_out");
-      setAccount(null); setAccountEmail(""); setHostedClones([]); setAccountMessage("You’re signed out.");
+      setAccount(null); setAccountEmail(""); setHostedClones([]);
     } catch (cause) { setAccountError(cause instanceof Error ? cause.message : String(cause)); }
     finally { setAccountBusy(false); }
   };
@@ -988,12 +995,11 @@ export default function App() {
 
   const uploadClone = async () => {
     if (!clonePath || !cloneName.trim() || !cloneConsent) return;
-    setAccountBusy(true); setAccountError(""); setAccountMessage("");
+    setAccountBusy(true); setAccountError("");
     try {
       await invoke("desktop_upload_clone", { path: clonePath, name: cloneName.trim(), consent: cloneConsent });
       setClonePath(""); setCloneName(""); setCloneConsent(false);
       const data = await invoke<{items: HostedClone[]}>("desktop_clones"); setHostedClones(data.items);
-      setAccountMessage("Voice submitted. Its status will update when training finishes.");
     } catch (cause) { setAccountError(cause instanceof Error ? cause.message : String(cause)); }
     finally { setAccountBusy(false); }
   };
@@ -1279,7 +1285,6 @@ export default function App() {
                   {hostedVoices.length === 0 && account && !hostedLoading ? <span className="card-note">No voices loaded. Search or refresh to browse.</span> : null}
                   {hostedHasMore ? <button className="plain" disabled={hostedLoading} onClick={() => void loadHostedVoices(hostedPage + 1)}>{hostedLoading ? "Loading…" : "Load more voices"}</button> : null}
                   <label className="toggle-row"><input type="checkbox" checked={settings.fish.enhance_text} onChange={(event) => void save({ fish: { ...settings.fish, enhance_text: event.target.checked } })} /><span>Enhance text with semantic delivery cues</span></label>
-                  <div className="card-note">When enabled, TextHalo analyzes selected text and adds supported delivery cues before sending it to Fish Audio. You can turn this off anytime.</div>
                 </Card>
                 <Card title="Privacy for hosted speech" icon={Icon.info()}>
                   <p className="card-note">When you use Fish Audio, the selected text is sent to TextHalo’s backend and then to Fish Audio to generate speech. With enhancement enabled, the backend’s semantic cue service also analyzes the selected text. Audio is streamed back to this app. Local Apple, Kokoro, and Chatterbox engines keep processing on your Mac.</p>
@@ -1682,7 +1687,6 @@ export default function App() {
             <h1 className="pane-title">Account</h1>
             <p className="pane-subtitle">Sign in to sync hosted speech with your TextHalo account.</p>
             {accountError ? <Note kind="error" icon={Icon.xCircle()}>{accountError}</Note> : null}
-            {accountMessage ? <Note kind="secondary" icon={Icon.checkCircle()}>{accountMessage}</Note> : null}
             {account ? (
               <>
                 <Card title="Signed in" icon={Icon.checkCircle()}>
@@ -1713,8 +1717,14 @@ export default function App() {
               </>
             ) : (
               <Card title="Sign in to TextHalo" icon={Icon.gear()}>
-                <p className="card-note">Your browser handles password, Google sign-in, account creation, and verification. TextHalo returns to the app after a secure one-time handoff.</p>
-                <button className="plain" disabled={accountBusy} onClick={() => void beginDesktopSignIn()}>{accountBusy ? "Waiting for browser sign-in…" : "Continue with TextHalo"}</button>
+                <div className="account-brand">
+                  <img className="account-brand-mark" src={appLogo} alt="" />
+                  <div><strong>TextHalo</strong><div className="card-note">Your account for hosted speech</div></div>
+                  <div className="account-brand-actions">
+                    <button className="plain" disabled={accountBusy} onClick={() => void beginDesktopSignIn()}>{accountBusy ? "Waiting for browser sign-in…" : "Sign in"}</button>
+                    {accountBusy ? <button className="text" onClick={() => void cancelDesktopSignIn()}>Cancel</button> : null}
+                  </div>
+                </div>
                 <div className="inline"><button className="text" onClick={() => void openUrl(`${websiteUrl}/sign-in/?mode=sign-up`)}>Create an account</button><button className="text" onClick={() => void openUrl(`${websiteUrl}/sign-in/?mode=forgot-password`)}>Forgot password?</button></div>
               </Card>
             )}

@@ -740,6 +740,7 @@ pub fn run() {
             }
         })
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_secure_storage::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -765,12 +766,16 @@ pub fn run() {
                 .build(),
         )
         .setup(|app| {
-            hosted::initialize_auth_vault(app.handle())?;
             // Menu-bar agent, not a windowed app: no Dock icon, no app switcher entry.
             #[cfg(target_os = "macos")]
-            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+            app.set_activation_policy(if cfg!(debug_assertions) {
+                tauri::ActivationPolicy::Regular
+            } else {
+                tauri::ActivationPolicy::Accessory
+            });
 
             let handle = app.handle().clone();
+            hosted::initialize_secure_storage(&handle);
             let mut settings = config::load(&handle);
             let voices = speech::list_voices();
 
@@ -802,7 +807,7 @@ pub fn run() {
 
             // While Accessibility is missing, put the settings instructions in front of
             // the user; afterwards the tray is the only way in.
-            if !capture::is_trusted() {
+            if cfg!(debug_assertions) || !capture::is_trusted() {
                 show_settings(&handle);
             }
 
@@ -828,6 +833,7 @@ pub fn run() {
             open_accessibility_settings,
             permission_status,
             hosted::begin_desktop_signin,
+            hosted::cancel_desktop_signin,
             hosted::desktop_is_signed_in,
             hosted::desktop_sign_out,
             hosted::desktop_account,

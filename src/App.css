@@ -234,6 +234,36 @@ body {
   color: var(--label-secondary);
 }
 
+.account-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 0 2px;
+}
+
+.account-brand-mark,
+.account-brand-mark {
+  width: 40px;
+  height: 40px;
+  display: block;
+  object-fit: contain;
+}
+
+.account-brand strong {
+  font-size: 15px;
+}
+
+.account-brand-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.account-brand-actions .plain {
+  white-space: nowrap;
+}
+
 .field {
   display: flex;
   flex-direction: column;
