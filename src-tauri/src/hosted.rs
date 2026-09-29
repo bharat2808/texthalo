@@ -275,12 +275,19 @@ pub async fn desktop_account() -> Result<Value, String> {
 #[tauri::command]
 pub async fn desktop_voices(query: String, page: u32) -> Result<Value, String> {
     let q = url::form_urlencoded::byte_serialize(query.as_bytes()).collect::<String>();
-    json_request(
-        reqwest::Method::GET,
-        &format!("/v1/voices?query={q}&page={page}&pageSize=24"),
-        None,
-    )
-    .await
+    public_json_request(&format!("/v1/voices?query={q}&page={page}&pageSize=24")).await
+}
+
+async fn public_json_request(path: &str) -> Result<Value, String> {
+    let url = format!("{}{}", origin()?, path);
+    let response = reqwest::Client::builder().timeout(Duration::from_secs(20)).build()
+        .map_err(|_| "Could not start the TextHalo network client.".to_string())?
+        .get(url).send().await
+        .map_err(|_| "Could not reach the TextHalo service. Check your internet connection.".to_string())?;
+    let status = response.status();
+    let body = response.json::<Value>().await.unwrap_or(Value::Null);
+    if !status.is_success() { return Err(api_error(status, &body)); }
+    Ok(body)
 }
 #[tauri::command]
 pub async fn desktop_voice_preview(
@@ -296,12 +303,11 @@ pub async fn desktop_voice_preview(
             )
         })
         .unwrap_or_default();
-    let response = request(
-        reqwest::Method::GET,
-        &format!("/v1/voices/{encoded}/preview{sample_query}"),
-        None,
-    )
-    .await?;
+    let response = reqwest::Client::builder().timeout(Duration::from_secs(20)).build()
+        .map_err(|_| "Could not start the TextHalo network client.".to_string())?
+        .get(format!("{}/v1/voices/{encoded}/preview{sample_query}", origin()?))
+        .send().await
+        .map_err(|_| "Could not reach the TextHalo service. Check your internet connection.".to_string())?;
     if !response.status().is_success() {
         let status = response.status();
         let body = response.json::<Value>().await.unwrap_or(Value::Null);

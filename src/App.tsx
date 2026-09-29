@@ -725,7 +725,7 @@ export default function App() {
   }, [hostedQuery, save]);
 
   useEffect(() => {
-    if (tab === "voice" && state?.settings.engine === "fish" && account) void loadHostedVoices(1);
+    if (tab === "voice" && state?.settings.engine === "fish") void loadHostedVoices(1);
     const canClone = (account?.plans.find((plan) => plan.id === account.subscription?.planId)?.cloneLimit ?? 0) > 0;
     if ((tab === "account" || (tab === "voice" && state?.settings.engine === "fish")) && account && canClone) void invoke<{items: HostedClone[]}>("desktop_clones").then((v) => setHostedClones(v.items)).catch((cause) => setAccountError(cause instanceof Error ? cause.message : String(cause)));
   }, [tab, state?.settings.engine, account, loadHostedVoices]);
@@ -1270,11 +1270,12 @@ export default function App() {
                     <span className="field-label">Find a voice</span>
                     <div className="inline">
                       <input value={hostedQuery} placeholder="Search voices" onChange={(event) => setHostedQuery(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void loadHostedVoices(1, hostedQuery); }} />
-                      <button className="plain" disabled={hostedLoading || !account} onClick={() => void loadHostedVoices(1, hostedQuery)}>{hostedLoading ? "Loading…" : "Search"}</button>
+                      <button className="plain" disabled={hostedLoading} onClick={() => void loadHostedVoices(1, hostedQuery)}>{hostedLoading ? "Loading…" : "Search"}</button>
                     </div>
                     <span className="field-hint">Choose a voice, then use your Speak shortcut anywhere.</span>
                   </div>
-                  {!account ? <Note kind="warning" icon={Icon.warn()}>Sign in from Account to browse and use hosted voices.</Note> : null}
+                  {!account ? <Note kind="warning" icon={Icon.warn()}>Sign in to use hosted speech. Preview samples are available without signing in.</Note> : null}
+                  {accountError ? <Note kind="error" icon={Icon.xCircle()}>{accountError}</Note> : null}
                   <div className="row-stack">
                     {hostedVoices.map((voice) => {
                       const selected = settings.fish.voice_id === voice.id;
@@ -1282,7 +1283,7 @@ export default function App() {
                     })}
                   </div>
                   {hostedClones.length > 0 ? <div className="field"><span className="field-label">My hosted clones</span><div className="row-stack">{hostedClones.map((clone) => { const selected = settings.fish.voice_id === clone.id; return <Row key={clone.id} selected={selected} glyph={selected ? Icon.checkCircle() : Icon.circle()} title={clone.name} subtitle={`Clone · ${clone.status}`} badge={selected ? "Selected" : undefined} onSelect={() => void save({ fish: { ...settings.fish, voice_id: clone.id } })} />; })}</div></div> : null}
-                  {hostedVoices.length === 0 && account && !hostedLoading ? <span className="card-note">No voices loaded. Search or refresh to browse.</span> : null}
+                  {hostedVoices.length === 0 && !accountError && !hostedLoading ? <span className="card-note">No voices loaded. Search or refresh to browse.</span> : null}
                   {hostedHasMore ? <button className="plain" disabled={hostedLoading} onClick={() => void loadHostedVoices(hostedPage + 1)}>{hostedLoading ? "Loading…" : "Load more voices"}</button> : null}
                   <label className="toggle-row"><input type="checkbox" checked={settings.fish.enhance_text} onChange={(event) => void save({ fish: { ...settings.fish, enhance_text: event.target.checked } })} /><span>Enhance text with semantic delivery cues</span></label>
                 </Card>
