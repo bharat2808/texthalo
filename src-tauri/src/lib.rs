@@ -696,6 +696,18 @@ fn open_accessibility_settings() -> Result<(), String> {
 }
 
 #[tauri::command]
+fn request_accessibility(app: AppHandle) -> Result<UiState, String> {
+    let state = app.state::<AppState>();
+    let mut settings = state.settings.lock().unwrap();
+    settings.accessibility_prompted = true;
+    config::save(&app, &settings)?;
+    drop(settings);
+
+    capture::request_accessibility();
+    Ok(ui_state(&app, Vec::new()))
+}
+
+#[tauri::command]
 fn permission_status() -> bool {
     capture::is_trusted()
 }
@@ -788,19 +800,8 @@ pub fn run() {
 
             let handle = app.handle().clone();
             hosted::initialize_secure_storage(&handle);
-            let mut settings = config::load(&handle);
+            let settings = config::load(&handle);
             let voices = speech::list_voices();
-
-            // Request Accessibility once on first launch. macOS owns the prompt and the
-            // user grants access in System Settings; keep the settings pane visible as a
-            // fallback with instructions if the system prompt was dismissed.
-            if !capture::is_trusted() && !settings.accessibility_prompted {
-                capture::request_accessibility();
-                settings.accessibility_prompted = true;
-                if let Err(error) = config::save(&handle, &settings) {
-                    eprintln!("[TextHalo] could not save Accessibility prompt state: {error}");
-                }
-            }
 
             app.manage(AppState {
                 settings: Mutex::new(settings),
@@ -843,6 +844,7 @@ pub fn run() {
             delete_chatterbox_voice,
             open_settings_window,
             open_accessibility_settings,
+            request_accessibility,
             permission_status,
             hosted::begin_desktop_signin,
             hosted::cancel_desktop_signin,
@@ -853,6 +855,7 @@ pub fn run() {
             hosted::desktop_voice_languages,
             hosted::desktop_voice_preview,
             hosted::desktop_clones,
+            hosted::desktop_clone_status,
             hosted::desktop_delete_clone,
             hosted::desktop_upload_clone,
             hosted::desktop_checkout,

@@ -509,6 +509,16 @@ pub async fn desktop_clones() -> Result<Value, String> {
     json_request(reqwest::Method::GET, "/v1/voices/clones", None).await
 }
 #[tauri::command]
+pub async fn desktop_clone_status(voice_id: String) -> Result<Value, String> {
+    let encoded = url::form_urlencoded::byte_serialize(voice_id.as_bytes()).collect::<String>();
+    json_request(
+        reqwest::Method::GET,
+        &format!("/v1/voices/clones/{encoded}"),
+        None,
+    )
+    .await
+}
+#[tauri::command]
 pub async fn desktop_delete_clone(voice_id: String) -> Result<(), String> {
     let encoded = url::form_urlencoded::byte_serialize(voice_id.as_bytes()).collect::<String>();
     let response = request(

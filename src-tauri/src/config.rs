@@ -7,17 +7,17 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tauri::{AppHandle, Manager};
 
-/// How to obtain the selection. AX is non-destructive; ⌘C is universal but
-/// briefly owns the clipboard.
+/// How to obtain the selection. ⌘C is the default because some apps return stale
+/// or over-inclusive text through Accessibility; it briefly owns the clipboard.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum CaptureMode {
     /// Accessibility first, synthetic ⌘C + pasteboard only if AX yields nothing.
-    #[default]
     AxThenCopy,
     /// Accessibility only. Never touches the clipboard.
     AxOnly,
-    /// Synthetic ⌘C only. For apps whose AX tree is useless (Chrome, Electron).
+    /// Synthetic ⌘C only. Avoids inconsistent Accessibility selection results.
+    #[default]
     CopyOnly,
 }
 
@@ -233,6 +233,11 @@ mod tests {
         let settings = Settings::default();
         assert_eq!(settings.engine, Engine::Apple);
         assert_eq!(serde_json::to_value(&settings).unwrap()["engine"], "apple");
+        assert_eq!(settings.capture_mode, CaptureMode::CopyOnly);
+        assert_eq!(
+            serde_json::to_value(&settings).unwrap()["capture_mode"],
+            "copy_only"
+        );
     }
 
     /// Config files written before the engine choice existed must keep working: they have

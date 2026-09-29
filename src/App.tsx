@@ -80,7 +80,10 @@ type FishSettings = { voice_id: string; model_id: string; enhance_text: boolean;
 type HostedVoice = { id: string; name: string; description: string; languageCodes: string[]; tags: string[]; previewAvailable: boolean; samples: { id: string; title: string; text: string }[] };
 type HostedVoiceLanguage = { code: string; voiceCount: number };
 type HostedAccount = { availableCredits: number; accountEmail?: string | null; creditBreakdown: { totalCredits: number; planCredits: number; topupCredits: number; otherCredits: number }; billingEnabled: boolean; subscription: { planId: string; status: string; currentPeriodEnd: string; cancelAtPeriodEnd: boolean } | null; plans: { id: string; creditsPerPeriod: number; cloneLimit: number }[] };
-type HostedClone = { id: string; name: string; status: string; createdAt: string };
+type HostedCloneStatus = "created" | "training" | "trained" | "failed";
+type HostedClone = { id: string; name: string; status: HostedCloneStatus; createdAt: string };
+
+const cloneIsPending = (status: HostedCloneStatus) => status === "created" || status === "training";
 
 const websiteUrl = (import.meta.env.VITE_TEXTHALO_WEBSITE_URL || "https://texthalo.app").replace(/\/$/, "");
 
@@ -105,6 +108,7 @@ type AudioHistoryEntry = {
 };
 
 type Settings = {
+  accessibility_prompted: boolean;
   shortcuts: { speak: string; stop: string };
   engine: EngineId;
   kokoro: KokoroSettings;
@@ -511,6 +515,8 @@ export default function App() {
   const [hostedLoading, setHostedLoading] = useState(false);
   const hostedLoadRevision = useRef(0);
   const [hostedClones, setHostedClones] = useState<HostedClone[]>([]);
+  const pendingCloneIds = hostedClones.filter((clone) => cloneIsPending(clone.status)).map((clone) => clone.id);
+  const pendingCloneKey = pendingCloneIds.join("\u0000");
   const [cloneName, setCloneName] = useState("");
   const [clonePath, setClonePath] = useState("");
   const [cloneConsent, setCloneConsent] = useState(false);
@@ -766,6 +772,40 @@ export default function App() {
     const canClone = (account?.plans.find((plan) => plan.id === account.subscription?.planId)?.cloneLimit ?? 0) > 0;
     if ((tab === "account" || (tab === "voice" && state?.settings.engine === "fish")) && account && canClone) void invoke<{items: HostedClone[]}>("desktop_clones").then((v) => setHostedClones(v.items)).catch((cause) => setAccountError(cause instanceof Error ? cause.message : String(cause)));
   }, [tab, state?.settings.engine, state?.system_language, account, loadHostedVoices]);
+
+  useEffect(() => {
+    if (!pendingCloneKey) return;
+    const cloneIds = pendingCloneKey.split("\u0000");
+    let active = true;
+    let refreshing = false;
+    const refreshStatuses = async () => {
+      if (refreshing) return;
+      refreshing = true;
+      try {
+        const updated = await Promise.all(
+          cloneIds.map((voiceId) => invoke<HostedClone>("desktop_clone_status", { voiceId })),
+        );
+        if (active) {
+          setHostedClones((current) => current.map((clone) => updated.find((item) => item.id === clone.id) ?? clone));
+          const currentState = latestState.current;
+          const selectedClone = updated.find((clone) => clone.id === currentState?.settings.fish.voice_id);
+          if (currentState?.settings.engine === "fish" && selectedClone && selectedClone.status !== "trained") {
+            void save({ fish: { ...currentState.settings.fish, voice_id: "" } });
+          }
+        }
+      } catch {
+        // Keep the last known status and retry on the next interval.
+      } finally {
+        refreshing = false;
+      }
+    };
+    void refreshStatuses();
+    const timer = window.setInterval(() => void refreshStatuses(), 10_000);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [pendingCloneKey, save]);
 
   /* Voice + language derivation. */
   const voices = state?.voices ?? [];
@@ -1152,26 +1192,67 @@ export default function App() {
 
             <Card title="Permission" icon={Icon.textCursor()}>
               {state.trusted ? (
-                <Note kind="secondary" icon={Icon.checkCircle()}>
-                  Accessibility access granted — TextHalo can read the selection.
-                </Note>
+                <>
+                  <Note kind="secondary" icon={Icon.checkCircle()}>
+                    Accessibility access granted. TextHalo uses it when you press your Speak
+                    shortcut to capture the selected text.
+                  </Note>
+                  <div className="card-note">
+                    The default method simulates ⌘C and reads the copied selection. macOS
+                    requires Accessibility access to send that keystroke. The clipboard is
+                    temporarily used; its previous text is restored when the restore option is
+                    enabled. Accessibility-based capture methods use this access to read the
+                    selection directly.
+                  </div>
+                </>
               ) : (
                 <>
                   <Note kind="warning" icon={Icon.warn()}>
-                    TextHalo needs Accessibility access before it can read anything.
+                    TextHalo needs Accessibility access to capture selected text when you press
+                    your Speak shortcut. macOS requires this permission for the default
+                    simulated ⌘C method.
                   </Note>
-                  <div className="inline">
-                    <button
-                      className="plain"
-                      onClick={() => void invoke("open_accessibility_settings")}
-                    >
-                      Open System Settings…
-                    </button>
-                  </div>
                   <div className="card-note">
-                    Switch <strong>TextHalo</strong> on under Privacy &amp; Security →
-                    Accessibility. This panel notices by itself once you do.
+                    TextHalo does not capture text continuously. The default method briefly uses
+                    the clipboard to read what the focused app copies; its previous text is
+                    restored when the restore option is enabled. You can also choose an
+                    Accessibility-based method that reads the selection directly.
                   </div>
+                  <div className="inline">
+                    {state.settings.accessibility_prompted ? (
+                      <button
+                        className="plain"
+                        onClick={() => void invoke("open_accessibility_settings")}
+                      >
+                        Open Accessibility Settings…
+                      </button>
+                    ) : (
+                      <button
+                        className="plain"
+                        onClick={() =>
+                          void invoke<UiState>("request_accessibility")
+                            .then((next) => {
+                              latestState.current = next;
+                              setState(next);
+                            })
+                            .catch((cause) => setError(String(cause)))
+                        }
+                      >
+                        Continue to macOS permission prompt…
+                      </button>
+                    )}
+                  </div>
+                  {state.settings.accessibility_prompted ? (
+                    <div className="card-note">
+                      In System Settings, switch <strong>TextHalo</strong> on under Privacy
+                      &amp; Security → Accessibility. This panel notices by itself once you do.
+                    </div>
+                  ) : (
+                    <div className="card-note">
+                      macOS will show its standard permission prompt. Afterward, enable
+                      <strong> TextHalo</strong> under Privacy &amp; Security → Accessibility.
+                    </div>
+                  )}
                   <div className="card-note">
                     Rebuilding from source invalidates the grant, and the stale entry keeps
                     failing. Clear it with:
@@ -1333,12 +1414,18 @@ export default function App() {
                       </div>
                     ))}
                   </div>
-                  {hostedClones.length > 0 ? <div className="field"><span className="field-label">My hosted clones</span><div className="row-stack">{hostedClones.map((clone) => { const selected = settings.fish.voice_id === clone.id; return <Row key={clone.id} selected={selected} glyph={selected ? Icon.checkCircle() : Icon.circle()} title={clone.name} subtitle={`Clone · ${clone.status}`} badge={selected ? "Selected" : undefined} onSelect={() => void save({ fish: { ...settings.fish, voice_id: clone.id } })} />; })}</div></div> : null}
+                  {hostedClones.length > 0 ? <div className="field"><span className="field-label">My hosted clones</span><div className="row-stack">{hostedClones.map((clone) => { const ready = clone.status === "trained"; const selected = settings.fish.voice_id === clone.id; const status = clone.status === "trained" ? "Ready" : clone.status === "failed" ? "Training failed" : clone.status === "created" ? "Queued" : "Training"; return <Row key={clone.id} selected={selected} disabled={!ready} glyph={selected && ready ? Icon.checkCircle() : Icon.circle()} title={clone.name} subtitle={ready ? "Clone · Ready to use" : `Clone · ${status} · unavailable until training completes`} badge={selected ? "Selected" : status} onSelect={() => void save({ fish: { ...settings.fish, voice_id: clone.id } })} />; })}</div></div> : null}
                   {hostedVoices.length === 0 && !accountError && !hostedLoading ? <span className="card-note">No voices loaded. Search or refresh to browse.</span> : null}
                   <label className="toggle-row"><input type="checkbox" checked={settings.fish.enhance_text} onChange={(event) => void save({ fish: { ...settings.fish, enhance_text: event.target.checked } })} /><span>Enhance text with semantic delivery cues</span></label>
                 </Card>
+                <Card title="Custom voice cloning" icon={Icon.speaker()}>
+                  <p className="card-note">Fish Audio supports personal voice clones. You can browse this feature while signed out; signing in and an eligible Creator plan are required to upload recordings and manage clones.</p>
+                  {!account ? <Note kind="info" icon={Icon.info()}>Sign in to see your plan and create a custom voice clone.</Note> : (account.plans.find((plan) => plan.id === account.subscription?.planId)?.cloneLimit ?? 0) > 0 ? <Note kind="info" icon={Icon.info()}>Your current plan includes voice cloning. Upload and manage your clones from Account.</Note> : <Note kind="secondary" icon={Icon.info()}>Voice cloning is available with the Creator plan. Visit Account to review plans.</Note>}
+                  <button className="plain" onClick={() => setTab("account")}>{!account ? "Sign in to create a clone" : (account.plans.find((plan) => plan.id === account.subscription?.planId)?.cloneLimit ?? 0) > 0 ? "Manage voice clones" : "View plans"}</button>
+                </Card>
                 <Card title="Privacy for hosted speech" icon={Icon.info()}>
-                  <p className="card-note">When you use Fish Audio, the selected text is sent to TextHalo’s backend and then to Fish Audio to generate speech. With enhancement enabled, the backend’s semantic cue service also analyzes the selected text. Audio is streamed back to this app. Local Apple, Kokoro, and Chatterbox engines keep processing on your Mac.</p>
+                  <p className="card-note">When you use hosted speech, selected text is sent to TextHalo’s service and the speech provider to generate audio. Optional text enhancement processes the text through an additional service. Local Apple, Kokoro, and Chatterbox engines process speech on your Mac.</p>
+                  <button className="plain" onClick={() => void openUrl(`${websiteUrl}/privacy/`)}>Read the privacy policy ↗</button>
                   <label className="toggle-row"><input type="checkbox" checked={settings.fish.privacy_accepted} onChange={(event) => void save({ fish: { ...settings.fish, privacy_accepted: event.target.checked } })} /><span>I understand how hosted speech processes selected text.</span></label>
                 </Card>
               </>
@@ -1850,6 +1937,12 @@ export default function App() {
                 {(
                   [
                     {
+                      mode: "copy_only" as CaptureMode,
+                      title: "Simulated ⌘C only (recommended)",
+                      subtitle:
+                        "Avoids inconsistent Accessibility text by simulating ⌘C; requires macOS Accessibility permission and temporarily uses the clipboard",
+                    },
+                    {
                       mode: "ax_then_copy" as CaptureMode,
                       title: "Accessibility, then copy",
                       subtitle:
@@ -1859,12 +1952,6 @@ export default function App() {
                       mode: "ax_only" as CaptureMode,
                       title: "Accessibility only",
                       subtitle: "Never touches the clipboard",
-                    },
-                    {
-                      mode: "copy_only" as CaptureMode,
-                      title: "Simulated ⌘C only",
-                      subtitle:
-                        "For apps with no usable accessibility tree — Chrome, Electron, some terminals",
                     },
                   ] as const
                 ).map((option) => (

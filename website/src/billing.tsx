@@ -121,7 +121,7 @@ export function SiteHeader() {
       <nav className={menuOpen ? "nav-open" : ""} aria-label="Main navigation">
         <a href="/#how-it-works" onClick={() => setMenuOpen(false)}>How it works</a>
         <a href="/#voices" onClick={() => setMenuOpen(false)}>Voices</a>
-        <a href="/#privacy" onClick={() => setMenuOpen(false)}>Privacy</a>
+        <a href="/privacy/" onClick={() => setMenuOpen(false)}>Privacy</a>
         <a href="/pricing/" onClick={() => setMenuOpen(false)}>Pricing</a>
         <a href="/account/billing/" onClick={() => setMenuOpen(false)}>Billing</a>
         <a href="/demo/" onClick={() => setMenuOpen(false)}>Demo</a>

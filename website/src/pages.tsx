@@ -9,6 +9,7 @@ export function getSitePaths(): string[] {
   return [
     "/",
     "/pricing/",
+    "/privacy/",
     "/sign-in/",
     "/desktop-connect/",
     "/reset-password/",
@@ -60,6 +61,7 @@ function EditorialHeader() {
         <a href="/demo/">Demo</a>
         <a href="/stories/">Stories</a>
         <a href="/blog/">Blog</a>
+        <a href="/privacy/">Privacy</a>
         <a className="button button-dark nav-download" href="https://github.com/bharat2808/texthalo/releases/latest/download/TextHalo-macOS-aarch64.dmg">Download for Mac <span aria-hidden="true">→</span></a>
       </nav>
     </header>
@@ -67,7 +69,32 @@ function EditorialHeader() {
 }
 
 function EditorialFooter() {
-  return <footer className="site-footer"><a className="wordmark footer-wordmark" href="/"><Mark /><span>TextHalo</span></a><span className="footer-copy">A little more room to listen.</span><div className="footer-links"><a href="/blog/">Blog</a><a href="/stories/">Stories</a><a href={SOURCE}>GitHub</a><a href={`${SOURCE}/blob/master/LICENSE-APACHE`}>Apache 2.0</a></div><span className="copyright">© {new Date().getFullYear()} TextHalo</span></footer>;
+  return <footer className="site-footer"><a className="wordmark footer-wordmark" href="/"><Mark /><span>TextHalo</span></a><span className="footer-copy">A little more room to listen.</span><div className="footer-links"><a href="/privacy/">Privacy</a><a href="/blog/">Blog</a><a href="/stories/">Stories</a><a href={SOURCE}>GitHub</a><a href={`${SOURCE}/blob/master/LICENSE-APACHE`}>Apache 2.0</a></div><span className="copyright">© {new Date().getFullYear()} TextHalo</span></footer>;
+}
+
+function PrivacyPolicyPage() {
+  return <div className="site-shell"><EditorialHeader /><main className="editorial-main article-main privacy-policy">
+    <nav className="breadcrumbs" aria-label="Breadcrumb"><a href="/">Home</a><span>/</span><span>Privacy</span></nav>
+    <article>
+      <header className="article-header"><div className="eyebrow"><span className="eyebrow-line" /> YOUR WORDS, YOUR CHOICE</div><h1>Privacy policy</h1><p className="article-deck">This policy explains what TextHalo processes when you use the Mac app and related hosted services.</p><div className="article-byline"><span>Effective September 29, 2026</span></div></header>
+      <div className="article-body">
+        <h2>Speech on your Mac</h2>
+        <p>When you use Apple system voices or a downloaded local speech model, TextHalo processes the selected text and generates speech on your Mac. TextHalo may download model files or app updates when you request them; those downloads are separate from sending text for speech.</p>
+        <h2>Hosted speech</h2>
+        <p>If you choose a hosted voice, the selected text is sent to TextHalo’s service and on to the speech provider so it can generate audio. The service streams the generated audio back to the app. Hosted speech requires an account and may require an eligible plan or credits. Do not send text to a hosted voice unless you are comfortable processing it this way.</p>
+        <h2>Optional text enhancement</h2>
+        <p>If you turn on semantic delivery-cue enhancement for hosted speech, the selected text is also sent to the configured enhancement service to prepare the speech request. You can turn this option off in the app’s voice settings.</p>
+        <h2>Voice cloning</h2>
+        <p>If you submit a recording to create a hosted voice clone, that recording and the details you provide are sent to TextHalo’s service and the voice-cloning provider for training and clone management. Only submit recordings you own or have permission to use. You can manage or delete your hosted clones from the app’s account area; deletion from TextHalo does not make claims about any independent copies or records retained by a provider.</p>
+        <h2>Account and payments</h2>
+        <p>If you create an account or use hosted features, TextHalo’s service processes account and service information needed to authenticate you, manage your hosted access, and maintain your credits or subscription. Payments and checkout are handled by the payment provider. TextHalo’s service receives payment-related identifiers and subscription or credit events needed to provide the service; payment card details are handled through checkout.</p>
+        <h2>Local app data</h2>
+        <p>App preferences, selected voice settings, and playback history are stored by the app on your Mac. Model files and audio used by the app may also be stored in local app data. Content submitted to hosted speech or hosted voice cloning is transmitted as described above.</p>
+        <h2>Your choices and questions</h2>
+        <p>You can choose local speech instead of hosted speech, disable optional text enhancement, and avoid hosted cloning. The app presents a separate acknowledgement before hosted speech can be used. For questions about this policy, contact the TextHalo maintainers through the project’s <a href={`${SOURCE}/issues`} target="_blank" rel="noreferrer">GitHub repository</a>.</p>
+      </div>
+    </article>
+  </main><EditorialFooter /></div>;
 }
 
 function Card({ page, basePath }: { page: EditorialPage; basePath: string }) {
@@ -119,6 +146,7 @@ function EditorialArticle({ page, kind }: { page: EditorialPage; kind: "blog" | 
 
 export function SitePage({ pathname }: { pathname: string }) {
   if (pathname === "/") return <Website />;
+  if (pathname === "/privacy/") return <PrivacyPolicyPage />;
   if (pathname === "/pricing/") return <PricingPage />;
   if (pathname === "/sign-in/") return <SignInPage />;
   if (pathname === "/desktop-connect/") return <DesktopConnectPage />;
@@ -185,6 +213,11 @@ export function getSeoMetadata(pathname: string): SeoMetadata {
   if (path === "/") return defaultMetadata(path);
   if (path === "/pricing/") {
     return { ...defaultMetadata(path), title: "TextHalo Plans — Local Voices and Hosted Speech", description: "Compare TextHalo Free, Plus, and Creator plans. Keep local Apple, Kokoro, and Chatterbox voices, then add hosted Fish Audio credits when you need them." };
+  }
+  if (path === "/privacy/") {
+    const title = "Privacy Policy | TextHalo";
+    const description = "How TextHalo handles local speech, hosted speech, optional text enhancement, voice cloning, account data, and payments.";
+    return { ...defaultMetadata(path), title, description, schema: { "@context": "https://schema.org", "@type": "WebPage", name: title, description, url: `${SITE_URL}${path}` } };
   }
   if (path === "/sign-in/") {
     return { ...defaultMetadata(path), title: "Sign in to TextHalo", description: "Sign in or create a TextHalo account to continue to hosted voice checkout." };
