@@ -6,6 +6,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import SetupWizard from "./SetupWizard";
 import appLogo from "../src-tauri/icons/icon.png";
 import "./App.css";
 
@@ -109,6 +110,7 @@ type AudioHistoryEntry = {
 
 type Settings = {
   accessibility_prompted: boolean;
+  onboarding_completed: boolean;
   shortcuts: { speak: string; stop: string };
   engine: EngineId;
   kokoro: KokoroSettings;
@@ -470,6 +472,8 @@ function Note({
 export default function App() {
   const [state, setState] = useState<UiState | null>(null);
   const [appVersion, setAppVersion] = useState<string | null>(null);
+  const [setupOpen, setSetupOpen] = useState(false);
+  const accessibilityPromptStarted = useRef(false);
   // The last word from an espeak-ng install attempt. Kept until the next attempt rather
   // than timed out, because the message is the only answer the user gets.
   const [espeakMessage, setEspeakMessage] = useState<string | null>(null);
@@ -676,6 +680,19 @@ export default function App() {
     }
   }, []);
 
+  const requestAccessibility = useCallback(async () => {
+    if (accessibilityPromptStarted.current) return;
+    accessibilityPromptStarted.current = true;
+    try {
+      const next = await invoke<UiState>("request_accessibility");
+      latestState.current = next;
+      setState(next);
+    } catch (cause) {
+      accessibilityPromptStarted.current = false;
+      setError(String(cause));
+    }
+  }, []);
+
   useEffect(() => {
     void refresh();
     const unlisten = listen<Status>("kiegen:status", (event) => setStatus(event.payload));
@@ -703,6 +720,14 @@ export default function App() {
       window.clearInterval(poll);
     };
   }, [refresh]);
+
+  useEffect(() => {
+    if (
+      !state || state.trusted ||
+      state.settings.accessibility_prompted || accessibilityPromptStarted.current
+    ) return;
+    void requestAccessibility();
+  }, [state, requestAccessibility]);
 
   const save = useCallback(
     async (patch: Partial<Settings>) => {
@@ -951,6 +976,21 @@ export default function App() {
   const selectedEngineVoice = engineVoices.find(
     (voice) => voice.id === activeEngine?.selected_voice,
   );
+
+  if (setupOpen || !settings.onboarding_completed) {
+    return <SetupWizard
+      settings={settings}
+      voices={voices}
+      trusted={state.trusted}
+      recordingShortcut={recording === "speak"}
+      onSave={save}
+      onRequestAccessibility={() => { void requestAccessibility(); }}
+      onOpenAccessibilitySettings={() => { void invoke("open_accessibility_settings"); }}
+      onPreviewVoice={(voice) => preview(voice)}
+      onRecordShortcut={() => setRecording("speak")}
+      onFinish={() => setSetupOpen(false)}
+    />;
+  }
 
   /*
    * Download progress, when the Rust side is fetching weights for the engine on screen.
@@ -1268,6 +1308,11 @@ export default function App() {
               ) : null}
             </Card>
 
+            <Card title="Getting started" icon={Icon.info()}>
+              <div className="card-note">Run the quick setup again to review Accessibility access, your Apple voice, and the Speak shortcut.</div>
+              <button className="plain" onClick={() => setSetupOpen(true)}>Open setup wizard…</button>
+            </Card>
+
             <Card title="Try it" icon={Icon.play()}>
               <div className="inline">
                 <button className="plain" onClick={() => void invoke("speak_selection_now")}>
@@ -1306,11 +1351,19 @@ export default function App() {
 
         {tab === "voice" ? (
           <div className="pane-inner">
-            <h1 className="pane-title">Voice</h1>
-            <p className="pane-subtitle">
-              Which engine speaks, and which of its voices it uses.
-            </p>
-
+            <div className="history-heading">
+              <div>
+                <h1 className="pane-title">Voice</h1>
+                <p className="pane-subtitle">
+                  Which engine speaks, and which of its voices it uses.
+                </p>
+              </div>
+              {!account ? (
+                <button className="plain" onClick={() => setTab("account")}>
+                  Sign in
+                </button>
+              ) : null}
+            </div>
             <Card title="Engine" icon={Icon.speaker()}>
               <div className="row-stack">
                 {engines.map((engine) => (

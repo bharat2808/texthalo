@@ -1,8 +1,8 @@
 //! TextHalo — a menu-bar app that speaks selected text.
 //!
-//! Shape (see docs/DESIGN.md §1): no Dock icon, no window at launch, the tray is the
-//! entire persistent UI, and the settings window is created on demand. The real app is
-//! the Rust service below; the webview is a config editor.
+//! Shape (see docs/DESIGN.md §1): no Dock icon; a first-run setup and permission guidance
+//! appear when needed, then the tray is the persistent UI and settings open on demand. The
+//! real app is the Rust service below; the webview is a config editor and setup wizard.
 
 mod capture;
 pub mod chatterbox;
@@ -43,8 +43,8 @@ use speech::Voice;
 /// cost a blink, not a hang.
 const COPY_TIMEOUT_MS: u64 = 150;
 
-/// Deep-link to the Accessibility pane in System Settings. Used instead of the AX
-/// "prompt" API because it lands the user exactly where the toggle lives.
+/// Deep-link to the Accessibility pane in System Settings for users who need to enable
+/// the toggle after the one-time AX permission prompt.
 const ACCESSIBILITY_PANE: &str =
     "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility";
 
@@ -801,6 +801,7 @@ pub fn run() {
             let handle = app.handle().clone();
             hosted::initialize_secure_storage(&handle);
             let settings = config::load(&handle);
+            let first_run = !settings.onboarding_completed;
             let voices = speech::list_voices();
 
             app.manage(AppState {
@@ -818,9 +819,9 @@ pub fn run() {
             install_tray(&handle)?;
             overlay::setup(&handle)?;
 
-            // While Accessibility is missing, put the settings instructions in front of
-            // the user; afterwards the tray is the only way in.
-            if cfg!(debug_assertions) || !capture::is_trusted() {
+            // Show setup on a fresh install, and show permission guidance whenever access
+            // is missing. Existing installs keep their saved onboarding state.
+            if cfg!(debug_assertions) || first_run || !capture::is_trusted() {
                 show_settings(&handle);
             }
 
