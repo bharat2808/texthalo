@@ -509,8 +509,7 @@ export default function App() {
   }, [hostedVoices, hostedLanguage]);
   const [hostedQuery, setHostedQuery] = useState("");
   const [hostedLoading, setHostedLoading] = useState(false);
-  const [hostedHasMore, setHostedHasMore] = useState(false);
-  const [hostedPage, setHostedPage] = useState(1);
+  const hostedLoadRevision = useRef(0);
   const [hostedClones, setHostedClones] = useState<HostedClone[]>([]);
   const [cloneName, setCloneName] = useState("");
   const [clonePath, setClonePath] = useState("");
@@ -727,21 +726,31 @@ export default function App() {
     [refresh],
   );
 
-  const loadHostedVoices = useCallback(async (page: number, query: string, language: string) => {
+  const loadHostedVoices = useCallback(async (query: string, language: string) => {
+    const revision = ++hostedLoadRevision.current;
     setHostedLoading(true);
     try {
-      const result = await invoke<{ items: HostedVoice[]; hasMore: boolean; modelId: string }>("desktop_voices", { query, language, page });
-      setHostedVoices((items) => page === 1 ? result.items : [...items, ...result.items]);
-      setHostedHasMore(result.hasMore);
-      setHostedPage(page);
-      if (result.modelId && latestState.current?.settings.fish.model_id !== result.modelId) {
-        const current = latestState.current!.settings;
-        void save({ fish: { ...current.fish, model_id: result.modelId } });
+      let page = 1;
+      let voices: HostedVoice[] = [];
+      let hasMore = true;
+      while (hasMore) {
+        const result = await invoke<{ items: HostedVoice[]; hasMore: boolean; modelId: string }>("desktop_voices", { query, language, page });
+        if (revision !== hostedLoadRevision.current) return;
+        voices = page === 1 ? result.items : [...voices, ...result.items];
+        setHostedVoices(voices);
+        if (page === 1 && result.modelId && latestState.current?.settings.fish.model_id !== result.modelId) {
+          const current = latestState.current!.settings;
+          void save({ fish: { ...current.fish, model_id: result.modelId } });
+        }
+        hasMore = result.hasMore && result.items.length > 0;
+        page++;
       }
       setAccountError("");
     } catch (cause) {
-      setAccountError(cause instanceof Error ? cause.message : String(cause));
-    } finally { setHostedLoading(false); }
+      if (revision === hostedLoadRevision.current) setAccountError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      if (revision === hostedLoadRevision.current) setHostedLoading(false);
+    }
   }, [save]);
 
   useEffect(() => {
@@ -751,7 +760,7 @@ export default function App() {
         const preferred = state.system_language.split(/[_-]/)[0]?.toLocaleLowerCase() || "en";
         const selected = result.items.some((item) => item.code === preferred) ? preferred : "en";
         setHostedLanguage(selected);
-        void loadHostedVoices(1, hostedQueryRef.current, selected);
+        void loadHostedVoices(hostedQueryRef.current, selected);
       }).catch((cause) => setAccountError(cause instanceof Error ? cause.message : String(cause)));
     }
     const canClone = (account?.plans.find((plan) => plan.id === account.subscription?.planId)?.cloneLimit ?? 0) > 0;
@@ -1296,7 +1305,7 @@ export default function App() {
                 <Card title="Fish Audio hosted voices" icon={Icon.speaker()}>
                   <div className="field">
                     <span className="field-label">Language</span>
-                    <select value={hostedLanguage} onChange={(event) => { const selected = event.target.value; setHostedLanguage(selected); void loadHostedVoices(1, hostedQuery, selected); }}>
+                    <select value={hostedLanguage} onChange={(event) => { const selected = event.target.value; setHostedLanguage(selected); void loadHostedVoices(hostedQuery, selected); }}>
                       <option value="all">All languages</option>
                       {hostedLanguages.map((item) => <option key={item.code} value={item.code}>{hostedLanguageName(item.code)} — {item.voiceCount}</option>)}
                     </select>
@@ -1304,8 +1313,8 @@ export default function App() {
                   <div className="field">
                     <span className="field-label">Find a voice</span>
                     <div className="inline">
-                      <input value={hostedQuery} placeholder="Search voices" onChange={(event) => { setHostedQuery(event.target.value); hostedQueryRef.current = event.target.value; }} onKeyDown={(event) => { if (event.key === "Enter") void loadHostedVoices(1, hostedQuery, hostedLanguage); }} />
-                      <button className="plain" disabled={hostedLoading} onClick={() => void loadHostedVoices(1, hostedQuery, hostedLanguage)}>{hostedLoading ? "Loading…" : "Search"}</button>
+                      <input value={hostedQuery} placeholder="Search voices" onChange={(event) => { setHostedQuery(event.target.value); hostedQueryRef.current = event.target.value; }} onKeyDown={(event) => { if (event.key === "Enter") void loadHostedVoices(hostedQuery, hostedLanguage); }} />
+                      <button className="plain" disabled={hostedLoading} onClick={() => void loadHostedVoices(hostedQuery, hostedLanguage)}>{hostedLoading ? "Loading…" : "Search"}</button>
                     </div>
                     <span className="field-hint">Choose a voice, then use your Speak shortcut anywhere.</span>
                   </div>
@@ -1326,7 +1335,6 @@ export default function App() {
                   </div>
                   {hostedClones.length > 0 ? <div className="field"><span className="field-label">My hosted clones</span><div className="row-stack">{hostedClones.map((clone) => { const selected = settings.fish.voice_id === clone.id; return <Row key={clone.id} selected={selected} glyph={selected ? Icon.checkCircle() : Icon.circle()} title={clone.name} subtitle={`Clone · ${clone.status}`} badge={selected ? "Selected" : undefined} onSelect={() => void save({ fish: { ...settings.fish, voice_id: clone.id } })} />; })}</div></div> : null}
                   {hostedVoices.length === 0 && !accountError && !hostedLoading ? <span className="card-note">No voices loaded. Search or refresh to browse.</span> : null}
-                  {hostedHasMore ? <button className="plain" disabled={hostedLoading} onClick={() => void loadHostedVoices(hostedPage + 1, hostedQuery, hostedLanguage)}>{hostedLoading ? "Loading…" : "Load more voices"}</button> : null}
                   <label className="toggle-row"><input type="checkbox" checked={settings.fish.enhance_text} onChange={(event) => void save({ fish: { ...settings.fish, enhance_text: event.target.checked } })} /><span>Enhance text with semantic delivery cues</span></label>
                 </Card>
                 <Card title="Privacy for hosted speech" icon={Icon.info()}>

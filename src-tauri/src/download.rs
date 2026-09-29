@@ -194,6 +194,27 @@ pub fn kokoro_bytes() -> u64 {
         .unwrap_or(0)
 }
 
+/// Bytes still missing from Kokoro's current install plan. The plan grows when espeak-ng
+/// becomes available, so this also detects language voice tables that were not included in
+/// an earlier install. A missing model directory means the whole plan is still needed.
+pub fn kokoro_missing_bytes() -> u64 {
+    let Ok(plan) = kokoro_plan() else {
+        return 0;
+    };
+    let dir = crate::engine_paths::kokoro_dir();
+    missing_bytes_in(&plan, dir.as_deref())
+}
+
+fn missing_bytes_in(plan: &[Entry], dir: Option<&Path>) -> u64 {
+    plan.iter()
+        .filter(|entry| {
+            dir.and_then(|dir| fs::metadata(dir.join(&entry.path)).ok())
+                .is_none_or(|metadata| metadata.len() != entry.bytes)
+        })
+        .map(|entry| entry.bytes)
+        .sum()
+}
+
 /// Everything Chatterbox Multilingual needs on disk, smallest first.
 ///
 /// No `Result`, unlike Kokoro's plan: there is no availability rule that can remove a file
@@ -537,7 +558,9 @@ fn install_plan_into(
     dir: &Path,
     on_progress: &mut dyn FnMut(&str, u64, u64),
 ) -> Result<(), String> {
-    let total: u64 = plan.iter().map(|entry| entry.bytes).sum();
+    // Files already present are skipped by `fetch`; exclude them from the progress total so
+    // repairing a partial install still reaches 100% when its missing files finish.
+    let total = missing_bytes_in(plan, Some(dir));
     let mut done: u64 = 0;
 
     for entry in plan {
@@ -731,6 +754,49 @@ mod tests {
                 "the 325 MB graph should be fetched last"
             );
         }
+    }
+
+    /// Installing eSpeak after Kokoro must expose a small repair download for the newly
+    /// enabled languages. The earlier English-only plan remains present and is not counted
+    /// again; only the 13 additional voice style tables should be missing.
+    #[test]
+    fn espeak_added_after_kokoro_only_needs_the_new_language_voice_files() {
+        let dir = std::env::temp_dir().join(format!(
+            "kiegen-kokoro-espeak-repair-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let before_espeak = kokoro_plan_with(false).expect("English Kokoro plan");
+        let after_espeak = kokoro_plan_with(true).expect("multilingual Kokoro plan");
+
+        // Model a complete install made before eSpeak was installed. Sparse files avoid
+        // writing hundreds of megabytes while preserving the same size checks as `fetch`.
+        for entry in &before_espeak {
+            let path = dir.join(&entry.path);
+            fs::create_dir_all(path.parent().expect("entry has parent")).unwrap();
+            File::create(path).unwrap().set_len(entry.bytes).unwrap();
+        }
+
+        let previously_installed: std::collections::HashSet<_> = before_espeak
+            .iter()
+            .map(|entry| entry.path.as_str())
+            .collect();
+        let newly_enabled: Vec<_> = after_espeak
+            .iter()
+            .filter(|entry| !previously_installed.contains(entry.path.as_str()))
+            .collect();
+        let expected_missing: u64 = newly_enabled.iter().map(|entry| entry.bytes).sum();
+
+        assert_eq!(newly_enabled.len(), 13);
+        assert!(newly_enabled
+            .iter()
+            .all(|entry| entry.path.starts_with("voices/")));
+        assert_eq!(missing_bytes_in(&before_espeak, Some(&dir)), 0);
+        assert_eq!(
+            missing_bytes_in(&after_espeak, Some(&dir)),
+            expected_missing
+        );
+
+        let _ = fs::remove_dir_all(dir);
     }
 
     /// The byte total the UI shows is derived from the plan, so it cannot drift from the

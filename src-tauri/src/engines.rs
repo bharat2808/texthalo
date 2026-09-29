@@ -21,12 +21,6 @@ pub const KOKORO_REPO: &str = "onnx-community/Kokoro-82M-v1.0-ONNX";
 /// is no espeak in it to avoid, and no Python to run it.
 pub const CHATTERBOX_REPO: &str = "onnx-community/chatterbox-multilingual-ONNX";
 
-/// Bytes Kokoro needs on disk, derived from the download plan so the figure the UI shows is
-/// the figure actually fetched (the 325.5 MB graph, the tokenizer, and 28 voice tables).
-fn kokoro_weights_bytes() -> u64 {
-    crate::download::kokoro_bytes()
-}
-
 /// Chatterbox's total, derived the same way. It used to be a hand-written constant summing
 /// two MLX repositories, which is exactly the kind of figure that drifts once the plan
 /// changes — as it has.
@@ -440,6 +434,7 @@ pub fn catalog_with(settings: &Settings, clips: Vec<crate::voices::VoiceClip>) -
     let fish_signed_in = crate::hosted::is_signed_in();
 
     let kokoro_weights = crate::engine_paths::kokoro_installed();
+    let kokoro_missing_bytes = crate::download::kokoro_missing_bytes();
     // Chatterbox's files are the app's own now, so this is a directory check like Kokoro's
     // rather than a look into a cache layout somebody else owns. Whether it can *speak* is a
     // separate question with a separate answer.
@@ -484,12 +479,11 @@ pub fn catalog_with(settings: &Settings, clips: Vec<crate::voices::VoiceClip>) -
                         .to_string(),
                 )
             },
-            needs_download: !kokoro_weights,
-            download_bytes: if kokoro_weights {
-                0
-            } else {
-                kokoro_weights_bytes()
-            },
+            // An installed English model can still speak while the newly enabled languages'
+            // voice tables are missing. Keep those repairs available without redownloading
+            // files already on disk.
+            needs_download: kokoro_missing_bytes > 0,
+            download_bytes: kokoro_missing_bytes,
             repo: KOKORO_REPO,
             voices: kokoro,
             ref_voices: Vec::new(),
@@ -738,7 +732,11 @@ mod tests {
             crate::engine_paths::kokoro_installed(),
             "the catalogue and the filesystem disagree about Kokoro"
         );
-        assert_eq!(kokoro.needs_download, !kokoro.can_speak);
+        assert_eq!(
+            kokoro.needs_download,
+            crate::download::kokoro_missing_bytes() > 0,
+            "a usable Kokoro engine can still need voice files added by eSpeak"
+        );
     }
 
     /// The pane is chrome, not documentation: every string the UI renders has to fit in a

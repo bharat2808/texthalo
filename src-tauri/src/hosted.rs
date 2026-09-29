@@ -438,7 +438,7 @@ pub async fn desktop_voices(query: String, language: String, page: u32) -> Resul
     let q = url::form_urlencoded::byte_serialize(query.as_bytes()).collect::<String>();
     let language = url::form_urlencoded::byte_serialize(language.as_bytes()).collect::<String>();
     public_json_request(&format!(
-        "/v1/voices?query={q}&language={language}&page={page}&pageSize=24"
+        "/v1/voices?query={q}&language={language}&page={page}&pageSize=100"
     ))
     .await
 }
