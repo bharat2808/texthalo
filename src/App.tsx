@@ -495,6 +495,18 @@ export default function App() {
   const [hostedVoices, setHostedVoices] = useState<HostedVoice[]>([]);
   const [hostedLanguages, setHostedLanguages] = useState<HostedVoiceLanguage[]>([]);
   const [hostedLanguage, setHostedLanguage] = useState("en");
+  const hostedVoicesByLanguage = useMemo(() => {
+    const grouped = new Map<string, HostedVoice[]>();
+    for (const voice of hostedVoices) {
+      const codes = hostedLanguage === "all" ? voice.languageCodes : [hostedLanguage];
+      for (const code of codes) {
+        const voices = grouped.get(code) ?? [];
+        if (!voices.some((item) => item.id === voice.id)) voices.push(voice);
+        grouped.set(code, voices);
+      }
+    }
+    return [...grouped.entries()].sort(([a], [b]) => hostedLanguageName(a).localeCompare(hostedLanguageName(b)));
+  }, [hostedVoices, hostedLanguage]);
   const [hostedQuery, setHostedQuery] = useState("");
   const [hostedLoading, setHostedLoading] = useState(false);
   const [hostedHasMore, setHostedHasMore] = useState(false);
@@ -1285,9 +1297,9 @@ export default function App() {
                   <div className="field">
                     <span className="field-label">Language</span>
                     <select value={hostedLanguage} onChange={(event) => { const selected = event.target.value; setHostedLanguage(selected); void loadHostedVoices(1, hostedQuery, selected); }}>
+                      <option value="all">All languages</option>
                       {hostedLanguages.map((item) => <option key={item.code} value={item.code}>{hostedLanguageName(item.code)} — {item.voiceCount}</option>)}
                     </select>
-                    <span className="field-hint">A language’s previews are cached when you browse it for the first time.</span>
                   </div>
                   <div className="field">
                     <span className="field-label">Find a voice</span>
@@ -1299,11 +1311,18 @@ export default function App() {
                   </div>
                   {!account ? <Note kind="warning" icon={Icon.warn()}>Sign in to use hosted speech. Preview samples are available without signing in.</Note> : null}
                   {accountError ? <Note kind="error" icon={Icon.xCircle()}>{accountError}</Note> : null}
-                  <div className="row-stack">
-                    {hostedVoices.map((voice) => {
-                      const selected = settings.fish.voice_id === voice.id;
-                      return <Row key={voice.id} selected={selected} glyph={selected ? Icon.checkCircle() : Icon.circle()} title={voice.name} subtitle={[voice.languageCodes?.join(", "), voice.description].filter(Boolean).join(" · ")} badge={selected ? "Selected" : undefined} onSelect={() => void save({ fish: { ...settings.fish, voice_id: voice.id } })} trailing={voice.previewAvailable ? <button className="icon" title={`Preview ${voice.name}`} onClick={(event) => { event.stopPropagation(); void previewHostedVoice(voice.id, voice.samples?.[0]?.id); }}>{Icon.play()}</button> : undefined} />;
-                    })}
+                  <div className="voice-list">
+                    {hostedVoicesByLanguage.map(([code, voices]) => (
+                      <div key={code}>
+                        {hostedLanguage === "all" ? <div className="group-heading">{hostedLanguageName(code)}</div> : null}
+                        <div className="row-stack" style={{ marginTop: hostedLanguage === "all" ? 6 : 0 }}>
+                          {voices.map((voice) => {
+                            const selected = settings.fish.voice_id === voice.id;
+                            return <Row key={`${code}-${voice.id}`} selected={selected} glyph={selected ? Icon.checkCircle() : Icon.circle()} title={voice.name} subtitle={[voice.languageCodes?.join(", "), voice.description].filter(Boolean).join(" · ")} badge={selected ? "Selected" : undefined} onSelect={() => void save({ fish: { ...settings.fish, voice_id: voice.id } })} trailing={voice.previewAvailable ? <button className="icon" title={`Preview ${voice.name}`} onClick={(event) => { event.stopPropagation(); void previewHostedVoice(voice.id, voice.samples?.[0]?.id); }}>{Icon.play()}</button> : undefined} />;
+                          })}
+                        </div>
+                      </div>
+                    ))}
                   </div>
                   {hostedClones.length > 0 ? <div className="field"><span className="field-label">My hosted clones</span><div className="row-stack">{hostedClones.map((clone) => { const selected = settings.fish.voice_id === clone.id; return <Row key={clone.id} selected={selected} glyph={selected ? Icon.checkCircle() : Icon.circle()} title={clone.name} subtitle={`Clone · ${clone.status}`} badge={selected ? "Selected" : undefined} onSelect={() => void save({ fish: { ...settings.fish, voice_id: clone.id } })} />; })}</div></div> : null}
                   {hostedVoices.length === 0 && !accountError && !hostedLoading ? <span className="card-note">No voices loaded. Search or refresh to browse.</span> : null}
