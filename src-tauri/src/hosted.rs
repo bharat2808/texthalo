@@ -115,11 +115,13 @@ fn read_credentials() -> Result<DesktopCredentials, String> {
         store.insert(CREDENTIALS_KEY.to_vec(), raw.as_bytes().to_vec(), None)
             .map_err(|_| "Could not migrate your sign-in into encrypted storage.".to_string())?;
         stronghold.save().map_err(|_| "Could not save your sign-in in encrypted storage.".to_string())?;
+        drop(stronghold);
         let _ = legacy_token_entry().and_then(|entry| entry.delete_credential().map_err(|_| "legacy credential cleanup failed".to_string()));
         *cached = Some(migrated.clone());
         return Ok(migrated);
     };
     let credentials: DesktopCredentials = serde_json::from_str(&raw).map_err(|_| "Your desktop sign-in needs renewal. Sign in again from the Account screen.".to_string())?;
+    drop(stronghold);
     *cached = Some(credentials.clone());
     Ok(credentials)
 }
@@ -132,6 +134,7 @@ fn write_credentials(credentials: &DesktopCredentials) -> Result<(), String> {
     client.store().insert(CREDENTIALS_KEY.to_vec(), serialized.into_bytes(), None)
         .map_err(|_| "Could not securely save your sign-in.".to_string())?;
     stronghold.save().map_err(|_| "Could not save your sign-in in encrypted storage.".to_string())?;
+    drop(stronghold);
     *CREDENTIAL_CACHE.get_or_init(|| Mutex::new(None)).lock().map_err(|_| "Could not access the saved TextHalo sign-in.".to_string())? = Some(credentials.clone());
     Ok(())
 }
@@ -157,6 +160,7 @@ pub fn clear_token() -> Result<(), String> {
     let client = stronghold.get_client(VAULT_CLIENT).map_err(|_| "Could not open secure sign-in storage.".to_string())?;
     client.store().delete(CREDENTIALS_KEY).map_err(|_| "Could not remove the saved sign-in from encrypted storage.".to_string())?;
     stronghold.save().map_err(|_| "Could not save the sign-out to encrypted storage.".to_string())?;
+    drop(stronghold);
     let _ = legacy_token_entry().and_then(|entry| match entry.delete_credential() {
         Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
         Err(_) => Err("legacy credential cleanup failed".to_string()),
