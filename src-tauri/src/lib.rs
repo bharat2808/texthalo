@@ -34,6 +34,7 @@ use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_global_shortcut::ShortcutState;
+use tauri_plugin_updater::UpdaterExt;
 
 use config::Settings;
 use shortcuts::Action;
@@ -42,6 +43,7 @@ use speech::Voice;
 /// Copy-mode capture is bounded: an app that never touches the pasteboard should
 /// cost a blink, not a hang.
 const COPY_TIMEOUT_MS: u64 = 150;
+const UPDATE_CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_secs(6 * 60 * 60);
 
 /// Deep-link to the Accessibility pane in System Settings for users who need to enable
 /// the toggle after the one-time AX permission prompt.
@@ -57,6 +59,7 @@ pub struct AppState {
     pub spoken: spoken::Spoken,
     pub voices: Vec<Voice>,
     pub bindings: Mutex<Vec<shortcuts::Binding>>,
+    update_available_version: Mutex<Option<String>>,
 }
 
 fn history_dir(app: &AppHandle) -> Result<std::path::PathBuf, String> {
@@ -122,6 +125,72 @@ fn ui_state(app: &AppHandle, refused_shortcuts: Vec<String>) -> UiState {
         system_language: speech::system_language(),
         config_path: config::settings_path(app).display().to_string(),
     }
+}
+
+#[derive(Serialize, Clone)]
+struct BackgroundUpdateStatus {
+    version: Option<String>,
+}
+
+fn set_update_menu_status(app: &AppHandle, version: Option<&str>) {
+    let version = version.map(str::to_string);
+    *app.state::<AppState>()
+        .update_available_version
+        .lock()
+        .unwrap() = version.clone();
+
+    if app.tray_by_id("kiegen").is_some() {
+        match build_tray_menu(app, version.as_deref()) {
+            Ok(menu) => {
+                if let Some(tray) = app.tray_by_id("kiegen") {
+                    if let Err(error) = tray.set_menu(Some(menu)) {
+                        eprintln!("[TextHalo] could not refresh tray update menu: {error}");
+                    }
+                }
+            }
+            Err(error) => eprintln!("[TextHalo] could not rebuild tray update menu: {error}"),
+        }
+    }
+}
+
+#[tauri::command]
+fn set_update_menu_status_from_settings(app: AppHandle, version: Option<String>) {
+    set_update_menu_status(&app, version.as_deref());
+}
+
+async fn check_for_updates_in_background(app: &AppHandle) {
+    match app.updater() {
+        Ok(updater) => match updater.check().await {
+            Ok(Some(update)) => {
+                let version = update.version;
+                set_update_menu_status(app, Some(&version));
+                let _ = app.emit(
+                    "texthalo:background-update-status",
+                    BackgroundUpdateStatus {
+                        version: Some(version),
+                    },
+                );
+            }
+            Ok(None) => {
+                set_update_menu_status(app, None);
+                let _ = app.emit(
+                    "texthalo:background-update-status",
+                    BackgroundUpdateStatus { version: None },
+                );
+            }
+            Err(error) => eprintln!("[TextHalo] background update check failed: {error}"),
+        },
+        Err(error) => eprintln!("[TextHalo] could not initialize updater: {error}"),
+    }
+}
+
+fn start_background_update_checks(app: AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        loop {
+            check_for_updates_in_background(&app).await;
+            tokio::time::sleep(UPDATE_CHECK_INTERVAL).await;
+        }
+    });
 }
 
 #[tauri::command]
@@ -728,15 +797,62 @@ fn permission_status() -> bool {
 
 // ──────────────────────────────── setup ────────────────────────────────
 
-fn install_tray(app: &AppHandle) -> tauri::Result<()> {
+fn build_tray_menu(
+    app: &AppHandle,
+    update_version: Option<&str>,
+) -> tauri::Result<Menu<tauri::Wry>> {
     let speak = MenuItem::with_id(app, "speak", "Speak selection", true, None::<&str>)?;
     let stop = MenuItem::with_id(app, "stop", "Stop", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, "settings", "Settings…", true, None::<&str>)?;
     let setup = MenuItem::with_id(app, "setup", "Setup Wizard…", true, None::<&str>)?;
+    let check_updates = MenuItem::with_id(
+        app,
+        "check_updates",
+        "Check for Updates…",
+        true,
+        None::<&str>,
+    )?;
     let quit = MenuItem::with_id(app, "quit", "Quit TextHalo", true, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
+    let update_separator = PredefinedMenuItem::separator(app)?;
+    let quit_separator = PredefinedMenuItem::separator(app)?;
+    let update_available = update_version
+        .map(|version| {
+            MenuItem::with_id(
+                app,
+                "update_available",
+                format!("Update available — {version}"),
+                true,
+                None::<&str>,
+            )
+        })
+        .transpose()?;
 
-    let menu = Menu::with_items(app, &[&speak, &stop, &separator, &settings, &setup, &quit])?;
+    let mut items: Vec<&dyn tauri::menu::IsMenuItem<tauri::Wry>> = vec![
+        &speak,
+        &stop,
+        &separator,
+        &settings,
+        &setup,
+        &update_separator,
+        &check_updates,
+    ];
+    if let Some(update_available) = update_available.as_ref() {
+        items.push(update_available);
+    }
+    items.push(&quit_separator);
+    items.push(&quit);
+    Menu::with_items(app, &items)
+}
+
+fn install_tray(app: &AppHandle) -> tauri::Result<()> {
+    let update_version = app
+        .state::<AppState>()
+        .update_available_version
+        .lock()
+        .unwrap()
+        .clone();
+    let menu = build_tray_menu(app, update_version.as_deref())?;
 
     let mut builder = TrayIconBuilder::with_id("kiegen")
         .menu(&menu)
@@ -753,6 +869,16 @@ fn install_tray(app: &AppHandle) -> tauri::Result<()> {
             }
             "settings" => show_settings(app),
             "setup" => show_setup_wizard(app),
+            "check_updates" => {
+                let app = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    check_for_updates_in_background(&app).await;
+                });
+            }
+            "update_available" => {
+                show_settings(app);
+                let _ = app.emit("texthalo:open-update-settings", ());
+            }
             "quit" => {
                 app.state::<AppState>().spoken.stop();
                 app.exit(0);
@@ -827,12 +953,16 @@ pub fn run() {
                 spoken: spoken::Spoken::new(),
                 voices,
                 bindings: Mutex::new(Vec::new()),
+                update_available_version: Mutex::new(None),
             });
 
             if let Err(error) = shortcuts::apply(&handle) {
                 eprintln!("[TextHalo] shortcut setup failed: {error}");
             }
             install_tray(&handle)?;
+            if !cfg!(debug_assertions) {
+                start_background_update_checks(handle.clone());
+            }
             overlay::setup(&handle)?;
 
             // Show setup on a fresh install, and show permission guidance whenever access
@@ -863,6 +993,7 @@ pub fn run() {
             open_accessibility_settings,
             request_accessibility,
             permission_status,
+            set_update_menu_status_from_settings,
             hosted::begin_desktop_signin,
             hosted::cancel_desktop_signin,
             hosted::desktop_is_signed_in,

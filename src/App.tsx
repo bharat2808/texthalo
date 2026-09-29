@@ -632,6 +632,9 @@ export default function App() {
       const update = await check();
       setUpdateAvailable(update);
       setUpdateMessage(update ? `Version ${update.version} is available.` : "You're up to date.");
+      void invoke("set_update_menu_status_from_settings", {
+        version: update?.version ?? null,
+      }).catch(() => {});
     } catch (e) {
       setUpdateMessage(`Could not check for updates: ${String(e)}`);
     } finally {
@@ -666,6 +669,29 @@ export default function App() {
       setInstallingUpdate(false);
     }
   }, [updateAvailable]);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    void listen("texthalo:open-update-settings", () => {
+      setTab("general");
+      void checkForUpdates();
+    }).then((off) => { unlisten = off; });
+    return () => unlisten?.();
+  }, [checkForUpdates]);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    void listen<{ version: string | null }>("texthalo:background-update-status", (event) => {
+      if (event.payload.version) {
+        setUpdateMessage(`Version ${event.payload.version} is available.`);
+        void checkForUpdates(); // Load the installable Update object for the About panel.
+      } else {
+        setUpdateAvailable(null);
+        setUpdateMessage("You're up to date.");
+      }
+    }).then((off) => { unlisten = off; });
+    return () => unlisten?.();
+  }, [checkForUpdates]);
 
   const refresh = useCallback(async () => {
     if (pendingSaves.current > 0) return;
@@ -984,16 +1010,25 @@ export default function App() {
   );
 
   if (setupOpen || !settings.onboarding_completed) {
+    const kokoroEngine = engines.find((engine) => engine.id === "kokoro");
     return <SetupWizard
       key={setupRevision}
       settings={settings}
       voices={voices}
       trusted={state.trusted}
       recordingShortcut={recording === "speak"}
+      kokoroReady={kokoroEngine?.can_speak ?? false}
+      kokoroDownloadBytes={kokoroEngine?.download_bytes ?? 346_258_435}
+      kokoroInstall={install?.engine === "kokoro" ? install : null}
       onSave={save}
       onRequestAccessibility={() => { void requestAccessibility(); }}
       onOpenAccessibilitySettings={() => { void invoke("open_accessibility_settings"); }}
       onPreviewVoice={(voice) => preview(voice)}
+      onChooseEngine={(engine) => { void save({ engine }); }}
+      onInstallKokoro={() => {
+        setInstall(null);
+        void invoke("install_engine", { engine: "kokoro" }).catch((cause) => setError(String(cause)));
+      }}
       onRecordShortcut={() => setRecording("speak")}
       onFinish={() => setSetupOpen(false)}
     />;
@@ -1313,11 +1348,6 @@ export default function App() {
                   click away.
                 </Note>
               ) : null}
-            </Card>
-
-            <Card title="Getting started" icon={Icon.info()}>
-              <div className="card-note">Run the quick setup again to review Accessibility access, your Apple voice, and the Speak shortcut.</div>
-              <button className="plain" onClick={() => setSetupOpen(true)}>Open setup wizard…</button>
             </Card>
 
             <Card title="Try it" icon={Icon.play()}>

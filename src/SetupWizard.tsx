@@ -1,9 +1,10 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import "./SetupWizard.css";
 
 type WizardSettings = {
   onboarding_completed: boolean;
   accessibility_prompted: boolean;
+  engine: "apple" | "kokoro" | "chatterbox" | "fish";
   shortcuts: { speak: string; stop: string };
   voice: string | null;
 };
@@ -15,10 +16,15 @@ type SetupWizardProps = {
   voices: WizardVoice[];
   trusted: boolean;
   recordingShortcut: boolean;
+  kokoroReady: boolean;
+  kokoroDownloadBytes: number;
+  kokoroInstall: { phase: "downloading" | "done" | "error"; done: number; total: number; message: string | null } | null;
   onSave: (patch: Partial<WizardSettings>) => void | Promise<void>;
   onRequestAccessibility: () => void;
   onOpenAccessibilitySettings: () => void;
   onPreviewVoice: (voice: string | null) => void;
+  onChooseEngine: (engine: "apple" | "kokoro") => void;
+  onInstallKokoro: () => void;
   onRecordShortcut: () => void;
   onFinish: () => void | Promise<void>;
 };
@@ -30,19 +36,53 @@ export default function SetupWizard({
   voices,
   trusted,
   recordingShortcut,
+  kokoroReady,
+  kokoroDownloadBytes,
+  kokoroInstall,
   onSave,
   onRequestAccessibility,
   onOpenAccessibilitySettings,
   onPreviewVoice,
+  onChooseEngine,
+  onInstallKokoro,
   onRecordShortcut,
   onFinish,
 }: SetupWizardProps) {
   const [step, setStep] = useState(0);
+  const [selectedEngine, setSelectedEngine] = useState<"apple" | "kokoro" | null>(
+    settings.engine === "apple" || settings.engine === "kokoro" ? settings.engine : null,
+  );
+  const [startingKokoro, setStartingKokoro] = useState(false);
   const speechVoices = voices.filter((voice) => !voice.novelty);
+  const kokoroInstalled = kokoroReady || kokoroInstall?.phase === "done";
+  const kokoroInstalling = startingKokoro || kokoroInstall?.phase === "downloading";
+  const kokoroProgress = kokoroInstall && kokoroInstall.total > 0
+    ? Math.min(100, Math.round((kokoroInstall.done / kokoroInstall.total) * 100))
+    : 0;
+  const canContinue = step !== 1 || selectedEngine === "apple" || (selectedEngine === "kokoro" && kokoroInstalled);
+
+  useEffect(() => {
+    if (kokoroInstall) setStartingKokoro(false);
+  }, [kokoroInstall]);
 
   const finish = async () => {
+    if (settings.engine === "kokoro" && !kokoroInstalled) await onSave({ engine: "apple" });
     await onSave({ onboarding_completed: true });
     await onFinish();
+  };
+
+  const chooseApple = () => {
+    setSelectedEngine("apple");
+    onChooseEngine("apple");
+  };
+
+  const chooseKokoro = () => {
+    setSelectedEngine("kokoro");
+    onChooseEngine("kokoro");
+    if (!kokoroInstalled && !kokoroInstalling) {
+      setStartingKokoro(true);
+      onInstallKokoro();
+    }
   };
 
   return (
@@ -74,13 +114,28 @@ export default function SetupWizard({
 
         {step === 1 ? <>
           <div className="setup-wizard-kicker">YOUR STARTING VOICE</div>
-          <h1>Pick a voice<br />that feels right.</h1>
-          <p>TextHalo starts with Apple voices, which are ready to use on your Mac. You can browse local AI and hosted voices later in Voice settings.</p>
-          <label className="setup-field"><span>Apple voice</span><select value={settings.voice ?? ""} onChange={(event) => void onSave({ voice: event.target.value || null })}>
-            <option value="">System default</option>
-            {speechVoices.map((voice) => <option key={voice.name} value={voice.name}>{voice.name} · {voice.locale.replace("_", "-")}</option>)}
-          </select></label>
-          <button className="plain" onClick={() => onPreviewVoice(settings.voice)}>▶ Preview this voice</button>
+          <h1>Start with a voice<br />you love.</h1>
+          <p>Apple is ready now. Want more local AI voices? Set up Kokoro here, or come back to it later in Voice settings.</p>
+          <div className="setup-engine-choice">
+            <article className={selectedEngine === "apple" ? "setup-engine-card selected" : "setup-engine-card"}>
+              <div><strong>Apple voices</strong><span>Ready immediately · no model download</span></div>
+              <button className="plain" onClick={chooseApple}>{selectedEngine === "apple" ? "Selected" : "Use Apple"}</button>
+              {selectedEngine === "apple" ? <>
+                <label className="setup-field"><span>Choose an installed voice</span><select value={settings.voice ?? ""} onChange={(event) => void onSave({ voice: event.target.value || null })}>
+                  <option value="">System default</option>
+                  {speechVoices.map((voice) => <option key={voice.name} value={voice.name}>{voice.name} · {voice.locale.replace("_", "-")}</option>)}
+                </select></label>
+                <button className="plain" onClick={() => onPreviewVoice(settings.voice)}>▶ Preview Apple voice</button>
+              </> : null}
+            </article>
+            <article className={selectedEngine === "kokoro" ? "setup-engine-card selected" : "setup-engine-card"}>
+              <div><strong>Kokoro <span className="setup-recommended">RECOMMENDED</span></strong><span>28 English local AI voices · stays on your Mac</span></div>
+              {kokoroInstalled ? <button className="plain" onClick={chooseKokoro}>{selectedEngine === "kokoro" ? "Selected" : "Use Kokoro"}</button> : <button className="plain" disabled={kokoroInstalling} onClick={chooseKokoro}>{kokoroInstalling ? "Downloading…" : kokoroInstall?.phase === "error" ? "Retry download" : `Download ${Math.round(kokoroDownloadBytes / 1_000_000)} MB`}</button>}
+              {kokoroInstalling ? <div className="setup-download-status"><div className="progress"><div className="progress-bar" style={{ width: `${kokoroProgress}%` }} /></div><span>{kokoroProgress}% · {Math.round((kokoroInstall?.done ?? 0) / 1_000_000)} of {Math.round((kokoroInstall?.total || kokoroDownloadBytes) / 1_000_000)} MB</span></div> : null}
+              {kokoroInstall?.phase === "error" ? <span className="setup-install-error">{kokoroInstall.message ?? "Download failed. Check your connection and try again."}</span> : null}
+              {kokoroInstalled ? <span className="setup-kokoro-ready">✓ Downloaded and ready</span> : !kokoroInstalling && kokoroInstall?.phase !== "error" ? <span>One-time download · about {Math.round(kokoroDownloadBytes / 1_000_000)} MB</span> : null}
+            </article>
+          </div>
         </> : null}
 
         {step === 2 ? <>
@@ -102,7 +157,7 @@ export default function SetupWizard({
       <footer className="setup-wizard-footer">
         {step > 0 ? <button className="plain" onClick={() => setStep((current) => current - 1)}>Back</button> : <span />}
         {step < STEPS.length - 1
-          ? <button className="primary-button" onClick={() => setStep((current) => current + 1)}>Continue</button>
+          ? <button className="primary-button" disabled={!canContinue} onClick={() => setStep((current) => current + 1)}>Continue</button>
           : <button className="primary-button" onClick={() => void finish()}>Start listening</button>}
       </footer>
     </main>
