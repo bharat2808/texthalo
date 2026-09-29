@@ -424,6 +424,20 @@ fn show_settings(app: &AppHandle) {
     }
 }
 
+fn show_setup_wizard(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    let mut current = state.settings.lock().unwrap();
+    let mut settings = current.clone();
+    settings.onboarding_completed = false;
+    match config::save(app, &settings) {
+        Ok(()) => *current = settings,
+        Err(error) => eprintln!("[TextHalo] could not save setup state: {error}"),
+    }
+    drop(current);
+    show_settings(app);
+    let _ = app.emit("texthalo:open-setup", ());
+}
+
 // ─────────────────────────────── commands ───────────────────────────────
 
 #[tauri::command]
@@ -718,10 +732,11 @@ fn install_tray(app: &AppHandle) -> tauri::Result<()> {
     let speak = MenuItem::with_id(app, "speak", "Speak selection", true, None::<&str>)?;
     let stop = MenuItem::with_id(app, "stop", "Stop", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, "settings", "Settings…", true, None::<&str>)?;
+    let setup = MenuItem::with_id(app, "setup", "Setup Wizard…", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit TextHalo", true, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
 
-    let menu = Menu::with_items(app, &[&speak, &stop, &separator, &settings, &quit])?;
+    let menu = Menu::with_items(app, &[&speak, &stop, &separator, &settings, &setup, &quit])?;
 
     let mut builder = TrayIconBuilder::with_id("kiegen")
         .menu(&menu)
@@ -737,6 +752,7 @@ fn install_tray(app: &AppHandle) -> tauri::Result<()> {
                 stop_speaking(app.clone());
             }
             "settings" => show_settings(app),
+            "setup" => show_setup_wizard(app),
             "quit" => {
                 app.state::<AppState>().spoken.stop();
                 app.exit(0);

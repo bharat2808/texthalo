@@ -473,6 +473,7 @@ export default function App() {
   const [state, setState] = useState<UiState | null>(null);
   const [appVersion, setAppVersion] = useState<string | null>(null);
   const [setupOpen, setSetupOpen] = useState(false);
+  const [setupRevision, setSetupRevision] = useState(0);
   const accessibilityPromptStarted = useRef(false);
   // The last word from an espeak-ng install attempt. Kept until the next attempt rather
   // than timed out, because the message is the only answer the user gets.
@@ -710,6 +711,10 @@ export default function App() {
       setEspeakInstalling(installing);
       if (!installing) void refresh();
     });
+    const setupWizard = listen("texthalo:open-setup", () => {
+      setSetupOpen(true);
+      setSetupRevision((revision) => revision + 1);
+    });
     // Permission is granted outside the app, and speech ends on its own: poll rather
     // than pretend we can observe either.
     const poll = window.setInterval(() => void refresh(), 2000);
@@ -717,6 +722,7 @@ export default function App() {
       void unlisten.then((off) => off());
       void uninstall.then((off) => off());
       void unespeak.then((off) => off());
+      void setupWizard.then((off) => off());
       window.clearInterval(poll);
     };
   }, [refresh]);
@@ -979,6 +985,7 @@ export default function App() {
 
   if (setupOpen || !settings.onboarding_completed) {
     return <SetupWizard
+      key={setupRevision}
       settings={settings}
       voices={voices}
       trusted={state.trusted}
