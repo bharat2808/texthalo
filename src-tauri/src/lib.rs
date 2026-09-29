@@ -175,6 +175,16 @@ fn run_speech(
         return;
     }
     if settings.engine == config::Engine::Fish {
+        {
+            let mut job = state.job.lock().unwrap();
+            if !job.is_current(id) {
+                return;
+            }
+            // Fish Audio can pause between PCM packets while it prepares the next
+            // chunk. Keep those playback gaps in Preparing, as for local PCM streams,
+            // instead of letting the overlay mistake them for completion.
+            job.streaming = true;
+        }
         let app = app.clone();
         let voice = settings.fish.voice_id.clone();
         let model_id = settings.fish.model_id.clone();
@@ -186,6 +196,7 @@ fn run_speech(
             let state = app.state::<AppState>();
             let mut job = state.job.lock().unwrap();
             if job.is_current(id) {
+                job.streaming = false;
                 match result {
                     Ok(()) => job.set(
                         Phase::Idle,
