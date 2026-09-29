@@ -1,5 +1,5 @@
 import { blogPosts, stories, type EditorialPage } from "./content";
-import { BillingAccountPage, BillingSuccessPage, PasswordResetPage, PricingPage, SignInPage } from "./billing";
+import { BillingAccountPage, BillingSuccessPage, DesktopConnectPage, PasswordResetPage, PricingPage, SignInPage } from "./billing";
 import Website from "./website";
 
 const SITE_URL = "https://texthalo.app";
@@ -10,6 +10,7 @@ export function getSitePaths(): string[] {
     "/",
     "/pricing/",
     "/sign-in/",
+    "/desktop-connect/",
     "/reset-password/",
     "/account/billing/",
     "/account/billing/success/",
@@ -120,6 +121,7 @@ export function SitePage({ pathname }: { pathname: string }) {
   if (pathname === "/") return <Website />;
   if (pathname === "/pricing/") return <PricingPage />;
   if (pathname === "/sign-in/") return <SignInPage />;
+  if (pathname === "/desktop-connect/") return <DesktopConnectPage />;
   if (pathname === "/reset-password/") return <PasswordResetPage />;
   if (pathname === "/account/billing/") return <BillingAccountPage />;
   if (pathname === "/account/billing/success/") return <BillingSuccessPage />;
@@ -186,6 +188,9 @@ export function getSeoMetadata(pathname: string): SeoMetadata {
   }
   if (path === "/sign-in/") {
     return { ...defaultMetadata(path), title: "Sign in to TextHalo", description: "Sign in or create a TextHalo account to continue to hosted voice checkout." };
+  }
+  if (path === "/desktop-connect/") {
+    return { ...defaultMetadata(path), title: "Connect TextHalo Desktop", description: "Sign in securely to connect your TextHalo Mac app." };
   }
   if (path === "/reset-password/") {
     return { ...defaultMetadata(path), title: "Reset your password | TextHalo", description: "Choose a new password for your TextHalo account." };

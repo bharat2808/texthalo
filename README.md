@@ -2,11 +2,11 @@
 
 **Select text. Press a shortcut. Hear it read aloud.**
 
-TextHalo is a macOS menu bar text-to-speech app with Apple system voices and local AI speech through Kokoro and Chatterbox. Built with Rust, Tauri, React, and TypeScript, it keeps playback controls close without taking focus away from your work.
+TextHalo is a macOS menu bar text-to-speech app with Apple system voices, local AI speech through Kokoro and Chatterbox, and hosted Fish Audio speech. Built with Rust, Tauri, React, and TypeScript, it keeps playback controls close without taking focus away from your work.
 
 **Website:** [texthalo.app](https://texthalo.app)
 
-The website pricing page is available at `/pricing/`. It uses Neon Auth sign-in before starting Stripe Checkout; set `VITE_NEON_AUTH_URL` and `VITE_TEXTHALO_API_URL` for the website build, and allow the website origin in the server's `CORS_ALLOWED_ORIGINS`.
+The website pricing page is available at `/pricing/`. It uses Neon Auth sign-in before starting Stripe Checkout. Desktop sign-in opens the branded website in the system browser, then returns through a short-lived PKCE handoff; the app stores its revocable session in macOS Keychain. The desktop Account tab also shows the signed-in account, balance, billing, and top-ups. Set `VITE_NEON_AUTH_URL`, `VITE_TEXTHALO_API_URL`, and `VITE_TEXTHALO_WEBSITE_URL` for the website/app builds, and allow the website origin in the server's `CORS_ALLOWED_ORIGINS`.
 
 ## Demo
 
@@ -17,19 +17,20 @@ https://github.com/user-attachments/assets/f33d93bc-57c8-4afb-8db1-70b9fac76eca
 ## Features
 
 - **Read selected text** from other apps with a configurable global shortcut.
-- **Choose between three speech engines:** Apple system voices, Kokoro 82M, and Chatterbox Multilingual.
+- **Choose between four speech engines:** Apple system voices, Kokoro 82M, Chatterbox Multilingual, and hosted Fish Audio voices.
 - **Preview voices** directly in settings before using them.
 - **Start listening sooner:** Kokoro and Chatterbox play short phrases while the next phrase is generated.
 - **Control playback from a floating overlay** at the top center of the screen, with speech status and a Stop button.
 - **Use reference voices with Chatterbox** by importing a local WAV clip.
 - **Keep models loaded** between requests to avoid repeated model initialization.
 - **Choose how text is captured:** Accessibility, copying, or Accessibility with a copy fallback.
+- **Browse hosted voices, manage your account and credits, and open plan or top-up checkout** from Settings → Account.
 
 ## Get started
 
 1. Launch TextHalo and open **Settings…** from its menu bar icon.
 2. Enable TextHalo in **System Settings → Privacy & Security → Accessibility**.
-3. Open **Voice**, choose an engine, and preview a voice. Apple system voices work without downloading a model; Kokoro and Chatterbox require a model download through the app.
+3. Open **Voice**, choose an engine, and preview a voice. Apple system voices work without downloading a model; Kokoro and Chatterbox require a model download through the app. Fish Audio requires signing in from **Account** and accepting its hosted-text privacy notice.
 4. Select text in another app and press **Cmd+Shift+S**.
 5. Press **Cmd+Shift+X** or click **Stop** in the overlay to stop playback.
 
@@ -49,6 +50,7 @@ Change the keyboard shortcuts in **Shortcuts**. Selection length is limited to 5
 | **Apple system voices** | Voices installed in macOS, with language selection and speaking-rate controls | Available immediately; the default engine |
 | **Kokoro 82M** | American and British English; additional supported languages through espeak-ng | Download the model and voices in the app |
 | **Chatterbox Multilingual** | 23 languages, a built-in reference voice, and imported WAV reference clips | Download the model in the app |
+| **Fish Audio** | Hosted voice catalog, streamed speech, optional semantic text enhancement | Sign in, select Fish Audio, and accept the hosted-text notice |
 
 Kokoro supports Spanish, French, Hindi, Italian, and Brazilian Portuguese through an installed espeak-ng executable. Japanese and Mandarin Kokoro voices are currently unavailable because their text front ends are not implemented.
 
@@ -64,7 +66,7 @@ Detection includes standard Homebrew locations and `PATH`. For a custom installa
 
 ## Text capture and privacy
 
-Speech synthesis runs locally. Selected text is not sent to a cloud speech service. Internet access is used to download model assets, including files from Hugging Face and GitHub.
+Apple, Kokoro, and Chatterbox speech synthesis runs locally. Fish Audio is a hosted service: when selected, the captured text is sent to the TextHalo backend and Fish Audio to generate and stream speech. Optional semantic text enhancement also sends the text to the configured semantic cue service. Voice clone recordings are uploaded to Fish Audio when the user submits them. Review the hosted speech notice in Voice settings before enabling Fish Audio.
 
 TextHalo requires Accessibility permission to capture another app's selection. In **Capture**, choose Accessibility-only capture to avoid using the clipboard, or use copying for apps that do not expose their selection through Accessibility. Copy-based capture can restore the previous clipboard contents; restoration is enabled by default.
 
@@ -93,8 +95,12 @@ npm run tauri dev
 To build the macOS application:
 
 ```bash
+VITE_TEXTHALO_API_URL=https://your-deployed-backend.example \
+VITE_NEON_AUTH_URL=https://YOUR-NEON-AUTH-HOST/neondb/auth \
 npm run tauri build -- --bundles app
 ```
+
+The API origin is compiled into the native app; release builds do not fall back to localhost or a temporary tunnel. Set it to the deployed TextHalo backend when building. Debug builds default to `http://localhost:8788` for local development.
 
 The application is written to:
 

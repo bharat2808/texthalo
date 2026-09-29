@@ -14,6 +14,7 @@ pub mod engines;
 pub mod espeak;
 pub mod g2p;
 mod history;
+mod hosted;
 pub mod kokoro;
 pub mod lexicon;
 pub mod numbers;
@@ -173,6 +174,34 @@ fn run_speech(
         job_status(app, id, Phase::Error, Some(reason), Some(chars));
         return;
     }
+    if settings.engine == config::Engine::Fish {
+        let app = app.clone();
+        let voice = settings.fish.voice_id.clone();
+        let model_id = settings.fish.model_id.clone();
+        let enhance = settings.fish.enhance_text;
+        tauri::async_runtime::spawn(async move {
+            let result =
+                hosted::stream_speech(app.clone(), id, text.clone(), voice, model_id, enhance)
+                    .await;
+            let state = app.state::<AppState>();
+            let mut job = state.job.lock().unwrap();
+            if job.is_current(id) {
+                match result {
+                    Ok(()) => job.set(
+                        Phase::Idle,
+                        Some("Hosted speech complete".into()),
+                        Some(text.chars().count()),
+                    ),
+                    Err(message) => {
+                        state.spoken.stop();
+                        job.set(Phase::Error, Some(message), Some(text.chars().count()));
+                    }
+                }
+                let _ = app.emit("kiegen:status", &job.status);
+            }
+        });
+        return;
+    }
     if settings.engine == config::Engine::Apple {
         let archive_path = archive
             .then(|| history_dir(app).ok())
@@ -285,7 +314,7 @@ fn run_speech(
                                 format!("{speaker} · {}", settings.chatterbox.voice),
                             )
                         }
-                        config::Engine::Apple => unreachable!(),
+                        config::Engine::Apple | config::Engine::Fish => unreachable!(),
                     };
                     if let Err(error) = history::save_entry(
                         dir,
@@ -452,6 +481,7 @@ fn preview_voice(
                 settings.chatterbox.voice = voice;
             }
         }
+        config::Engine::Fish => settings.fish.voice_id = voice.unwrap_or_default(),
     }
     let sample =
         text.unwrap_or_else(|| "This is how I sound when reading your selection.".to_string());
@@ -566,6 +596,9 @@ fn install_local_engine(app: &AppHandle, engine: config::Engine) -> Result<(), S
         config::Engine::Kokoro => engine_paths::kokoro_dir(),
         config::Engine::Chatterbox => engine_paths::chatterbox_dir(),
         config::Engine::Apple => return Ok(()),
+        config::Engine::Fish => {
+            return Err("Fish Audio voices are hosted and need no model download.".into())
+        }
     }
     .ok_or("could not locate the app support directory")?;
 
@@ -603,6 +636,15 @@ fn install_engine_blocking(app: &AppHandle, engine: config::Engine) {
                 emit_install(app, engine, "error", "", 0, 0, Some(error));
             }
         }
+        config::Engine::Fish => emit_install(
+            app,
+            engine,
+            "error",
+            "",
+            0,
+            0,
+            Some("Fish Audio is hosted and needs no model download.".into()),
+        ),
     }
 }
 
@@ -723,6 +765,7 @@ pub fn run() {
                 .build(),
         )
         .setup(|app| {
+            hosted::initialize_auth_vault(app.handle())?;
             // Menu-bar agent, not a windowed app: no Dock icon, no app switcher entry.
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
@@ -784,6 +827,17 @@ pub fn run() {
             open_settings_window,
             open_accessibility_settings,
             permission_status,
+            hosted::begin_desktop_signin,
+            hosted::desktop_is_signed_in,
+            hosted::desktop_sign_out,
+            hosted::desktop_account,
+            hosted::desktop_voices,
+            hosted::desktop_voice_preview,
+            hosted::desktop_clones,
+            hosted::desktop_delete_clone,
+            hosted::desktop_upload_clone,
+            hosted::desktop_checkout,
+            hosted::desktop_topup,
         ])
         .run(tauri::generate_context!())
         .expect("error while running TextHalo");

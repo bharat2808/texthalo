@@ -436,6 +436,8 @@ pub fn catalog_with(settings: &Settings, clips: Vec<crate::voices::VoiceClip>) -
     let kokoro = kokoro_voices(crate::engine_paths::espeak_ng().is_some());
     let chatterbox = chatterbox_voices();
     let ref_voices = chatterbox_ref_voices(&clips);
+    let fish_configured = crate::hosted::service_configured();
+    let fish_signed_in = crate::hosted::is_signed_in();
 
     let kokoro_weights = crate::engine_paths::kokoro_installed();
     // Chatterbox's files are the app's own now, so this is a directory check like Kokoro's
@@ -525,6 +527,46 @@ pub fn catalog_with(settings: &Settings, clips: Vec<crate::voices::VoiceClip>) -
             voices: chatterbox,
             ref_voices,
             selected_voice: settings.chatterbox.voice.clone(),
+        },
+        EngineInfo {
+            id: Engine::Fish,
+            label: "Fish Audio hosted voices",
+            summary: "Hosted voices, streaming playback, account credits",
+            can_speak: fish_configured
+                && fish_signed_in
+                && settings.fish.privacy_accepted
+                && !settings.fish.voice_id.is_empty(),
+            status: if !fish_configured {
+                "Backend URL is not configured".to_string()
+            } else if !fish_signed_in {
+                "Sign in to use hosted voices".to_string()
+            } else if !settings.fish.privacy_accepted {
+                "Review hosted speech privacy details".to_string()
+            } else if settings.fish.voice_id.is_empty() {
+                "Choose a hosted voice".to_string()
+            } else {
+                "Ready".to_string()
+            },
+            blocked_reason: if !fish_configured {
+                Some("Set VITE_TEXTHALO_API_URL when building the app.".to_string())
+            } else if !fish_signed_in {
+                Some("Sign in from Account settings before using hosted speech.".to_string())
+            } else if !settings.fish.privacy_accepted {
+                Some(
+                    "Review and accept the hosted speech privacy details in Voice settings."
+                        .to_string(),
+                )
+            } else if settings.fish.voice_id.is_empty() {
+                Some("Choose a hosted voice in Voice settings before speaking.".to_string())
+            } else {
+                None
+            },
+            needs_download: false,
+            download_bytes: 0,
+            repo: "",
+            voices: Vec::new(),
+            ref_voices: Vec::new(),
+            selected_voice: settings.fish.voice_id.clone(),
         },
     ]
 }

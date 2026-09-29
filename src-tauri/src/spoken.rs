@@ -135,6 +135,7 @@ impl Spoken {
                 self.play(&wav)?;
                 Ok(report)
             }
+            Engine::Fish => Err("Fish Audio uses the authenticated hosted speech stream.".into()),
         }
     }
 
@@ -165,6 +166,7 @@ impl Spoken {
                 }
                 self.speak(&audition, text, None)
             }
+            Engine::Fish => Err("Preview Fish Audio voices from the hosted voice browser.".into()),
         }
     }
 
@@ -240,6 +242,9 @@ impl Spoken {
                 let samples = self.synthesize_chatterbox(&dir, settings, text)?;
                 (samples, 0, Vec::new(), chatterbox::SAMPLE_RATE)
             }
+            Engine::Fish => {
+                return Err("Fish Audio voices are rendered by the hosted service.".into())
+            }
             other => {
                 return Err(format!(
                     "rendering a file needs a local engine; {} writes audio itself",
@@ -277,6 +282,7 @@ impl Spoken {
             Engine::Kokoro => crate::streaming::kokoro_chunks(text),
             Engine::Chatterbox => crate::streaming::chatterbox_chunks(text),
             Engine::Apple => return Err("PCM playback needs a local speech engine".into()),
+            Engine::Fish => return Err("Fish Audio uses its own hosted PCM stream.".into()),
         };
         if chunks.is_empty() {
             return Err("nothing to say: the selection is empty".into());
@@ -591,6 +597,7 @@ fn engine_label(engine: Engine) -> &'static str {
         Engine::Apple => "the Apple system voices",
         Engine::Kokoro => "Kokoro",
         Engine::Chatterbox => "Chatterbox",
+        Engine::Fish => "Fish Audio",
     }
 }
 

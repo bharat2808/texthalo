@@ -23,7 +23,7 @@ try {
     const headTags = [
       `<title>${escapeHtml(metadata.title)}</title>`,
       `<meta name="description" content="${escapeHtml(metadata.description)}" />`,
-      `<meta name="robots" content="${["/sign-in/", "/reset-password/", "/account/billing/success/"].includes(metadata.path) ? "noindex,follow" : "index,follow,max-image-preview:large"}" />`,
+      `<meta name="robots" content="${["/sign-in/", "/desktop-connect/", "/reset-password/", "/account/billing/success/"].includes(metadata.path) ? "noindex,follow" : "index,follow,max-image-preview:large"}" />`,
       `<link rel="canonical" href="${siteUrl}${metadata.path}" />`,
       `<meta property="og:type" content="${metadata.type}" />`,
       `<meta property="og:site_name" content="TextHalo" />`,

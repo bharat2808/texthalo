@@ -61,6 +61,8 @@ pub enum Engine {
     /// languages this build otherwise cannot. ~1.5 GB including its four graphs and the
     /// Chinese character mapping.
     Chatterbox,
+    /// Hosted Fish Audio through the authenticated TextHalo service.
+    Fish,
 }
 
 /// Kokoro engine settings. Defaults follow the benchmark in docs/DESIGN.md §5: fp32 was
@@ -141,6 +143,7 @@ pub struct Settings {
     pub engine: Engine,
     pub kokoro: KokoroSettings,
     pub chatterbox: ChatterboxSettings,
+    pub fish: FishSettings,
     /// macOS voice name (`say -v ?`). `None` = system default voice. Apple engine only.
     pub voice: Option<String>,
     /// Words per minute, passed to `say -r`. Apple engine only.
@@ -152,6 +155,26 @@ pub struct Settings {
     pub restore_clipboard: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FishSettings {
+    pub voice_id: String,
+    pub model_id: String,
+    pub enhance_text: bool,
+    pub privacy_accepted: bool,
+}
+
+impl Default for FishSettings {
+    fn default() -> Self {
+        Self {
+            voice_id: String::new(),
+            model_id: String::new(),
+            enhance_text: true,
+            privacy_accepted: false,
+        }
+    }
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -160,6 +183,7 @@ impl Default for Settings {
             engine: Engine::default(),
             kokoro: KokoroSettings::default(),
             chatterbox: ChatterboxSettings::default(),
+            fish: FishSettings::default(),
             voice: None,
             rate: 200,
             capture_mode: CaptureMode::default(),

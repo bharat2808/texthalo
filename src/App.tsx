@@ -5,6 +5,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import { open } from "@tauri-apps/plugin-dialog";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type Update } from "@tauri-apps/plugin-updater";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import "./App.css";
 
 /* ── types mirroring the Rust side ─────────────────────────────────── */
@@ -14,7 +15,7 @@ type CaptureMode = "ax_then_copy" | "ax_only" | "copy_only";
 type Voice = { name: string; locale: string; novelty: boolean };
 
 /** Which synthesis backend is selected. Mirrors the Rust `Engine` enum's wire format. */
-type EngineId = "apple" | "kokoro" | "chatterbox";
+type EngineId = "apple" | "kokoro" | "chatterbox" | "fish";
 
 /** One voice offered by whichever engine is active. */
 type EngineVoice = {
@@ -74,6 +75,13 @@ type ChatterboxSettings = {
   keep_warm: boolean;
 };
 
+type FishSettings = { voice_id: string; model_id: string; enhance_text: boolean; privacy_accepted: boolean };
+type HostedVoice = { id: string; name: string; description: string; languageCodes: string[]; tags: string[]; previewAvailable: boolean; samples: { id: string; title: string; text: string }[] };
+type HostedAccount = { availableCredits: number; accountEmail?: string | null; creditBreakdown: { totalCredits: number; planCredits: number; topupCredits: number; otherCredits: number }; billingEnabled: boolean; subscription: { planId: string; status: string; currentPeriodEnd: string; cancelAtPeriodEnd: boolean } | null; plans: { id: string; creditsPerPeriod: number; cloneLimit: number }[] };
+type HostedClone = { id: string; name: string; status: string; createdAt: string };
+
+const websiteUrl = (import.meta.env.VITE_TEXTHALO_WEBSITE_URL || "https://texthalo.app").replace(/\/$/, "");
+
 /** Progress of a weight download, emitted by the Rust side as `kiegen:install`. */
 type InstallEvent = {
   engine: EngineId;
@@ -99,6 +107,7 @@ type Settings = {
   engine: EngineId;
   kokoro: KokoroSettings;
   chatterbox: ChatterboxSettings;
+  fish: FishSettings;
   voice: string | null;
   rate: number;
   capture_mode: CaptureMode;
@@ -121,7 +130,7 @@ type UiState = {
 type Phase = "idle" | "capturing" | "preparing" | "speaking" | "error";
 type Status = { phase: Phase; message?: string | null; chars?: number | null };
 
-type Tab = "general" | "voice" | "shortcuts" | "capture" | "history";
+type Tab = "general" | "voice" | "account" | "shortcuts" | "capture" | "history";
 
 /* ── icons (16×16, currentColor) ───────────────────────────────────── */
 
@@ -474,6 +483,22 @@ export default function App() {
   const [historyEntries, setHistoryEntries] = useState<AudioHistoryEntry[]>([]);
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [account, setAccount] = useState<HostedAccount | null>(null);
+  const [accountEmail, setAccountEmail] = useState("");
+  const [accountBusy, setAccountBusy] = useState(false);
+  const [accountMessage, setAccountMessage] = useState("");
+  const [accountError, setAccountError] = useState("");
+  const [hostedVoices, setHostedVoices] = useState<HostedVoice[]>([]);
+  const [hostedQuery, setHostedQuery] = useState("");
+  const [hostedLoading, setHostedLoading] = useState(false);
+  const [hostedHasMore, setHostedHasMore] = useState(false);
+  const [hostedPage, setHostedPage] = useState(1);
+  const [hostedClones, setHostedClones] = useState<HostedClone[]>([]);
+  const [cloneName, setCloneName] = useState("");
+  const [clonePath, setClonePath] = useState("");
+  const [cloneConsent, setCloneConsent] = useState(false);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const previewAudio = useRef<HTMLAudioElement | null>(null);
   const rateTimer = useRef<number | null>(null);
   const latestState = useRef(state);
   const saveTail = useRef<Promise<void>>(Promise.resolve());
@@ -484,6 +509,56 @@ export default function App() {
   useEffect(() => {
     void getVersion().then(setAppVersion).catch(() => setAppVersion("unknown"));
   }, []);
+
+  const refreshHostedAccount = useCallback(async () => {
+    setAccountError("");
+    try {
+      if (!(await invoke<boolean>("desktop_is_signed_in"))) {
+        setAccount(null);
+        setAccountEmail("");
+        setAccountMessage("");
+        return;
+      }
+      const next = await invoke<HostedAccount>("desktop_account");
+      setAccount(next);
+      setAccountEmail(next.accountEmail ?? "");
+      setAccountMessage("");
+    } catch (cause) {
+      setAccount(null);
+      setAccountError(cause instanceof Error ? cause.message : String(cause));
+    }
+  }, []);
+
+  useEffect(() => { void refreshHostedAccount(); }, [refreshHostedAccount]);
+
+  useEffect(() => {
+    if (!account) return;
+    const refreshTimer = window.setInterval(() => void refreshHostedAccount(), 3 * 60 * 1000);
+    return () => window.clearInterval(refreshTimer);
+  }, [account, refreshHostedAccount]);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    void listen<Status>("kiegen:status", (event) => {
+      if ((event.payload.phase === "idle" || event.payload.phase === "error") && latestState.current?.settings.engine === "fish") {
+        void refreshHostedAccount();
+      }
+    }).then((off) => { unlisten = off; });
+    return () => unlisten?.();
+  }, [refreshHostedAccount]);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    void listen<{ success: boolean; message?: string }>("texthalo:desktop-auth", (event) => {
+      if (event.payload.success) {
+        setAccountMessage("You’re signed in.");
+        setAccountError("");
+        void refreshHostedAccount();
+      } else if (event.payload.message) setAccountError(event.payload.message);
+      setAccountBusy(false);
+    }).then((off) => { unlisten = off; });
+    return () => unlisten?.();
+  }, [refreshHostedAccount]);
 
   const refreshHistory = useCallback(async () => {
     setHistoryLoading(true);
@@ -632,6 +707,29 @@ export default function App() {
     },
     [refresh],
   );
+
+  const loadHostedVoices = useCallback(async (page = 1, query = hostedQuery) => {
+    setHostedLoading(true);
+    try {
+      const result = await invoke<{ items: HostedVoice[]; hasMore: boolean; modelId: string }>("desktop_voices", { query, page });
+      setHostedVoices((items) => page === 1 ? result.items : [...items, ...result.items]);
+      setHostedHasMore(result.hasMore);
+      setHostedPage(page);
+      if (result.modelId && latestState.current?.settings.fish.model_id !== result.modelId) {
+        const current = latestState.current!.settings;
+        void save({ fish: { ...current.fish, model_id: result.modelId } });
+      }
+      setAccountError("");
+    } catch (cause) {
+      setAccountError(cause instanceof Error ? cause.message : String(cause));
+    } finally { setHostedLoading(false); }
+  }, [hostedQuery, save]);
+
+  useEffect(() => {
+    if (tab === "voice" && state?.settings.engine === "fish" && account) void loadHostedVoices(1);
+    const canClone = (account?.plans.find((plan) => plan.id === account.subscription?.planId)?.cloneLimit ?? 0) > 0;
+    if ((tab === "account" || (tab === "voice" && state?.settings.engine === "fish")) && account && canClone) void invoke<{items: HostedClone[]}>("desktop_clones").then((v) => setHostedClones(v.items)).catch((cause) => setAccountError(cause instanceof Error ? cause.message : String(cause)));
+  }, [tab, state?.settings.engine, account, loadHostedVoices]);
 
   /* Voice + language derivation. */
   const voices = state?.voices ?? [];
@@ -848,6 +946,84 @@ export default function App() {
     }
   };
 
+  const beginDesktopSignIn = async () => {
+    setAccountBusy(true); setAccountError(""); setAccountMessage("");
+    try {
+      const url = await invoke<string>("begin_desktop_signin");
+      await openUrl(url);
+      setAccountMessage("Finish signing in in your browser. TextHalo will connect automatically when you return.");
+    } catch (cause) {
+      setAccountError(cause instanceof Error ? cause.message : String(cause));
+      setAccountBusy(false);
+    }
+  };
+
+  const signOut = async () => {
+    setAccountBusy(true); setAccountError("");
+    try {
+      await invoke("stop_speaking");
+      await invoke("desktop_sign_out");
+      setAccount(null); setAccountEmail(""); setHostedClones([]); setAccountMessage("You’re signed out.");
+    } catch (cause) { setAccountError(cause instanceof Error ? cause.message : String(cause)); }
+    finally { setAccountBusy(false); }
+  };
+
+  const previewHostedVoice = async (voiceId: string, sampleId?: string) => {
+    try {
+      previewAudio.current?.pause();
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
+      const bytes = await invoke<number[]>("desktop_voice_preview", { voiceId, sampleId });
+      const url = URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: "audio/mpeg" }));
+      setPreviewUrl(url);
+      const audio = new Audio(url);
+      previewAudio.current = audio;
+      await audio.play();
+    } catch (cause) { setAccountError(cause instanceof Error ? cause.message : String(cause)); }
+  };
+
+  const pickCloneAudio = async () => {
+    const picked = await open({ multiple: false, title: "Choose a voice recording", filters: [{ name: "Audio", extensions: ["wav", "mp3", "m4a", "ogg", "flac"] }] });
+    if (typeof picked === "string") setClonePath(picked);
+  };
+
+  const uploadClone = async () => {
+    if (!clonePath || !cloneName.trim() || !cloneConsent) return;
+    setAccountBusy(true); setAccountError(""); setAccountMessage("");
+    try {
+      await invoke("desktop_upload_clone", { path: clonePath, name: cloneName.trim(), consent: cloneConsent });
+      setClonePath(""); setCloneName(""); setCloneConsent(false);
+      const data = await invoke<{items: HostedClone[]}>("desktop_clones"); setHostedClones(data.items);
+      setAccountMessage("Voice submitted. Its status will update when training finishes.");
+    } catch (cause) { setAccountError(cause instanceof Error ? cause.message : String(cause)); }
+    finally { setAccountBusy(false); }
+  };
+
+  const deleteHostedClone = async (voiceId: string) => {
+    const clone = hostedClones.find((item) => item.id === voiceId);
+    if (!window.confirm(`Delete “${clone?.name ?? "this voice clone"}” from your Fish Audio account?`)) return;
+    setAccountError("");
+    try {
+      await invoke("desktop_delete_clone", { voiceId });
+      setHostedClones((items) => items.filter((item) => item.id !== voiceId));
+      if (latestState.current?.settings.fish.voice_id === voiceId) void save({ fish: { ...latestState.current.settings.fish, voice_id: "" } });
+    }
+    catch (cause) { setAccountError(cause instanceof Error ? cause.message : String(cause)); }
+  };
+
+  const openCheckout = async (planId: string) => {
+    setAccountBusy(true); setAccountError("");
+    try { const url = await invoke<string>("desktop_checkout", { planId }); await openUrl(url); }
+    catch (cause) { setAccountError(cause instanceof Error ? cause.message : String(cause)); }
+    finally { setAccountBusy(false); }
+  };
+
+  const buyTopup = async (packId: string) => {
+    setAccountBusy(true); setAccountError("");
+    try { const url = await invoke<string>("desktop_topup", { packId }); await openUrl(url); }
+    catch (cause) { setAccountError(cause instanceof Error ? cause.message : String(cause)); }
+    finally { setAccountBusy(false); }
+  };
+
   const statusLine =
     status.phase === "error"
       ? { kind: "error" as const, text: status.message ?? "failed" }
@@ -865,6 +1041,7 @@ export default function App() {
   const tabs: { id: Tab; title: string; icon: React.ReactNode }[] = [
     { id: "general", title: "General", icon: Icon.gear() },
     { id: "voice", title: "Voice", icon: Icon.speaker() },
+    { id: "account", title: "Account", icon: Icon.gear() },
     { id: "shortcuts", title: "Shortcuts", icon: Icon.command() },
     { id: "capture", title: "Capture", icon: Icon.textCursor() },
     { id: "history", title: "History", icon: Icon.history() },
@@ -927,7 +1104,7 @@ export default function App() {
             <h1 className="pane-title">General</h1>
             <p className="pane-subtitle">
               Select text anywhere, press <span className="mono">{settings.shortcuts.speak}</span>{" "}
-              and it is read aloud. Nothing is sent anywhere.
+              and it is read aloud. {settings.engine === "fish" ? "Selected text is sent to TextHalo and Fish Audio for hosted speech." : "Local engines process text on this Mac."}
             </p>
 
             <Card title="Permission" icon={Icon.textCursor()}>
@@ -1080,7 +1257,36 @@ export default function App() {
               ) : null}
             </Card>
 
-            {settings.engine === "apple" ? (
+            {settings.engine === "fish" ? (
+              <>
+                <Card title="Fish Audio hosted voices" icon={Icon.speaker()}>
+                  <div className="field">
+                    <span className="field-label">Find a voice</span>
+                    <div className="inline">
+                      <input value={hostedQuery} placeholder="Search voices" onChange={(event) => setHostedQuery(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void loadHostedVoices(1, hostedQuery); }} />
+                      <button className="plain" disabled={hostedLoading || !account} onClick={() => void loadHostedVoices(1, hostedQuery)}>{hostedLoading ? "Loading…" : "Search"}</button>
+                    </div>
+                    <span className="field-hint">Choose a voice, then use your Speak shortcut anywhere.</span>
+                  </div>
+                  {!account ? <Note kind="warning" icon={Icon.warn()}>Sign in from Account to browse and use hosted voices.</Note> : null}
+                  <div className="row-stack">
+                    {hostedVoices.map((voice) => {
+                      const selected = settings.fish.voice_id === voice.id;
+                      return <Row key={voice.id} selected={selected} glyph={selected ? Icon.checkCircle() : Icon.circle()} title={voice.name} subtitle={[voice.languageCodes?.join(", "), voice.description].filter(Boolean).join(" · ")} badge={selected ? "Selected" : undefined} onSelect={() => void save({ fish: { ...settings.fish, voice_id: voice.id } })} trailing={voice.previewAvailable ? <button className="icon" title={`Preview ${voice.name}`} onClick={(event) => { event.stopPropagation(); void previewHostedVoice(voice.id, voice.samples?.[0]?.id); }}>{Icon.play()}</button> : undefined} />;
+                    })}
+                  </div>
+                  {hostedClones.length > 0 ? <div className="field"><span className="field-label">My hosted clones</span><div className="row-stack">{hostedClones.map((clone) => { const selected = settings.fish.voice_id === clone.id; return <Row key={clone.id} selected={selected} glyph={selected ? Icon.checkCircle() : Icon.circle()} title={clone.name} subtitle={`Clone · ${clone.status}`} badge={selected ? "Selected" : undefined} onSelect={() => void save({ fish: { ...settings.fish, voice_id: clone.id } })} />; })}</div></div> : null}
+                  {hostedVoices.length === 0 && account && !hostedLoading ? <span className="card-note">No voices loaded. Search or refresh to browse.</span> : null}
+                  {hostedHasMore ? <button className="plain" disabled={hostedLoading} onClick={() => void loadHostedVoices(hostedPage + 1)}>{hostedLoading ? "Loading…" : "Load more voices"}</button> : null}
+                  <label className="toggle-row"><input type="checkbox" checked={settings.fish.enhance_text} onChange={(event) => void save({ fish: { ...settings.fish, enhance_text: event.target.checked } })} /><span>Enhance text with semantic delivery cues</span></label>
+                  <div className="card-note">When enabled, TextHalo analyzes selected text and adds supported delivery cues before sending it to Fish Audio. You can turn this off anytime.</div>
+                </Card>
+                <Card title="Privacy for hosted speech" icon={Icon.info()}>
+                  <p className="card-note">When you use Fish Audio, the selected text is sent to TextHalo’s backend and then to Fish Audio to generate speech. With enhancement enabled, the backend’s semantic cue service also analyzes the selected text. Audio is streamed back to this app. Local Apple, Kokoro, and Chatterbox engines keep processing on your Mac.</p>
+                  <label className="toggle-row"><input type="checkbox" checked={settings.fish.privacy_accepted} onChange={(event) => void save({ fish: { ...settings.fish, privacy_accepted: event.target.checked } })} /><span>I understand how hosted speech processes selected text.</span></label>
+                </Card>
+              </>
+            ) : settings.engine === "apple" ? (
               <Card title="Spoken voice" icon={Icon.speaker()}>
               <div className="field">
                 <span className="field-label">Language</span>
@@ -1468,6 +1674,50 @@ export default function App() {
                 </label>
               </Card>
             ) : null}
+          </div>
+        ) : null}
+
+        {tab === "account" ? (
+          <div className="pane-inner">
+            <h1 className="pane-title">Account</h1>
+            <p className="pane-subtitle">Sign in to sync hosted speech with your TextHalo account.</p>
+            {accountError ? <Note kind="error" icon={Icon.xCircle()}>{accountError}</Note> : null}
+            {accountMessage ? <Note kind="secondary" icon={Icon.checkCircle()}>{accountMessage}</Note> : null}
+            {account ? (
+              <>
+                <Card title="Signed in" icon={Icon.checkCircle()}>
+                  <div className="inline"><strong>{accountEmail || "TextHalo account"}</strong><button className="plain" disabled={accountBusy} onClick={() => void refreshHostedAccount()}>Refresh</button><button className="plain" disabled={accountBusy} onClick={() => void signOut()}>Sign out</button></div>
+                </Card>
+                <Card title="Credits and plan" icon={Icon.gauge()}>
+                  <div className="row-stack">
+                    <Row selected={false} glyph={Icon.checkCircle()} title={`${account.availableCredits.toLocaleString()} credits available`} subtitle={account.subscription ? `${account.subscription.planId} · ${account.subscription.status}${account.subscription.cancelAtPeriodEnd ? " · cancels at period end" : ""}` : "Free plan"} onSelect={() => {}} />
+                    <Row selected={false} glyph={Icon.circle()} title={`${account.creditBreakdown.planCredits.toLocaleString()} plan credits`} subtitle="Monthly subscription balance" onSelect={() => {}} />
+                    <Row selected={false} glyph={Icon.circle()} title={`${account.creditBreakdown.topupCredits.toLocaleString()} top-up credits`} subtitle="Purchased credit packs" onSelect={() => {}} />
+                    {account.creditBreakdown.otherCredits ? <Row selected={false} glyph={Icon.circle()} title={`${account.creditBreakdown.otherCredits.toLocaleString()} other credits`} onSelect={() => {}} /> : null}
+                  </div>
+                  {account.subscription?.currentPeriodEnd ? <div className="card-note">Current period ends {new Date(account.subscription.currentPeriodEnd).toLocaleDateString()}.</div> : null}
+                  <div className="inline"><button className="plain" onClick={() => void openUrl(`${websiteUrl}/pricing/`)}>Explore plans</button><button className="plain" onClick={() => void openUrl(`${websiteUrl}/account/billing/`)}>Billing portal</button></div>
+                  {account.plans.map((plan) => <div className="inline" key={plan.id}><span className="card-note">{plan.id === "plus" ? "Plus" : plan.id === "creator" ? "Creator" : plan.id}: {plan.creditsPerPeriod.toLocaleString()} credits per period · {plan.cloneLimit} saved clones</span><button className="plain" disabled={accountBusy} onClick={() => void openCheckout(plan.id)}>Choose plan</button></div>)}
+                </Card>
+                <Card title="One-time credit packs" icon={Icon.gauge()}>
+                  <div className="card-note">Top-up credits are separate from monthly plan credits. They remain available according to the credit pack terms.</div>
+                  <div className="inline"><button className="plain" disabled={accountBusy} onClick={() => void buyTopup("topup-5")}>$5 · 30,000 credits</button><button className="plain" disabled={accountBusy} onClick={() => void buyTopup("topup-10")}>$10 · 60,000 credits</button><button className="plain" disabled={accountBusy} onClick={() => void buyTopup("topup-20")}>$20 · 120,000 credits</button></div>
+                </Card>
+                {(account.plans.find((plan) => plan.id === account.subscription?.planId)?.cloneLimit ?? 0) > 0 ? <Card title="Your hosted voice clones" icon={Icon.speaker()}>
+                  <div className="row-stack">{hostedClones.map((clone) => <Row key={clone.id} selected={false} glyph={Icon.speaker()} title={clone.name} subtitle={`Status: ${clone.status}`} onSelect={() => {}} trailing={<button className="plain" onClick={() => void deleteHostedClone(clone.id)}>Delete</button>} />)}</div>
+                  <div className="field"><span className="field-label">Create a Fish Audio clone</span><div className="inline"><input value={cloneName} placeholder="Voice name" maxLength={100} onChange={(event) => setCloneName(event.target.value)} /><button className="plain" onClick={() => void pickCloneAudio()}>{clonePath ? "Choose another file" : "Choose audio…"}</button><span className="field-hint">{clonePath.split(/[\\/]/).pop()}</span></div></div>
+                  <label className="toggle-row"><input type="checkbox" checked={cloneConsent} onChange={(event) => setCloneConsent(event.target.checked)} /><span>I own this voice or have permission to clone it. I understand this recording is uploaded to Fish Audio and saved to my account.</span></label>
+                  <button className="plain" disabled={accountBusy || !cloneName.trim() || !clonePath || !cloneConsent} onClick={() => void uploadClone()}>{accountBusy ? "Working…" : "Upload and create clone"}</button>
+                  <div className="card-note">Your plan includes up to {account.plans.find((plan) => plan.id === account.subscription?.planId)?.cloneLimit ?? 0} saved clones when cloning is enabled by the service.</div>
+                </Card> : null}
+              </>
+            ) : (
+              <Card title="Sign in to TextHalo" icon={Icon.gear()}>
+                <p className="card-note">Your browser handles password, Google sign-in, account creation, and verification. TextHalo returns to the app after a secure one-time handoff.</p>
+                <button className="plain" disabled={accountBusy} onClick={() => void beginDesktopSignIn()}>{accountBusy ? "Waiting for browser sign-in…" : "Continue with TextHalo"}</button>
+                <div className="inline"><button className="text" onClick={() => void openUrl(`${websiteUrl}/sign-in/?mode=sign-up`)}>Create an account</button><button className="text" onClick={() => void openUrl(`${websiteUrl}/sign-in/?mode=forgot-password`)}>Forgot password?</button></div>
+              </Card>
+            )}
           </div>
         ) : null}
 
