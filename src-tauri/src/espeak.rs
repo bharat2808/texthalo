@@ -4,8 +4,10 @@
 //! Brazilian Portuguese. Upstream routes those five through espeak-ng, and nothing else
 //! exists (`hexgrad/kokoro`'s `pipeline.py` falls through to
 //! `espeak.EspeakG2P(language=LANG_CODES[lang_code])` for every language that is not English,
-//! Japanese or Mandarin). espeak-ng is GPL-3.0, so it can never be bundled, linked or
-//! vendored into this app.
+//! Japanese or Mandarin). espeak-ng is GPL-3.0, so it is kept out of the app bundle and is
+//! always run as a separate program. On macOS, a user can ask the app to download a pinned,
+//! checksum-verified Homebrew bottle into Application Support; its licence and source notice
+//! remain alongside it.
 //!
 //! What this module does instead is **use** an install the user made: one subprocess per
 //! text chunk, text in, IPA on stdout, then the same post-processing misaki applies on top.
@@ -29,6 +31,7 @@
 //!    phonemizing, and back afterwards, so parentheses travel through the punctuation
 //!    machinery above instead of being read as espeak clause markers.
 
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -126,6 +129,18 @@ impl EspeakNg {
             .arg(chunk);
         if let Some(data) = &self.data {
             command.env("ESPEAK_DATA_PATH", data);
+        }
+        if let Some(lib) = self
+            .binary
+            .parent()
+            .and_then(Path::parent)
+            .map(|root| root.join("lib"))
+        {
+            if lib.join("libespeak-ng.1.dylib").is_file()
+                && lib.join("libpcaudio.0.dylib").is_file()
+            {
+                command.env("DYLD_LIBRARY_PATH", lib);
+            }
         }
 
         let output = command
@@ -483,24 +498,230 @@ fn homebrew() -> Option<PathBuf> {
 /// Where someone without a package manager is sent to read about installing espeak-ng.
 const ESPEAK_UPSTREAM: &str = "https://github.com/espeak-ng/espeak-ng#installation";
 
-/// Install espeak-ng by asking the user's own package manager to do it.
+#[derive(Clone, Copy)]
+struct Bottle {
+    repository: &'static str,
+    digest: &'static str,
+    version: &'static str,
+}
+
+const ESPEAK_VERSION: &str = "1.52.0";
+const PCAUDIO_VERSION: &str = "1.3";
+
+fn managed_bottles(arch: &str, macos_major: u32) -> Option<(Bottle, Bottle)> {
+    let (espeak, pcaudio) = match (arch, macos_major) {
+        ("aarch64" | "arm64", 26..) => (
+            "6e937d9aa97fead6b24f70f09e48a6f769db48efa4d9fd7a52b2b7a7ccd2b6f4",
+            "797c5e0ec4adb982e3efbcb3ff386d0ad3bbe212e731ce88375002cc6d0cf72d",
+        ),
+        ("aarch64" | "arm64", 15) => (
+            "330873deca13228ec98927f86fb4e18e990e8707f888aaf665b6e12a55efaf47",
+            "9581956c3f6ac62ed80312bad32f93be3bda767e7fb6ce251c600971371bbdd8",
+        ),
+        ("aarch64" | "arm64", 14) => (
+            "1e23d2b57e90a15d4a15f413bb81af1af843a27083b753d8d76a70d9a40c666c",
+            "bd84f4e1511c570a34e372cf8f4532e92e9eaea2089e0a93d387f191d5c36845",
+        ),
+        ("aarch64" | "arm64", 13) => (
+            "99c2519104e4462e0e6a6727494c64b5892e60d75ac4c69e49a65c7aa02428de",
+            "3d8b34973b1a08cf739c4b7ce2c6a5b80dbfb3856d5777c5f26d4b9011b62bff",
+        ),
+        ("x86_64", 14..) => (
+            "aa796417d69f834ad2373129c6e30e06e97e6857c45ea8a483eda49815aee65e",
+            "48118ebffee0146173486843027d4b5a07c8dd0c7be2a17a8fac5de80aebf6f8",
+        ),
+        ("x86_64", 13) => (
+            "f125b94acc7e862d31c649810ecaea2636c5bbd67b0fe52f37a05ddb799f62c5",
+            "cc9fdf752114a5959fd6906ecd9b2bf182eea8eae5a43769ba6434e3679d6d2d",
+        ),
+        _ => return None,
+    };
+    Some((
+        Bottle {
+            repository: "espeak-ng",
+            digest: espeak,
+            version: ESPEAK_VERSION,
+        },
+        Bottle {
+            repository: "pcaudiolib",
+            digest: pcaudio,
+            version: PCAUDIO_VERSION,
+        },
+    ))
+}
+
+fn macos_major_version() -> Option<u32> {
+    let output = Command::new("/usr/bin/sw_vers")
+        .arg("-productVersion")
+        .output()
+        .ok()?;
+    output.status.success().then_some(())?;
+    String::from_utf8(output.stdout)
+        .ok()?
+        .trim()
+        .split('.')
+        .next()?
+        .parse()
+        .ok()
+}
+
+fn download_bottle(bottle: Bottle, destination: &Path) -> Result<(), String> {
+    let token_output = Command::new("/usr/bin/curl")
+        .args([
+            "-fsSL",
+            &format!(
+                "https://ghcr.io/token?scope=repository:homebrew/core/{}:pull&service=ghcr.io",
+                bottle.repository
+            ),
+        ])
+        .output()
+        .map_err(|e| format!("could not request the Homebrew download token: {e}"))?;
+    if !token_output.status.success() {
+        return Err("Homebrew's download registry did not issue a token".into());
+    }
+    let payload: serde_json::Value = serde_json::from_slice(&token_output.stdout)
+        .map_err(|_| "Homebrew's download registry returned an invalid token")?;
+    let token = payload
+        .get("token")
+        .and_then(serde_json::Value::as_str)
+        .ok_or("Homebrew's download registry returned no token")?;
+    let partial = destination.with_extension("part");
+    let status = Command::new("/usr/bin/curl")
+        .args([
+            "-fsSL",
+            "--retry",
+            "3",
+            "-H",
+            &format!("Authorization: Bearer {token}"),
+            &format!(
+                "https://ghcr.io/v2/homebrew/core/{}/blobs/sha256:{}",
+                bottle.repository, bottle.digest
+            ),
+            "-o",
+        ])
+        .arg(&partial)
+        .status()
+        .map_err(|e| format!("could not download {}: {e}", bottle.repository))?;
+    if !status.success() {
+        let _ = fs::remove_file(&partial);
+        return Err(format!("could not download {}", bottle.repository));
+    }
+    let actual = crate::download::sha256_of_file(&partial)?;
+    if actual != bottle.digest {
+        let _ = fs::remove_file(&partial);
+        return Err(format!(
+            "{} failed its SHA-256 verification",
+            bottle.repository
+        ));
+    }
+    fs::rename(&partial, destination)
+        .map_err(|e| format!("could not finish the {} download: {e}", bottle.repository))
+}
+
+fn extract(archive: &Path, destination: &Path) -> Result<(), String> {
+    fs::create_dir_all(destination).map_err(|e| e.to_string())?;
+    let status = Command::new("/usr/bin/tar")
+        .args(["-xzf"])
+        .arg(archive)
+        .arg("-C")
+        .arg(destination)
+        .status()
+        .map_err(|e| format!("could not extract the runtime: {e}"))?;
+    status
+        .success()
+        .then_some(())
+        .ok_or_else(|| "could not extract the runtime".to_string())
+}
+
+fn install_managed_into(runtime_parent: &Path, arch: &str, major: u32) -> Result<String, String> {
+    let (espeak_bottle, pcaudio_bottle) = managed_bottles(arch, major).ok_or_else(|| {
+        format!(
+            "automatic installation is not available for macOS {major} on {}",
+            arch
+        )
+    })?;
+    fs::create_dir_all(runtime_parent).map_err(|e| e.to_string())?;
+    let staging = runtime_parent.join(format!(".espeak-ng-{}", uuid::Uuid::new_v4()));
+    fs::create_dir_all(&staging).map_err(|e| e.to_string())?;
+    let result = (|| {
+        let espeak_archive = staging.join("espeak-ng.tar.gz");
+        let pcaudio_archive = staging.join("pcaudiolib.tar.gz");
+        download_bottle(espeak_bottle, &espeak_archive)?;
+        download_bottle(pcaudio_bottle, &pcaudio_archive)?;
+        let espeak_unpack = staging.join("espeak-unpacked");
+        let pcaudio_unpack = staging.join("pcaudio-unpacked");
+        extract(&espeak_archive, &espeak_unpack)?;
+        extract(&pcaudio_archive, &pcaudio_unpack)?;
+        let prepared = espeak_unpack.join("espeak-ng").join(espeak_bottle.version);
+        let pcaudio = pcaudio_unpack
+            .join("pcaudiolib")
+            .join(pcaudio_bottle.version);
+        fs::copy(
+            pcaudio.join("lib/libpcaudio.0.dylib"),
+            prepared.join("lib/libpcaudio.0.dylib"),
+        )
+        .map_err(|e| format!("could not prepare pcaudiolib: {e}"))?;
+        if pcaudio.join("COPYING").is_file() {
+            fs::copy(pcaudio.join("COPYING"), prepared.join("COPYING.pcaudiolib"))
+                .map_err(|e| e.to_string())?;
+        }
+        fs::write(
+            prepared.join("SOURCES.txt"),
+            concat!(
+                "eSpeak NG 1.52.0: https://github.com/espeak-ng/espeak-ng/tree/1.52.0\n",
+                "pcaudiolib 1.3: https://github.com/espeak-ng/pcaudiolib/tree/1.3\n",
+                "Binaries are unmodified Homebrew bottles downloaded from ghcr.io.\n",
+            ),
+        )
+        .map_err(|e| e.to_string())?;
+        let binary = prepared.join("bin/espeak-ng");
+        let validation = Command::new(&binary)
+            .args(["-q", "--ipa", "-v", "en-us", "TextHalo"])
+            .env("ESPEAK_DATA_PATH", prepared.join("share/espeak-ng-data"))
+            .env("DYLD_LIBRARY_PATH", prepared.join("lib"))
+            .output()
+            .map_err(|e| format!("could not validate eSpeak NG: {e}"))?;
+        if !validation.status.success() {
+            return Err("the downloaded eSpeak NG runtime did not start".into());
+        }
+        let destination = runtime_parent.join("espeak-ng");
+        let backup = runtime_parent.join(".espeak-ng-previous");
+        let _ = fs::remove_dir_all(&backup);
+        if destination.exists() {
+            fs::rename(&destination, &backup).map_err(|e| e.to_string())?;
+        }
+        if let Err(error) = fs::rename(&prepared, &destination) {
+            if backup.exists() {
+                let _ = fs::rename(&backup, &destination);
+            }
+            return Err(format!("could not activate eSpeak NG: {error}"));
+        }
+        let _ = fs::remove_dir_all(&backup);
+        Ok(format!(
+            "Installed — ready at {}",
+            destination.join("bin/espeak-ng").display()
+        ))
+    })();
+    let _ = fs::remove_dir_all(&staging);
+    result
+}
+
+fn install_managed() -> Result<String, String> {
+    let major = macos_major_version().ok_or("could not determine this Mac's version")?;
+    let support = crate::engine_paths::app_support_dir()
+        .ok_or("could not locate TextHalo's application support directory")?;
+    install_managed_into(&support.join("runtime"), std::env::consts::ARCH, major)
+}
+
+/// Install espeak-ng with Homebrew when available, otherwise into Application Support.
 ///
-/// This is the only action in kiegen that results in GPL-3.0 software arriving on the
-/// machine, and it is deliberately the *user's* action: the app runs their package manager,
-/// which fetches from upstream and accepts the licence under their own settings. Nothing is
-/// downloaded into the app's directory, and nothing is copied afterwards — kiegen only ever
-/// execs the install that is already there, which is what keeps it a user of espeak-ng
-/// rather than a distributor of it.
-///
-/// With no package manager it opens upstream's page instead of fetching a copy itself, for
-/// exactly that reason: fetching one would make this app the distributor.
+/// This happens only after an explicit click. The managed path downloads checksum-pinned,
+/// unmodified Homebrew bottles and retains their licence files and source notice. In both
+/// cases kiegen communicates with espeak-ng only through a subprocess.
 pub fn install() -> Result<String, String> {
     let Some(brew) = homebrew() else {
-        std::process::Command::new("/usr/bin/open")
-            .arg(ESPEAK_UPSTREAM)
-            .status()
-            .map_err(|e| format!("could not open a browser: {e}"))?;
-        return Ok("Opened espeak-ng's install instructions".to_string());
+        return install_managed()
+            .map_err(|error| format!("{error}. Manual instructions: {ESPEAK_UPSTREAM}"));
     };
 
     let output = std::process::Command::new(&brew)
@@ -531,6 +752,45 @@ pub fn install() -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn managed_bottles_cover_supported_macs() {
+        let (espeak, pcaudio) = super::managed_bottles("aarch64", 26).unwrap();
+        assert_eq!(espeak.version, "1.52.0");
+        assert_eq!(
+            espeak.digest,
+            "6e937d9aa97fead6b24f70f09e48a6f769db48efa4d9fd7a52b2b7a7ccd2b6f4"
+        );
+        assert_eq!(pcaudio.version, "1.3");
+
+        assert!(super::managed_bottles("arm64", 15).is_some());
+        assert!(super::managed_bottles("x86_64", 15).is_some());
+        assert!(super::managed_bottles("aarch64", 12).is_none());
+        assert!(super::managed_bottles("riscv64", 26).is_none());
+    }
+
+    #[test]
+    #[ignore = "downloads official Homebrew bottles"]
+    fn managed_install_downloads_and_runs_in_isolation() {
+        let root = std::env::temp_dir().join(format!(
+            "kiegen-espeak-install-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let major = super::macos_major_version().unwrap();
+        let result = super::install_managed_into(&root, std::env::consts::ARCH, major).unwrap();
+        assert!(result.starts_with("Installed — ready at "));
+
+        let runtime = root.join("espeak-ng");
+        let output = std::process::Command::new(runtime.join("bin/espeak-ng"))
+            .args(["-q", "--ipa", "--tie=^", "-v", "es", "hola"])
+            .env("ESPEAK_DATA_PATH", runtime.join("share/espeak-ng-data"))
+            .env("DYLD_LIBRARY_PATH", runtime.join("lib"))
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert!(!output.stdout.is_empty());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn failed_optional_cli_preserves_unknown_word_spelling() {
         let cli = super::EspeakNg {

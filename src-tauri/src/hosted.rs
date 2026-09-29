@@ -1,13 +1,20 @@
 //! Authenticated TextHalo API client used by the hosted Fish Audio engine.
-use futures_util::{SinkExt, StreamExt};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-use sha2::{Digest, Sha256};
+use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::{net::SocketAddr, sync::{Arc, Mutex, OnceLock}, time::Duration};
+use sha2::{Digest, Sha256};
+use std::{
+    net::SocketAddr,
+    sync::{Arc, Mutex, OnceLock},
+    time::Duration,
+};
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_secure_storage::{OptionsRequest, SecureStorageExt};
-use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::TcpListener};
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::TcpListener,
+};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
 const CREDENTIALS_KEY: &str = "desktop-credentials-v1";
@@ -55,11 +62,18 @@ pub fn initialize_secure_storage(app: &AppHandle) {
 }
 
 fn secure_storage_app() -> Result<&'static AppHandle, String> {
-    APP_HANDLE.get().ok_or_else(|| "Secure sign-in storage is not ready. Restart TextHalo and try again.".to_string())
+    APP_HANDLE.get().ok_or_else(|| {
+        "Secure sign-in storage is not ready. Restart TextHalo and try again.".to_string()
+    })
 }
 
 fn storage_request(data: Option<String>) -> OptionsRequest {
-    OptionsRequest { prefixed_key: Some(CREDENTIALS_KEY.into()), data, sync: Some(true), keychain_access: None }
+    OptionsRequest {
+        prefixed_key: Some(CREDENTIALS_KEY.into()),
+        data,
+        sync: Some(true),
+        keychain_access: None,
+    }
 }
 
 pub fn is_signed_in() -> bool {
@@ -67,16 +81,29 @@ pub fn is_signed_in() -> bool {
 }
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct DesktopCredentials { access_token: String, refresh_token: String, expires_at: u64 }
+struct DesktopCredentials {
+    access_token: String,
+    refresh_token: String,
+    expires_at: u64,
+}
 fn read_credentials() -> Result<DesktopCredentials, String> {
     let cache = CREDENTIAL_CACHE.get_or_init(|| Mutex::new(None));
-    let mut cached = cache.lock().map_err(|_| "Could not access the saved TextHalo sign-in.".to_string())?;
-    if let Some(credentials) = cached.as_ref() { return Ok(credentials.clone()); }
+    let mut cached = cache
+        .lock()
+        .map_err(|_| "Could not access the saved TextHalo sign-in.".to_string())?;
+    if let Some(credentials) = cached.as_ref() {
+        return Ok(credentials.clone());
+    }
     let app = secure_storage_app()?;
-    let stored = app.secure_storage().get_item(app.clone(), storage_request(None))
-        .map_err(|_| "Could not read secure sign-in storage.".to_string())?.data;
+    let stored = app
+        .secure_storage()
+        .get_item(app.clone(), storage_request(None))
+        .map_err(|_| "Could not read secure sign-in storage.".to_string())?
+        .data;
     let raw = stored.ok_or_else(|| "Sign in to use Fish Audio voices.".to_string())?;
-    let credentials: DesktopCredentials = serde_json::from_str(&raw).map_err(|_| "Your desktop sign-in needs renewal. Sign in again from the Account screen.".to_string())?;
+    let credentials: DesktopCredentials = serde_json::from_str(&raw).map_err(|_| {
+        "Your desktop sign-in needs renewal. Sign in again from the Account screen.".to_string()
+    })?;
     *cached = Some(credentials.clone());
     Ok(credentials)
 }
@@ -86,36 +113,75 @@ pub fn desktop_is_signed_in(app: AppHandle) -> bool {
     is_signed_in()
 }
 fn write_credentials(credentials: &DesktopCredentials) -> Result<(), String> {
-    let serialized = serde_json::to_string(credentials).map_err(|_| "Could not prepare your secure sign-in.".to_string())?;
+    let serialized = serde_json::to_string(credentials)
+        .map_err(|_| "Could not prepare your secure sign-in.".to_string())?;
     let app = secure_storage_app()?;
-    app.secure_storage().set_item(app.clone(), storage_request(Some(serialized)))
+    app.secure_storage()
+        .set_item(app.clone(), storage_request(Some(serialized)))
         .map_err(|_| "Could not securely save your sign-in.".to_string())?;
-    *CREDENTIAL_CACHE.get_or_init(|| Mutex::new(None)).lock().map_err(|_| "Could not access the saved TextHalo sign-in.".to_string())? = Some(credentials.clone());
+    *CREDENTIAL_CACHE
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .map_err(|_| "Could not access the saved TextHalo sign-in.".to_string())? =
+        Some(credentials.clone());
     Ok(())
 }
 async fn access_token(force_refresh: bool) -> Result<String, String> {
     let _guard = TOKEN_LOCK.lock().await;
     let mut credentials = read_credentials()?;
     if force_refresh || credentials.expires_at <= unix_now().saturating_add(45) {
-        let response = reqwest::Client::new().post(format!("{}/v1/desktop/sessions/refresh", origin()?))
-            .json(&json!({"refreshToken": credentials.refresh_token})).send().await
-            .map_err(|_| "Could not refresh your TextHalo sign-in. Check your internet connection.".to_string())?;
-        if !response.status().is_success() { let _ = clear_token(); return Err("Your sign-in expired. Sign in again to continue.".into()); }
-        let refreshed: Value = response.json().await.map_err(|_| "The sign-in service returned an invalid session.".to_string())?;
-        credentials.access_token = refreshed.get("accessToken").and_then(Value::as_str).ok_or("The sign-in service returned an invalid session.")?.to_string();
-        credentials.refresh_token = refreshed.get("refreshToken").and_then(Value::as_str).ok_or("The sign-in service returned an invalid session.")?.to_string();
-        credentials.expires_at = unix_now().saturating_add(refreshed.get("expiresIn").and_then(Value::as_u64).unwrap_or(300));
+        let response = reqwest::Client::new()
+            .post(format!("{}/v1/desktop/sessions/refresh", origin()?))
+            .json(&json!({"refreshToken": credentials.refresh_token}))
+            .send()
+            .await
+            .map_err(|_| {
+                "Could not refresh your TextHalo sign-in. Check your internet connection."
+                    .to_string()
+            })?;
+        if !response.status().is_success() {
+            let _ = clear_token();
+            return Err("Your sign-in expired. Sign in again to continue.".into());
+        }
+        let refreshed: Value = response
+            .json()
+            .await
+            .map_err(|_| "The sign-in service returned an invalid session.".to_string())?;
+        credentials.access_token = refreshed
+            .get("accessToken")
+            .and_then(Value::as_str)
+            .ok_or("The sign-in service returned an invalid session.")?
+            .to_string();
+        credentials.refresh_token = refreshed
+            .get("refreshToken")
+            .and_then(Value::as_str)
+            .ok_or("The sign-in service returned an invalid session.")?
+            .to_string();
+        credentials.expires_at = unix_now().saturating_add(
+            refreshed
+                .get("expiresIn")
+                .and_then(Value::as_u64)
+                .unwrap_or(300),
+        );
         write_credentials(&credentials)?;
     }
     Ok(credentials.access_token)
 }
-fn unix_now() -> u64 { std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs() }
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
 pub fn clear_token() -> Result<(), String> {
     let app = secure_storage_app()?;
-    app.secure_storage().remove_item(app.clone(), storage_request(None))
+    app.secure_storage()
+        .remove_item(app.clone(), storage_request(None))
         .map_err(|_| "Could not remove the saved sign-in from secure storage.".to_string())?;
     if let Some(cache) = CREDENTIAL_CACHE.get() {
-        *cache.lock().map_err(|_| "Could not access the saved TextHalo sign-in.".to_string())? = None;
+        *cache
+            .lock()
+            .map_err(|_| "Could not access the saved TextHalo sign-in.".to_string())? = None;
     }
     Ok(())
 }
@@ -173,8 +239,12 @@ async fn json_request(
 pub async fn begin_desktop_signin(app: AppHandle) -> Result<String, String> {
     initialize_secure_storage(&app);
     cancel_desktop_signin_inner();
-    let listener = TcpListener::bind("127.0.0.1:0").await.map_err(|_| "Could not start secure app sign-in. Please try again.".to_string())?;
-    let address = listener.local_addr().map_err(|_| "Could not start secure app sign-in.".to_string())?;
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .map_err(|_| "Could not start secure app sign-in. Please try again.".to_string())?;
+    let address = listener
+        .local_addr()
+        .map_err(|_| "Could not start secure app sign-in.".to_string())?;
     let redirect_uri = format!("http://127.0.0.1:{}/desktop-auth-callback", address.port());
     let mut state_bytes = Vec::with_capacity(32);
     state_bytes.extend_from_slice(uuid::Uuid::new_v4().as_bytes());
@@ -185,16 +255,26 @@ pub async fn begin_desktop_signin(app: AppHandle) -> Result<String, String> {
     verifier_bytes.extend_from_slice(uuid::Uuid::new_v4().as_bytes());
     let verifier = URL_SAFE_NO_PAD.encode(verifier_bytes);
     let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
-    let mut web = url::Url::parse(option_env!("TEXTHALO_WEBSITE_BASE_URL").unwrap_or("https://texthalo.app"))
-        .map_err(|_| "The TextHalo website URL is invalid in this app build.".to_string())?;
-    if web.scheme() != "https" && !(cfg!(debug_assertions) && web.scheme() == "http" && matches!(web.host_str(), Some("localhost" | "127.0.0.1"))) {
+    let mut web =
+        url::Url::parse(option_env!("TEXTHALO_WEBSITE_BASE_URL").unwrap_or("https://texthalo.app"))
+            .map_err(|_| "The TextHalo website URL is invalid in this app build.".to_string())?;
+    if web.scheme() != "https"
+        && !(cfg!(debug_assertions)
+            && web.scheme() == "http"
+            && matches!(web.host_str(), Some("localhost" | "127.0.0.1")))
+    {
         return Err("The TextHalo sign-in website must use HTTPS.".into());
     }
     web.set_path("/desktop-connect/");
-    web.query_pairs_mut().append_pair("redirect_uri", &redirect_uri).append_pair("state", &state).append_pair("code_challenge", &challenge);
+    web.query_pairs_mut()
+        .append_pair("redirect_uri", &redirect_uri)
+        .append_pair("state", &state)
+        .append_pair("code_challenge", &challenge);
     let url = web.to_string();
     let (cancel, cancelled) = tokio::sync::oneshot::channel();
-    *SIGNIN_CANCEL.lock().map_err(|_| "Could not start secure app sign-in.".to_string())? = Some(cancel);
+    *SIGNIN_CANCEL
+        .lock()
+        .map_err(|_| "Could not start secure app sign-in.".to_string())? = Some(cancel);
     tauri::async_runtime::spawn(async move {
         let result = tokio::select! {
             _ = cancelled => Err("Sign-in cancelled.".to_string()),
@@ -202,7 +282,9 @@ pub async fn begin_desktop_signin(app: AppHandle) -> Result<String, String> {
                 match result { Ok(result) => result, Err(_) => Err("Sign-in timed out. Start again from TextHalo.".to_string()) }
             }
         };
-        if let Ok(mut pending) = SIGNIN_CANCEL.lock() { *pending = None; }
+        if let Ok(mut pending) = SIGNIN_CANCEL.lock() {
+            *pending = None;
+        }
         let payload = match result {
             Ok(()) => json!({"success": true}),
             Err(message) => json!({"success": false, "message": message}),
@@ -214,7 +296,9 @@ pub async fn begin_desktop_signin(app: AppHandle) -> Result<String, String> {
 
 fn cancel_desktop_signin_inner() {
     if let Ok(mut pending) = SIGNIN_CANCEL.lock() {
-        if let Some(cancel) = pending.take() { let _ = cancel.send(()); }
+        if let Some(cancel) = pending.take() {
+            let _ = cancel.send(());
+        }
     }
 }
 
@@ -223,48 +307,125 @@ pub fn cancel_desktop_signin() {
     cancel_desktop_signin_inner();
 }
 
-async fn accept_desktop_callback(listener: TcpListener, expected_addr: SocketAddr, redirect_uri: String, expected_state: String, verifier: String) -> Result<(), String> {
-    let (mut socket, peer) = listener.accept().await.map_err(|_| "Could not receive the sign-in return.".to_string())?;
-    if !peer.ip().is_loopback() { return Err("Rejected an invalid local sign-in callback.".into()); }
+async fn accept_desktop_callback(
+    listener: TcpListener,
+    expected_addr: SocketAddr,
+    redirect_uri: String,
+    expected_state: String,
+    verifier: String,
+) -> Result<(), String> {
+    let (mut socket, peer) = listener
+        .accept()
+        .await
+        .map_err(|_| "Could not receive the sign-in return.".to_string())?;
+    if !peer.ip().is_loopback() {
+        return Err("Rejected an invalid local sign-in callback.".into());
+    }
     let mut request = vec![0u8; 8192];
-    let size = socket.read(&mut request).await.map_err(|_| "Could not read the sign-in return.".to_string())?;
-    let first_line = std::str::from_utf8(&request[..size]).ok().and_then(|s| s.lines().next()).ok_or("Invalid sign-in callback.")?;
+    let size = socket
+        .read(&mut request)
+        .await
+        .map_err(|_| "Could not read the sign-in return.".to_string())?;
+    let first_line = std::str::from_utf8(&request[..size])
+        .ok()
+        .and_then(|s| s.lines().next())
+        .ok_or("Invalid sign-in callback.")?;
     let mut parts = first_line.split_whitespace();
-    if parts.next() != Some("GET") { return Err("Invalid sign-in callback method.".into()); }
+    if parts.next() != Some("GET") {
+        return Err("Invalid sign-in callback method.".into());
+    }
     let target = parts.next().ok_or("Invalid sign-in callback URL.")?;
-    let callback = url::Url::parse(&format!("http://127.0.0.1:{}{}", expected_addr.port(), target)).map_err(|_| "Invalid sign-in callback URL.")?;
-    if callback.path() != "/desktop-auth-callback" { return Err("Invalid sign-in callback path.".into()); }
-    let code = callback.query_pairs().find(|(key, _)| key == "code").map(|(_, value)| value.into_owned()).ok_or("The sign-in callback did not contain a code.")?;
-    let state = callback.query_pairs().find(|(key, _)| key == "state").map(|(_, value)| value.into_owned()).ok_or("The sign-in callback did not contain state.")?;
-    if state != expected_state { return Err("Sign-in state did not match. Start again from TextHalo.".into()); }
+    let callback = url::Url::parse(&format!(
+        "http://127.0.0.1:{}{}",
+        expected_addr.port(),
+        target
+    ))
+    .map_err(|_| "Invalid sign-in callback URL.")?;
+    if callback.path() != "/desktop-auth-callback" {
+        return Err("Invalid sign-in callback path.".into());
+    }
+    let code = callback
+        .query_pairs()
+        .find(|(key, _)| key == "code")
+        .map(|(_, value)| value.into_owned())
+        .ok_or("The sign-in callback did not contain a code.")?;
+    let state = callback
+        .query_pairs()
+        .find(|(key, _)| key == "state")
+        .map(|(_, value)| value.into_owned())
+        .ok_or("The sign-in callback did not contain state.")?;
+    if state != expected_state {
+        return Err("Sign-in state did not match. Start again from TextHalo.".into());
+    }
     let result = exchange_desktop_code(&code, &verifier, &state, &redirect_uri).await;
-    let (status, message) = match &result { Ok(()) => ("200 OK", "Sign-in complete. You can return to the TextHalo app."), Err(_) => ("400 Bad Request", "Sign-in could not be completed. Return to TextHalo and try again.") };
+    let (status, message) = match &result {
+        Ok(()) => (
+            "200 OK",
+            "Sign-in complete. You can return to the TextHalo app.",
+        ),
+        Err(_) => (
+            "400 Bad Request",
+            "Sign-in could not be completed. Return to TextHalo and try again.",
+        ),
+    };
     let body = format!("<!doctype html><meta charset=utf-8><title>TextHalo</title><body style='font:16px system-ui;background:#f5f4ef;color:#18231f;display:grid;place-items:center;height:90vh'><main><h1>{message}</h1><p>You may close this tab.</p></main></body>");
     let response = format!("HTTP/1.1 {status}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\nCache-Control: no-store\r\n\r\n{body}", body.len());
     let _ = socket.write_all(response.as_bytes()).await;
     result
 }
 
-async fn exchange_desktop_code(code: &str, verifier: &str, state: &str, redirect_uri: &str) -> Result<(), String> {
-    let response = reqwest::Client::new().post(format!("{}/v1/desktop/handoffs/exchange", origin()?))
+async fn exchange_desktop_code(
+    code: &str,
+    verifier: &str,
+    state: &str,
+    redirect_uri: &str,
+) -> Result<(), String> {
+    let response = reqwest::Client::new()
+        .post(format!("{}/v1/desktop/handoffs/exchange", origin()?))
         .json(&json!({"code":code,"verifier":verifier,"state":state,"redirectUri":redirect_uri}))
-        .send().await.map_err(|_| "Could not reach the TextHalo service.".to_string())?;
+        .send()
+        .await
+        .map_err(|_| "Could not reach the TextHalo service.".to_string())?;
     let status = response.status();
     let body = response.json::<Value>().await.unwrap_or(Value::Null);
-    if !status.is_success() { return Err(api_error(status, &body)); }
-    let access = body.get("accessToken").and_then(Value::as_str).ok_or("Invalid desktop session response.")?.to_string();
-    let refresh = body.get("refreshToken").and_then(Value::as_str).ok_or("Invalid desktop session response.")?.to_string();
+    if !status.is_success() {
+        return Err(api_error(status, &body));
+    }
+    let access = body
+        .get("accessToken")
+        .and_then(Value::as_str)
+        .ok_or("Invalid desktop session response.")?
+        .to_string();
+    let refresh = body
+        .get("refreshToken")
+        .and_then(Value::as_str)
+        .ok_or("Invalid desktop session response.")?
+        .to_string();
     let expires = body.get("expiresIn").and_then(Value::as_u64).unwrap_or(300);
-    let account = reqwest::Client::new().get(format!("{}/v1/account", origin()?)).bearer_auth(&access).send().await.map_err(|_| "Could not validate your TextHalo session.".to_string())?;
-    if !account.status().is_success() { return Err("The TextHalo session could not be validated.".into()); }
-    write_credentials(&DesktopCredentials { access_token: access, refresh_token: refresh, expires_at: unix_now().saturating_add(expires) })
+    let account = reqwest::Client::new()
+        .get(format!("{}/v1/account", origin()?))
+        .bearer_auth(&access)
+        .send()
+        .await
+        .map_err(|_| "Could not validate your TextHalo session.".to_string())?;
+    if !account.status().is_success() {
+        return Err("The TextHalo session could not be validated.".into());
+    }
+    write_credentials(&DesktopCredentials {
+        access_token: access,
+        refresh_token: refresh,
+        expires_at: unix_now().saturating_add(expires),
+    })
 }
 
 #[tauri::command]
 pub async fn desktop_sign_out() -> Result<(), String> {
     if let Ok(credentials) = read_credentials() {
-        let _ = reqwest::Client::new().post(format!("{}/v1/desktop/sessions/revoke", origin()?))
-            .json(&json!({"refreshToken":credentials.refresh_token})).send().await;
+        let _ = reqwest::Client::new()
+            .post(format!("{}/v1/desktop/sessions/revoke", origin()?))
+            .json(&json!({"refreshToken":credentials.refresh_token}))
+            .send()
+            .await;
     }
     clear_token()
 }
@@ -273,20 +434,36 @@ pub async fn desktop_account() -> Result<Value, String> {
     json_request(reqwest::Method::GET, "/v1/account", None).await
 }
 #[tauri::command]
-pub async fn desktop_voices(query: String, page: u32) -> Result<Value, String> {
+pub async fn desktop_voices(query: String, language: String, page: u32) -> Result<Value, String> {
     let q = url::form_urlencoded::byte_serialize(query.as_bytes()).collect::<String>();
-    public_json_request(&format!("/v1/voices?query={q}&page={page}&pageSize=24")).await
+    let language = url::form_urlencoded::byte_serialize(language.as_bytes()).collect::<String>();
+    public_json_request(&format!(
+        "/v1/voices?query={q}&language={language}&page={page}&pageSize=24"
+    ))
+    .await
+}
+#[tauri::command]
+pub async fn desktop_voice_languages() -> Result<Value, String> {
+    public_json_request("/v1/voice-languages").await
 }
 
 async fn public_json_request(path: &str) -> Result<Value, String> {
     let url = format!("{}{}", origin()?, path);
-    let response = reqwest::Client::builder().timeout(Duration::from_secs(20)).build()
+    let response = reqwest::Client::builder()
+        .timeout(Duration::from_secs(20))
+        .build()
         .map_err(|_| "Could not start the TextHalo network client.".to_string())?
-        .get(url).send().await
-        .map_err(|_| "Could not reach the TextHalo service. Check your internet connection.".to_string())?;
+        .get(url)
+        .send()
+        .await
+        .map_err(|_| {
+            "Could not reach the TextHalo service. Check your internet connection.".to_string()
+        })?;
     let status = response.status();
     let body = response.json::<Value>().await.unwrap_or(Value::Null);
-    if !status.is_success() { return Err(api_error(status, &body)); }
+    if !status.is_success() {
+        return Err(api_error(status, &body));
+    }
     Ok(body)
 }
 #[tauri::command]
@@ -303,11 +480,19 @@ pub async fn desktop_voice_preview(
             )
         })
         .unwrap_or_default();
-    let response = reqwest::Client::builder().timeout(Duration::from_secs(20)).build()
+    let response = reqwest::Client::builder()
+        .timeout(Duration::from_secs(20))
+        .build()
         .map_err(|_| "Could not start the TextHalo network client.".to_string())?
-        .get(format!("{}/v1/voices/{encoded}/preview{sample_query}", origin()?))
-        .send().await
-        .map_err(|_| "Could not reach the TextHalo service. Check your internet connection.".to_string())?;
+        .get(format!(
+            "{}/v1/voices/{encoded}/preview{sample_query}",
+            origin()?
+        ))
+        .send()
+        .await
+        .map_err(|_| {
+            "Could not reach the TextHalo service. Check your internet connection.".to_string()
+        })?;
     if !response.status().is_success() {
         let status = response.status();
         let body = response.json::<Value>().await.unwrap_or(Value::Null);

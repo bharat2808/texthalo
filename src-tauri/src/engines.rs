@@ -531,17 +531,17 @@ pub fn catalog_with(settings: &Settings, clips: Vec<crate::voices::VoiceClip>) -
         EngineInfo {
             id: Engine::Fish,
             label: "Fish Audio hosted voices",
-            summary: "Hosted voices, streaming playback, account credits",
+            summary: "Hosted voices with streaming playback",
             can_speak: fish_configured
                 && fish_signed_in
                 && settings.fish.privacy_accepted
                 && !settings.fish.voice_id.is_empty(),
             status: if !fish_configured {
-                "Backend URL is not configured".to_string()
+                "Backend not configured".to_string()
             } else if !fish_signed_in {
-                "Sign in to use hosted voices".to_string()
+                "Sign in to continue".to_string()
             } else if !settings.fish.privacy_accepted {
-                "Review hosted speech privacy details".to_string()
+                "Review privacy details".to_string()
             } else if settings.fish.voice_id.is_empty() {
                 "Choose a hosted voice".to_string()
             } else {
@@ -696,11 +696,11 @@ mod tests {
     /// Apple is ready with nothing installed, and every engine that cannot speak must say why.
     /// Kokoro's readiness is not a constant any more — it depends on whether its files are on
     /// disk, which is the whole point of `can_speak`, so it is asserted in both directions.
-    /// Three engines: Apple, Kokoro, Chatterbox.
+    /// Four engines: Apple, Kokoro, Chatterbox, Fish.
     #[test]
     fn an_engine_that_cannot_speak_always_says_why() {
         let catalog = catalog(&Settings::default());
-        assert_eq!(catalog.len(), 3);
+        assert_eq!(catalog.len(), 4);
         assert!(catalog[0].can_speak, "apple must be ready");
         assert!(catalog[0].blocked_reason.is_none());
 

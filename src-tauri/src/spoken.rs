@@ -651,18 +651,19 @@ mod tests {
             engine: Engine::Chatterbox,
             ..Default::default()
         };
-        let spoken = Spoken::new();
-        let error = spoken
-            .speak(&settings, "hello", None)
-            .expect_err("with no weights on disk this must not return success");
-        assert!(
-            error.contains("Chatterbox"),
-            "the refusal should name the engine, got: {error}"
-        );
-        assert!(
-            error.contains("not installed"),
-            "the refusal should name the missing piece, got: {error}"
-        );
+        if !crate::engine_paths::chatterbox_installed() {
+            let error = Spoken::new()
+                .speak(&settings, "hello", None)
+                .expect_err("with no weights on disk this must not return success");
+            assert!(
+                error.contains("Chatterbox"),
+                "the refusal should name the engine, got: {error}"
+            );
+            assert!(
+                error.contains("not installed"),
+                "the refusal should name the missing piece, got: {error}"
+            );
+        }
 
         // A language code travels as far as the refusal: a user who picked Japanese is told
         // about Japanese, not about a generic failure.

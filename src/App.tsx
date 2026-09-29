@@ -78,6 +78,7 @@ type ChatterboxSettings = {
 
 type FishSettings = { voice_id: string; model_id: string; enhance_text: boolean; privacy_accepted: boolean };
 type HostedVoice = { id: string; name: string; description: string; languageCodes: string[]; tags: string[]; previewAvailable: boolean; samples: { id: string; title: string; text: string }[] };
+type HostedVoiceLanguage = { code: string; voiceCount: number };
 type HostedAccount = { availableCredits: number; accountEmail?: string | null; creditBreakdown: { totalCredits: number; planCredits: number; topupCredits: number; otherCredits: number }; billingEnabled: boolean; subscription: { planId: string; status: string; currentPeriodEnd: string; cancelAtPeriodEnd: boolean } | null; plans: { id: string; creditsPerPeriod: number; cloneLimit: number }[] };
 type HostedClone = { id: string; name: string; status: string; createdAt: string };
 
@@ -297,6 +298,8 @@ const LANGUAGE_FAMILIES: Record<string, string> = {
 };
 
 const languageName = (locale: string) => LANGUAGE_NAMES[locale] ?? locale.replace("_", " ");
+const languageDisplayNames = new Intl.DisplayNames([navigator.language || "en"], { type: "language" });
+const hostedLanguageName = (code: string) => languageDisplayNames.of(code) ?? code;
 
 /** `Eddy (English (US))` → `Eddy`: the locale column already says the language. */
 const voiceLabel = (name: string) => name.split(" (")[0].trim();
@@ -466,6 +469,7 @@ export default function App() {
   // The last word from an espeak-ng install attempt. Kept until the next attempt rather
   // than timed out, because the message is the only answer the user gets.
   const [espeakMessage, setEspeakMessage] = useState<string | null>(null);
+  const [espeakInstalling, setEspeakInstalling] = useState(false);
   const [tab, setTab] = useState<Tab>("general");
   const [status, setStatus] = useState<Status>({ phase: "idle" });
   const [error, setError] = useState<string | null>(null);
@@ -489,6 +493,8 @@ export default function App() {
   const [accountBusy, setAccountBusy] = useState(false);
   const [accountError, setAccountError] = useState("");
   const [hostedVoices, setHostedVoices] = useState<HostedVoice[]>([]);
+  const [hostedLanguages, setHostedLanguages] = useState<HostedVoiceLanguage[]>([]);
+  const [hostedLanguage, setHostedLanguage] = useState("en");
   const [hostedQuery, setHostedQuery] = useState("");
   const [hostedLoading, setHostedLoading] = useState(false);
   const [hostedHasMore, setHostedHasMore] = useState(false);
@@ -499,6 +505,7 @@ export default function App() {
   const [cloneConsent, setCloneConsent] = useState(false);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const previewAudio = useRef<HTMLAudioElement | null>(null);
+  const hostedQueryRef = useRef("");
   const rateTimer = useRef<number | null>(null);
   const latestState = useRef(state);
   const saveTail = useRef<Promise<void>>(Promise.resolve());
@@ -661,12 +668,13 @@ export default function App() {
       setInstall(event.payload);
       if (event.payload.phase !== "downloading") void refresh();
     });
-    // Installing the extra back end is the user's own package manager running, so its
-    // outcome is reported rather than assumed, and the catalogue is re-read to pick up the
-    // voices it unlocks.
+    // Installation can use Homebrew or the app-managed runtime. Report each stage and
+    // re-read the catalogue when it finishes so the newly unlocked voices appear.
     const unespeak = listen<string>("kiegen:espeak", (event) => {
       setEspeakMessage(event.payload);
-      void refresh();
+      const installing = event.payload.startsWith("Downloading and verifying");
+      setEspeakInstalling(installing);
+      if (!installing) void refresh();
     });
     // Permission is granted outside the app, and speech ends on its own: poll rather
     // than pretend we can observe either.
@@ -707,10 +715,10 @@ export default function App() {
     [refresh],
   );
 
-  const loadHostedVoices = useCallback(async (page = 1, query = hostedQuery) => {
+  const loadHostedVoices = useCallback(async (page: number, query: string, language: string) => {
     setHostedLoading(true);
     try {
-      const result = await invoke<{ items: HostedVoice[]; hasMore: boolean; modelId: string }>("desktop_voices", { query, page });
+      const result = await invoke<{ items: HostedVoice[]; hasMore: boolean; modelId: string }>("desktop_voices", { query, language, page });
       setHostedVoices((items) => page === 1 ? result.items : [...items, ...result.items]);
       setHostedHasMore(result.hasMore);
       setHostedPage(page);
@@ -722,13 +730,21 @@ export default function App() {
     } catch (cause) {
       setAccountError(cause instanceof Error ? cause.message : String(cause));
     } finally { setHostedLoading(false); }
-  }, [hostedQuery, save]);
+  }, [save]);
 
   useEffect(() => {
-    if (tab === "voice" && state?.settings.engine === "fish") void loadHostedVoices(1);
+    if (tab === "voice" && state?.settings.engine === "fish") {
+      void invoke<{items: HostedVoiceLanguage[]}>("desktop_voice_languages").then((result) => {
+        setHostedLanguages(result.items);
+        const preferred = state.system_language.split(/[_-]/)[0]?.toLocaleLowerCase() || "en";
+        const selected = result.items.some((item) => item.code === preferred) ? preferred : "en";
+        setHostedLanguage(selected);
+        void loadHostedVoices(1, hostedQueryRef.current, selected);
+      }).catch((cause) => setAccountError(cause instanceof Error ? cause.message : String(cause)));
+    }
     const canClone = (account?.plans.find((plan) => plan.id === account.subscription?.planId)?.cloneLimit ?? 0) > 0;
     if ((tab === "account" || (tab === "voice" && state?.settings.engine === "fish")) && account && canClone) void invoke<{items: HostedClone[]}>("desktop_clones").then((v) => setHostedClones(v.items)).catch((cause) => setAccountError(cause instanceof Error ? cause.message : String(cause)));
-  }, [tab, state?.settings.engine, account, loadHostedVoices]);
+  }, [tab, state?.settings.engine, state?.system_language, account, loadHostedVoices]);
 
   /* Voice + language derivation. */
   const voices = state?.voices ?? [];
@@ -1267,10 +1283,17 @@ export default function App() {
               <>
                 <Card title="Fish Audio hosted voices" icon={Icon.speaker()}>
                   <div className="field">
+                    <span className="field-label">Language</span>
+                    <select value={hostedLanguage} onChange={(event) => { const selected = event.target.value; setHostedLanguage(selected); void loadHostedVoices(1, hostedQuery, selected); }}>
+                      {hostedLanguages.map((item) => <option key={item.code} value={item.code}>{hostedLanguageName(item.code)} — {item.voiceCount}</option>)}
+                    </select>
+                    <span className="field-hint">A language’s previews are cached when you browse it for the first time.</span>
+                  </div>
+                  <div className="field">
                     <span className="field-label">Find a voice</span>
                     <div className="inline">
-                      <input value={hostedQuery} placeholder="Search voices" onChange={(event) => setHostedQuery(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void loadHostedVoices(1, hostedQuery); }} />
-                      <button className="plain" disabled={hostedLoading} onClick={() => void loadHostedVoices(1, hostedQuery)}>{hostedLoading ? "Loading…" : "Search"}</button>
+                      <input value={hostedQuery} placeholder="Search voices" onChange={(event) => { setHostedQuery(event.target.value); hostedQueryRef.current = event.target.value; }} onKeyDown={(event) => { if (event.key === "Enter") void loadHostedVoices(1, hostedQuery, hostedLanguage); }} />
+                      <button className="plain" disabled={hostedLoading} onClick={() => void loadHostedVoices(1, hostedQuery, hostedLanguage)}>{hostedLoading ? "Loading…" : "Search"}</button>
                     </div>
                     <span className="field-hint">Choose a voice, then use your Speak shortcut anywhere.</span>
                   </div>
@@ -1284,7 +1307,7 @@ export default function App() {
                   </div>
                   {hostedClones.length > 0 ? <div className="field"><span className="field-label">My hosted clones</span><div className="row-stack">{hostedClones.map((clone) => { const selected = settings.fish.voice_id === clone.id; return <Row key={clone.id} selected={selected} glyph={selected ? Icon.checkCircle() : Icon.circle()} title={clone.name} subtitle={`Clone · ${clone.status}`} badge={selected ? "Selected" : undefined} onSelect={() => void save({ fish: { ...settings.fish, voice_id: clone.id } })} />; })}</div></div> : null}
                   {hostedVoices.length === 0 && !accountError && !hostedLoading ? <span className="card-note">No voices loaded. Search or refresh to browse.</span> : null}
-                  {hostedHasMore ? <button className="plain" disabled={hostedLoading} onClick={() => void loadHostedVoices(hostedPage + 1)}>{hostedLoading ? "Loading…" : "Load more voices"}</button> : null}
+                  {hostedHasMore ? <button className="plain" disabled={hostedLoading} onClick={() => void loadHostedVoices(hostedPage + 1, hostedQuery, hostedLanguage)}>{hostedLoading ? "Loading…" : "Load more voices"}</button> : null}
                   <label className="toggle-row"><input type="checkbox" checked={settings.fish.enhance_text} onChange={(event) => void save({ fish: { ...settings.fish, enhance_text: event.target.checked } })} /><span>Enhance text with semantic delivery cues</span></label>
                 </Card>
                 <Card title="Privacy for hosted speech" icon={Icon.info()}>
@@ -1437,8 +1460,8 @@ export default function App() {
                   <div className="field">
                     <span className="field-label">espeak-ng</span>
                     <span className="inline">
-                      <button className="plain" onClick={() => void invoke("install_espeak_ng")}>
-                        {Icon.download()} Add {espeakVoiceCount} voices
+                      <button className="plain" disabled={espeakInstalling} onClick={() => void invoke("install_espeak_ng")}>
+                        {Icon.download()} {espeakInstalling ? "Installing…" : `Add ${espeakVoiceCount} voices`}
                       </button>
                     </span>
                   </div>

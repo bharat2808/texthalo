@@ -661,6 +661,7 @@ fn install_engine(app: AppHandle, engine: config::Engine) {
 #[tauri::command]
 fn install_espeak_ng(app: AppHandle) {
     std::thread::spawn(move || {
+        let _ = app.emit("kiegen:espeak", "Downloading and verifying espeak-ng…");
         let message = match espeak::install() {
             Ok(message) => message,
             Err(error) => error,
@@ -838,6 +839,7 @@ pub fn run() {
             hosted::desktop_sign_out,
             hosted::desktop_account,
             hosted::desktop_voices,
+            hosted::desktop_voice_languages,
             hosted::desktop_voice_preview,
             hosted::desktop_clones,
             hosted::desktop_delete_clone,

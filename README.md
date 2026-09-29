@@ -58,7 +58,7 @@ Chatterbox has controls for emotion intensity and keeping the model loaded. Use 
 
 ### Optional espeak-ng support
 
-TextHalo detects an existing `espeak-ng` installation and invokes it as a separate CLI process. It does not bundle or link the espeak library.
+TextHalo invokes `espeak-ng` as a separate CLI process and does not bundle or link its library. If it is missing, the in-app **Add voices** action uses Homebrew when available or installs a checksum-verified runtime under Application Support on a fresh Mac.
 
 For English Kokoro voices, dictionary pronunciations are tried first. Unknown words use espeak-ng only when it is detected. If it is absent or cannot produce a pronunciation, TextHalo retains its letter-spelling behavior. Known words and acronyms keep their dictionary handling.
 
