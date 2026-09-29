@@ -34,7 +34,7 @@ owner-only file permissions. Never attach it to a release or commit it.
    ```sh
    TAURI_SIGNING_PRIVATE_KEY="$(cat "$HOME/.tauri/kiegen-updater.key")" \
    TAURI_SIGNING_PRIVATE_KEY_PASSWORD="" \
-     npm run tauri signer sign -- --app-version 0.1.5 \
+     npm run tauri signer sign -- --app-version 0.1.6 \
        src-tauri/target/release/bundle/macos/TextHalo.app.tar.gz
    ```
 
@@ -45,8 +45,8 @@ owner-only file permissions. Never attach it to a release or commit it.
 
    ```sh
    node scripts/write-updater-manifest.mjs \
-     0.1.5 \
-     https://github.com/bharat2808/texthalo/releases/download/v0.1.5/TextHalo.app.tar.gz \
+     0.1.6 \
+     https://github.com/bharat2808/texthalo/releases/download/v0.1.6/TextHalo.app.tar.gz \
      src-tauri/target/release/bundle/macos/TextHalo.app.tar.gz.sig \
      latest.json
    ```
