@@ -136,10 +136,9 @@ fn kokoro_installed_at(dir: &Path) -> bool {
 
 /// Is an `espeak-ng` binary present that the app may *use*?
 ///
-/// espeak-ng is **GPL-3.0**. It is never bundled, linked or vendored — this only ever looks
-/// for one the user installed, and every use is a subprocess whose stdout is read. That
-/// keeps kiegen permissively licensed while still reaching the five Kokoro languages whose
-/// only front end is espeak. See docs/DESIGN.md §5.
+/// espeak-ng is **GPL-3.0**. It is not linked or placed in the app bundle: this finds either
+/// a system installation or the separately installed runtime in Application Support, and
+/// every use is a subprocess whose stdout is read. See docs/DESIGN.md §5.
 pub fn espeak_ng() -> Option<PathBuf> {
     // 1. Explicit. A test harness points here, and so can a user with a peculiar install.
     if let Ok(explicit) = std::env::var(ESPEAK_ENV) {
@@ -149,9 +148,8 @@ pub fn espeak_ng() -> Option<PathBuf> {
         }
     }
 
-    // 2. An arm's-length copy the app manages, if the user put one there. Nothing in the
-    //    app downloads into this directory: it exists so "install it next to the app" is
-    //    possible without editing PATH.
+    // 2. The managed runtime installed after the user clicks Add voices. Keeping it in
+    //    Application Support means a fresh Mac does not need Homebrew or a modified PATH.
     if let Some(dir) = app_support_dir() {
         let managed = dir.join("runtime/espeak-ng/bin/espeak-ng");
         if managed.is_file() {

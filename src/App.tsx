@@ -456,6 +456,7 @@ export default function App() {
   // The last word from an espeak-ng install attempt. Kept until the next attempt rather
   // than timed out, because the message is the only answer the user gets.
   const [espeakMessage, setEspeakMessage] = useState<string | null>(null);
+  const [espeakInstalling, setEspeakInstalling] = useState(false);
   const [tab, setTab] = useState<Tab>("general");
   const [status, setStatus] = useState<Status>({ phase: "idle" });
   const [error, setError] = useState<string | null>(null);
@@ -587,12 +588,13 @@ export default function App() {
       setInstall(event.payload);
       if (event.payload.phase !== "downloading") void refresh();
     });
-    // Installing the extra back end is the user's own package manager running, so its
-    // outcome is reported rather than assumed, and the catalogue is re-read to pick up the
-    // voices it unlocks.
+    // Installation can use Homebrew or the app-managed runtime. Report each stage and
+    // re-read the catalogue when it finishes so the newly unlocked voices appear.
     const unespeak = listen<string>("kiegen:espeak", (event) => {
       setEspeakMessage(event.payload);
-      void refresh();
+      const installing = event.payload.startsWith("Downloading and verifying");
+      setEspeakInstalling(installing);
+      if (!installing) void refresh();
     });
     // Permission is granted outside the app, and speech ends on its own: poll rather
     // than pretend we can observe either.
@@ -1225,8 +1227,8 @@ export default function App() {
                   <div className="field">
                     <span className="field-label">espeak-ng</span>
                     <span className="inline">
-                      <button className="plain" onClick={() => void invoke("install_espeak_ng")}>
-                        {Icon.download()} Add {espeakVoiceCount} voices
+                      <button className="plain" disabled={espeakInstalling} onClick={() => void invoke("install_espeak_ng")}>
+                        {Icon.download()} {espeakInstalling ? "Installing…" : `Add ${espeakVoiceCount} voices`}
                       </button>
                     </span>
                   </div>

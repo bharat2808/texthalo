@@ -203,7 +203,7 @@ So the model supports 8 languages and 54 voices, but **5 of the 8 have no non-es
 
 #### The espeak path, as built and as measured
 
-espeak-ng is reached the only way it can be. `src/espeak.rs` finds the user's own install (`KIEGEN_ESPEAK_NG`, then an app-managed directory, then the Homebrew prefixes, then `PATH`) and runs **one subprocess per text chunk**, reading IPA from stdout. Nothing links `libespeak-ng`, and nothing is downloaded into the app: the pane's *Add N voices* button asks the user's own package manager (`brew install espeak-ng`) to install it, and with no package manager it opens upstream's install page rather than fetching a copy — because fetching one would make kiegen a distributor of GPL code.
+espeak-ng is kept outside the app bundle. `src/espeak.rs` finds an explicit install (`KIEGEN_ESPEAK_NG`), the app-managed runtime, Homebrew prefixes, or `PATH`, and runs **one subprocess per text chunk**, reading IPA from stdout. Nothing links `libespeak-ng`. The pane's *Add N voices* button uses `brew install espeak-ng` when Homebrew exists; on a fresh Mac it instead downloads pinned official Homebrew bottles for espeak-ng and pcaudiolib from GHCR, verifies their SHA-256 digests, retains their licence files and source URLs, and installs them under Application Support. This makes the optional GPL runtime a separate, user-initiated install without requiring a package manager.
 
 A relocated copy is not a workable fallback, and this was measured rather than assumed: a Homebrew **bottle will not run outside its prefix**. The binary is linked against placeholders Homebrew rewrites only at install time:
 
@@ -291,7 +291,7 @@ The project license applies to kiegen's original code. Every bundled dependency,
 |---|---|---|
 | kiegen's own licence | GPL-3.0 | Apache-2.0 |
 | `kokoro-tts` as published | ✅ use it as-is, no fork | ❌ do not use; it compiles espeak-derived C |
-| espeak-ng (the 5 espeak-only languages) | ✅ free to bundle, link, or subprocess | ⚠️ arm's-length only: user-installed (`brew install espeak-ng`), invoked as a subprocess, never linked or bundled |
+| espeak-ng (the 5 espeak-only languages) | ✅ GPL-3.0 permits redistribution when its conditions are met | ⚠️ separate optional runtime: user-initiated Homebrew or verified managed install, invoked as a subprocess, never linked or placed in the app bundle; licence and source notice retained |
 | language coverage | all 9 language codes / 54 voices | English + Mandarin (+ Japanese only if you port a Rust G2P) |
 | engineering cost | ≈ zero | maintain the in-repo Rust G2P implementation |
 | downstream appeal | copyleft — fine for an end-user utility, unattractive to anyone embedding it in a closed product | permissive Apache-2.0 grant with explicit patent terms |
@@ -492,6 +492,6 @@ Explicitly *not* in v0: history, streaming word-highlight, per-app shortcuts, th
 ## 9. Open product questions for you
 
 1. ~~Is kiegen closed-source/commercial?~~ **Decided: open source, Apache-2.0 only** — with dependency licence checks in `cargo-deny` (§5).
-2. ~~English-only for v1, or the full 9 languages?~~ **Decided: English only for v1.** Mandarin/Japanese remain reachable later; the other five (Spanish, French, Hindi, Italian, Portuguese) are an optional user-installed espeak-ng path, documented, never shipped. **Partly superseded:** a second engine — Chatterbox Multilingual — now offers 23 languages, none of them through espeak, so the "which languages" question is answered twice over: Kokoro's 9 codes, and Chatterbox's 23 for everything Kokoro cannot reach without GPL code (§5).
+2. ~~English-only for v1, or the full 9 languages?~~ **Decided: English only for v1.** Mandarin/Japanese remain reachable later; the other five (Spanish, French, Hindi, Italian, Portuguese) use an optional separately installed espeak-ng runtime. **Partly superseded:** a second engine — Chatterbox Multilingual — now offers 23 languages, none of them through espeak, so the "which languages" question is answered twice over: Kokoro's 9 codes, and Chatterbox's 23 for everything Kokoro cannot reach without GPL code (§5).
 3. Does the audio **play** and/or get **written to a file** by default? "Speak" vs "Speak to file" as separate chords is the plan.
 4. Should the user be able to configure **per-app** shortcuts/voices, or is one global chord enough for v1?
