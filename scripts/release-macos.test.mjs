@@ -5,7 +5,48 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { buildPlan, executePlan, validateAssetSet, verifyUpdaterSignature, productionBranch, publishRelease } from "./release-macos.mjs";
+import { buildPlan, executePlan, validateAssetSet, verifyUpdaterSignature, productionBranch, publishRelease, parseReleaseArgs, runReleaseWorkflow } from "./release-macos.mjs";
+
+test("combined release accepts only explicit supported deployment flags", () => {
+  assert.deepEqual(parseReleaseArgs(["release"]), { mode: "release", deployCloudflare: false });
+  assert.deepEqual(parseReleaseArgs(["release", "--deploy-cloudflare"]), { mode: "release", deployCloudflare: true });
+  assert.deepEqual(parseReleaseArgs(["publish", "--deploy-cloudflare"]), { mode: "publish", deployCloudflare: true });
+  for (const args of [[], ["unknown"], ["release", "--deploy"], ["plan", "--deploy-cloudflare"], ["release", "--deploy-cloudflare", "--deploy-cloudflare"]]) {
+    assert.throws(() => parseReleaseArgs(args), /Usage/);
+  }
+});
+
+test("release workflow verifies before publishing and optionally deploys last", async () => {
+  const receipt = { version: "1.2.3" };
+  for (const [args, expected] of [
+    [["release"], ["prepare", "verify", "publish"]],
+    [["release", "--deploy-cloudflare"], ["prepare", "verify", "publish", "deploy"]],
+    [["publish", "--deploy-cloudflare"], ["verify", "publish", "deploy"]],
+    [["prepare"], ["prepare"]], [["verify"], ["verify"]], [["deploy"], ["verify", "deploy"]],
+  ]) {
+    const calls = [];
+    await runReleaseWorkflow(parseReleaseArgs(args), Object.fromEntries(["prepare", "verify", "publish", "deploy"].map(stage => [stage, async value => {
+      if (["publish", "deploy"].includes(stage)) assert.equal(value, receipt);
+      calls.push(stage);
+      return receipt;
+    }])));
+    assert.deepEqual(calls, expected);
+  }
+});
+
+test("combined release stops on failures and gives a deployment-only retry command", async () => {
+  const stages = ["prepare", "verify", "publish", "deploy"];
+  for (const failed of stages) {
+    const calls = [];
+    const operations = Object.fromEntries(stages.map(stage => [stage, async () => {
+      calls.push(stage);
+      if (stage === failed) throw new Error(`failed ${stage}`);
+      return {};
+    }]));
+    await assert.rejects(runReleaseWorkflow(parseReleaseArgs(["release", "--deploy-cloudflare"]), operations), failed === "deploy" ? /retry with npm run release:mac -- deploy/ : new RegExp(`failed ${failed}`));
+    assert.deepEqual(calls, stages.slice(0, stages.indexOf(failed) + 1));
+  }
+});
 
 test("build plan produces the Apple Silicon DMG and signs updater archives only after stapling", () => {
   const steps = buildPlan({ root: "/repo", output: "/out", version: "1.2.3", identity: "Developer ID Application: Test (TEAM)", profile: "test-notary" });

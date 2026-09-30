@@ -38,7 +38,28 @@ not part of the release workflow. The signed updater manifest contains only
 
 `scripts/release-macos.mjs` uses the existing Developer ID identity and a
 notarytool Keychain profile. Prerequisites are Xcode Command Line Tools, the
-`aarch64-apple-darwin` Rust target, Node dependencies, and authenticated gh/Wrangler.
+`aarch64-apple-darwin` Rust target, Node dependencies, and authenticated gh.
+Wrangler authentication is required only for Cloudflare deployment.
+
+For a single local command that builds, signs, notarizes, verifies, and publishes
+the GitHub release:
+
+```sh
+export NOTARY_KEYCHAIN_PROFILE="your-existing-profile-name"
+npm run release:mac -- release
+# Also deploy the updated website to Cloudflare Pages afterward:
+npm run release:mac -- release --deploy-cloudflare
+```
+
+The website is built/tested during preparation. Its stable download URL follows
+the latest GitHub release automatically; publishing the updated website itself
+requires `--deploy-cloudflare`. Publication and deployment run sequentially, not
+atomically: a failed website deployment does not roll back the GitHub release.
+Resolve the deployment error and retry with `npm run release:mac -- deploy`,
+without rebuilding or republishing. If you already prepared the artifacts, use
+`npm run release:mac -- publish --deploy-cloudflare`.
+
+The same stages remain available separately:
 
 ```sh
 rustup target add aarch64-apple-darwin

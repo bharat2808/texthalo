@@ -228,17 +228,42 @@ async function deploy(receipt) {
   console.log("Verified production download page: https://texthalo.app/download/");
 }
 
+export function parseReleaseArgs(args) {
+  const [mode, ...flags] = args;
+  if (!["plan", "prepare", "verify", "publish", "deploy", "release"].includes(mode)
+    || flags.some(flag => flag !== "--deploy-cloudflare") || flags.length > 1
+    || (flags.length && !["release", "publish"].includes(mode))) {
+    throw new Error("Usage: npm run release:mac -- <plan|prepare|verify|publish|deploy|release> [--deploy-cloudflare (release or publish only)]");
+  }
+  return { mode, deployCloudflare: flags.includes("--deploy-cloudflare") };
+}
+
+export async function runReleaseWorkflow({ mode, deployCloudflare }, operations) {
+  if (mode === "prepare" || mode === "release") await operations.prepare();
+  if (mode === "prepare") return;
+  const receipt = await operations.verify();
+  if (mode === "publish" || mode === "release") await operations.publish(receipt);
+  if (mode === "deploy" || deployCloudflare) {
+    try { await operations.deploy(receipt); }
+    catch (error) {
+      throw new Error(`Website deployment failed; the GitHub release is not rolled back. After resolving the error, retry with npm run release:mac -- deploy. ${error.message}`, { cause: error });
+    }
+  }
+}
+
 async function main() {
-  const [mode, ...extra] = process.argv.slice(2);
-  if (extra.length || !["plan", "prepare", "verify", "publish", "deploy"].includes(mode)) throw new Error("Usage: npm run release:mac -- <plan|prepare|verify|publish|deploy>");
+  const options = parseReleaseArgs(process.argv.slice(2));
+  const { mode } = options;
   const { version, config } = await configuration();
   const directory = join(ROOT, "release-artifacts", version);
   if (mode === "plan") return console.log(JSON.stringify(buildPlan({ root: ROOT, output: directory, version, identity: config.bundle.macOS.signingIdentity, profile: process.env.NOTARY_KEYCHAIN_PROFILE ?? "<keychain-profile>" }), null, 2));
   if (process.platform !== "darwin") throw new Error("Signed macOS releases must run on macOS");
-  if (mode === "prepare") return prepare(directory, version, config);
-  const receipt = await receiptFor(directory, version, config);
-  if (mode === "publish") await publishRelease(directory, receipt);
-  if (mode === "deploy") await deploy(receipt);
+  await runReleaseWorkflow(options, {
+    prepare: () => prepare(directory, version, config),
+    verify: () => receiptFor(directory, version, config),
+    publish: receipt => publishRelease(directory, receipt),
+    deploy,
+  });
   console.log(`${mode} completed for ${version}`);
 }
 
