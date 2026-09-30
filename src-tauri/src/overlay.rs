@@ -31,7 +31,7 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
     .title("TextHalo update")
     .inner_size(390.0, 180.0)
     .decorations(false)
-    .transparent(false)
+    .transparent(true)
     .resizable(false)
     .always_on_top(true)
     .visible_on_all_workspaces(true)

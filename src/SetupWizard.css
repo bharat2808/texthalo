@@ -23,12 +23,9 @@
 .setup-wizard-mark {
   width: 25px;
   height: 25px;
-  display: grid;
-  place-items: center;
+  display: block;
   border-radius: 7px;
-  background: color-mix(in srgb, var(--accent) 13%, transparent);
-  color: var(--accent);
-  font-size: 16px;
+  object-fit: cover;
 }
 
 .setup-wizard-header .plain { margin-left: auto; }

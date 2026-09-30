@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import appLogo from "../src-tauri/icons/icon.png";
 import "./SetupWizard.css";
 
 type WizardSettings = {
@@ -119,7 +120,7 @@ export default function SetupWizard({
   return (
     <main className="setup-wizard">
       <header className="setup-wizard-header">
-        <div className="setup-wizard-mark" aria-hidden="true">◖</div>
+        <img className="setup-wizard-mark" src={appLogo} alt="" />
         <span>TextHalo setup</span>
         <button className="plain" onClick={() => void finish()}>Skip setup</button>
       </header>

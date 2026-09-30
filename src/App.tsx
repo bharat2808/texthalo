@@ -227,7 +227,7 @@ function UpdateResultOverlay() {
   return (
     <main className="update-overlay" role="dialog" aria-labelledby="update-title" aria-live="polite">
       <button className="update-overlay-close" onClick={close} aria-label="Close">×</button>
-      <div className="update-overlay-mark" aria-hidden="true">↻</div>
+      <img className="update-overlay-mark" src={appLogo} alt="" />
       <h1 id="update-title">
         {checking ? "Checking for updates…" : status.error ? "Couldn’t check for updates" : hasUpdate ? `TextHalo ${status.version} is available` : "You’re up to date"}
       </h1>
@@ -631,8 +631,6 @@ function MainApp() {
   const [cloneName, setCloneName] = useState("");
   const [clonePath, setClonePath] = useState("");
   const [cloneConsent, setCloneConsent] = useState(false);
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const previewAudio = useRef<HTMLAudioElement | null>(null);
   const hostedQueryRef = useRef("");
   const rateTimer = useRef<number | null>(null);
   const latestState = useRef(state);
@@ -1264,14 +1262,7 @@ function MainApp() {
 
   const previewHostedVoice = async (voiceId: string, sampleId?: string) => {
     try {
-      previewAudio.current?.pause();
-      if (previewUrl) URL.revokeObjectURL(previewUrl);
-      const bytes = await invoke<number[]>("desktop_voice_preview", { voiceId, sampleId });
-      const url = URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: "audio/mpeg" }));
-      setPreviewUrl(url);
-      const audio = new Audio(url);
-      previewAudio.current = audio;
-      await audio.play();
+      await invoke("desktop_voice_preview", { voiceId, sampleId });
     } catch (cause) { setAccountError(cause instanceof Error ? cause.message : String(cause)); }
   };
 

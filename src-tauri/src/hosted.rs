@@ -472,9 +472,30 @@ async fn public_json_request(path: &str) -> Result<Value, String> {
 }
 #[tauri::command]
 pub async fn desktop_voice_preview(
+    app: AppHandle,
     voice_id: String,
     sample_id: Option<String>,
-) -> Result<Vec<u8>, String> {
+) -> Result<(), String> {
+    let job_id = crate::begin_speech(&app, crate::Phase::Preparing);
+    let result = download_voice_preview(&app, job_id, voice_id, sample_id).await;
+    if let Err(message) = &result {
+        crate::job_status(
+            &app,
+            job_id,
+            crate::Phase::Error,
+            Some(message.clone()),
+            None,
+        );
+    }
+    result
+}
+
+async fn download_voice_preview(
+    app: &AppHandle,
+    job_id: u64,
+    voice_id: String,
+    sample_id: Option<String>,
+) -> Result<(), String> {
     let encoded = url::form_urlencoded::byte_serialize(voice_id.as_bytes()).collect::<String>();
     let sample_query = sample_id
         .map(|id| {
@@ -502,11 +523,44 @@ pub async fn desktop_voice_preview(
         let body = response.json::<Value>().await.unwrap_or(Value::Null);
         return Err(api_error(status, &body));
     }
-    Ok(response
+    let extension = match response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .split(';')
+        .next()
+        .unwrap_or_default()
+    {
+        "audio/wav" | "audio/x-wav" => "wav",
+        "audio/mp4" | "audio/x-m4a" => "m4a",
+        "audio/ogg" => "ogg",
+        "audio/flac" => "flac",
+        _ => "mp3",
+    };
+    let bytes = response
         .bytes()
         .await
         .map_err(|_| "Could not download this voice preview.".to_string())?
-        .to_vec())
+        .to_vec();
+    let state = app.state::<crate::AppState>();
+    if !state.job.lock().unwrap().is_current(job_id) {
+        return Ok(());
+    }
+    let directory = crate::engine_paths::app_support_dir()
+        .ok_or_else(|| "Could not locate TextHalo's application data folder.".to_string())?
+        .join("cache");
+    std::fs::create_dir_all(&directory)
+        .map_err(|_| "Could not prepare the voice preview cache.".to_string())?;
+    let path = directory.join(format!("hosted-voice-preview.{extension}"));
+    std::fs::write(&path, bytes)
+        .map_err(|_| "Could not save the downloaded voice preview.".to_string())?;
+    if !state.job.lock().unwrap().is_current(job_id) {
+        return Ok(());
+    }
+    state.spoken.play(&path)?;
+    crate::job_status(app, job_id, crate::Phase::Speaking, None, None);
+    Ok(())
 }
 #[tauri::command]
 pub async fn desktop_clones() -> Result<Value, String> {

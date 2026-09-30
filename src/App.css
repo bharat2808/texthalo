@@ -58,6 +58,10 @@ body {
   user-select: none;
 }
 
+body:has(.update-overlay) {
+  background: transparent;
+}
+
 .update-overlay {
   position: relative;
   display: flex;
@@ -67,7 +71,8 @@ body {
   padding: 24px 28px 20px 68px;
   background: var(--window-bg);
   border: 1px solid var(--separator);
-  border-radius: 14px;
+  overflow: hidden;
+  border-radius: 16px;
   box-shadow: 0 12px 36px rgba(0, 0, 0, 0.24);
 }
 
@@ -75,14 +80,11 @@ body {
   position: absolute;
   left: 24px;
   top: 30px;
-  display: grid;
   width: 30px;
   height: 30px;
-  place-items: center;
-  border-radius: 9px;
-  background: color-mix(in srgb, var(--accent) 15%, transparent);
-  color: var(--accent);
-  font-size: 22px;
+  display: block;
+  border-radius: 8px;
+  object-fit: cover;
 }
 
 .update-overlay h1 {
