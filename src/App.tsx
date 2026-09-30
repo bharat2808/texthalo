@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { emit, listen } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
 import { open } from "@tauri-apps/plugin-dialog";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import SetupWizard from "./SetupWizard";
+import SetupWizard, { type SetupPlansResponse } from "./SetupWizard";
 import appLogo from "../src-tauri/icons/icon.png";
 import "./App.css";
 
@@ -151,6 +151,112 @@ function ico(paths: string[], size = 16) {
       ))}
     </svg>
   );
+}
+
+type UpdateOverlayStatus = {
+  visible: boolean;
+  version: string | null;
+  installable: boolean;
+  installing: boolean;
+  message: string | null;
+  error: boolean;
+};
+
+function UpdateResultOverlay() {
+  // Paint immediately. The native window can be shown as soon as the tray check
+  // finishes, before this webview has completed its first invoke/listener setup.
+  const [status, setStatus] = useState<UpdateOverlayStatus>({
+    visible: true,
+    version: null,
+    installable: false,
+    installing: false,
+    message: "Checking for updates…",
+    error: false,
+  });
+
+  useEffect(() => {
+    let disposed = false;
+    const unlisteners: Array<() => void> = [];
+    let statusPoll: number | undefined;
+    const syncStatus = () => void invoke<UpdateOverlayStatus>("get_update_overlay_status")
+      .then((initial) => {
+        // This webview starts hidden at app launch. Keep the immediate placeholder
+        // when the initial state is empty; poll until a tray action publishes a result.
+        if (!disposed && initial.visible) {
+          setStatus(initial);
+          if (statusPoll !== undefined) {
+            window.clearInterval(statusPoll);
+            statusPoll = undefined;
+          }
+        }
+      })
+      .catch((cause) => {
+        if (!disposed) setStatus((current) => ({
+          ...current,
+          message: `Could not load update status: ${String(cause)}`,
+          error: true,
+        }));
+      });
+    syncStatus();
+    statusPoll = window.setInterval(syncStatus, 500);
+    void listen<UpdateOverlayStatus>("texthalo:update-overlay", (event) => setStatus(event.payload))
+      .then((off) => { if (disposed) off(); else unlisteners.push(off); });
+    void listen<{ available: boolean; version?: string | null; error?: string }>("texthalo:update-installable", (event) => {
+      setStatus((current) => current ? {
+        ...current,
+        installable: event.payload.available,
+        message: event.payload.error ?? current.message,
+        error: Boolean(event.payload.error),
+      } : current);
+    }).then((off) => { if (disposed) off(); else unlisteners.push(off); });
+    void listen<{ installing: boolean; message: string; error: boolean }>("texthalo:update-overlay-progress", (event) => {
+      setStatus((current) => current ? { ...current, ...event.payload } : current);
+    }).then((off) => { if (disposed) off(); else unlisteners.push(off); });
+    return () => {
+      disposed = true;
+      if (statusPoll !== undefined) window.clearInterval(statusPoll);
+      unlisteners.forEach((off) => off());
+    };
+  }, []);
+
+  const close = () => void invoke("close_update_overlay");
+  if (!status.visible) return null;
+
+  const hasUpdate = Boolean(status.version);
+  const checking = status.message === "Checking for updates…";
+  return (
+    <main className="update-overlay" role="dialog" aria-labelledby="update-title" aria-live="polite">
+      <button className="update-overlay-close" onClick={close} aria-label="Close">×</button>
+      <div className="update-overlay-mark" aria-hidden="true">↻</div>
+      <h1 id="update-title">
+        {checking ? "Checking for updates…" : status.error ? "Couldn’t check for updates" : hasUpdate ? `TextHalo ${status.version} is available` : "You’re up to date"}
+      </h1>
+      <p className={status.error ? "update-overlay-message error" : "update-overlay-message"}>
+        {status.message ?? (hasUpdate
+          ? status.installing ? "Preparing to install…" : "A newer version is ready to install."
+          : status.error ? "Please try again in a moment." : "You have the latest version of TextHalo.")}
+      </p>
+      <div className="update-overlay-actions">
+        {hasUpdate ? (
+          <button
+            className="update-overlay-install"
+            disabled={!status.installable || status.installing}
+            onClick={() => void emit("texthalo:install-update-requested")}
+          >
+            {status.installing ? "Installing…" : status.installable ? `Install ${status.version}` : "Preparing…"}
+          </button>
+        ) : null}
+        <button className="update-overlay-later" onClick={close} disabled={status.installing}>
+          {hasUpdate ? "Later" : "Done"}
+        </button>
+      </div>
+    </main>
+  );
+}
+
+export default function App() {
+  const isUpdateOverlay = new URLSearchParams(window.location.search).has("update-overlay");
+  return isUpdateOverlay ? <UpdateResultOverlay /> : <MainApp />;
 }
 
 const Icon = {
@@ -469,7 +575,7 @@ function Note({
 
 /* ── app ───────────────────────────────────────────────────────────── */
 
-export default function App() {
+function MainApp() {
   const [state, setState] = useState<UiState | null>(null);
   const [appVersion, setAppVersion] = useState<string | null>(null);
   const [setupOpen, setSetupOpen] = useState(false);
@@ -632,11 +738,13 @@ export default function App() {
       const update = await check();
       setUpdateAvailable(update);
       setUpdateMessage(update ? `Version ${update.version} is available.` : "You're up to date.");
+      void emit("texthalo:update-installable", { available: Boolean(update), version: update?.version ?? null });
       void invoke("set_update_menu_status_from_settings", {
         version: update?.version ?? null,
       }).catch(() => {});
     } catch (e) {
       setUpdateMessage(`Could not check for updates: ${String(e)}`);
+      void emit("texthalo:update-installable", { available: false, error: String(e) });
     } finally {
       setCheckingUpdate(false);
     }
@@ -646,11 +754,13 @@ export default function App() {
     if (!updateAvailable) return;
     setInstallingUpdate(true);
     setUpdateMessage(`Downloading version ${updateAvailable.version}…`);
+    void emit("texthalo:update-overlay-progress", { installing: true, message: "Preparing update…", error: false });
     try {
       await updateAvailable.downloadAndInstall((event) => {
         if (event.event === "Started") {
           updateDownload.current = { downloaded: 0, total: event.data.contentLength ?? 0 };
           setUpdateMessage("Downloading update…");
+          void emit("texthalo:update-overlay-progress", { installing: true, message: "Downloading update…", error: false });
         } else if (event.event === "Progress") {
           updateDownload.current.downloaded += event.data.chunkLength;
           const { downloaded, total } = updateDownload.current;
@@ -659,14 +769,19 @@ export default function App() {
               ? `Downloading update (${formatBytes(downloaded)} of ${formatBytes(total)})…`
               : `Downloaded ${formatBytes(downloaded)}…`,
           );
+          void emit("texthalo:update-overlay-progress", { installing: true, message: total
+            ? `Downloading update (${formatBytes(downloaded)} of ${formatBytes(total)})…`
+            : `Downloaded ${formatBytes(downloaded)}…`, error: false });
         } else {
           setUpdateMessage("Installing update and restarting…");
+          void emit("texthalo:update-overlay-progress", { installing: true, message: "Installing update and restarting…", error: false });
         }
       });
       await relaunch();
     } catch (e) {
       setUpdateMessage(`Update failed: ${String(e)}`);
       setInstallingUpdate(false);
+      void emit("texthalo:update-overlay-progress", { installing: false, message: `Update failed: ${String(e)}`, error: true });
     }
   }, [updateAvailable]);
 
@@ -681,17 +796,28 @@ export default function App() {
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
-    void listen<{ version: string | null }>("texthalo:background-update-status", (event) => {
-      if (event.payload.version) {
-        setUpdateMessage(`Version ${event.payload.version} is available.`);
-        void checkForUpdates(); // Load the installable Update object for the About panel.
-      } else {
-        setUpdateAvailable(null);
-        setUpdateMessage("You're up to date.");
-      }
-    }).then((off) => { unlisten = off; });
+    void listen<{ version: string | null }>(
+      "texthalo:background-update-status",
+      (event) => {
+        if (event.payload.version) {
+          setUpdateMessage(`Version ${event.payload.version} is available.`);
+          void checkForUpdates(); // Load the installable Update object for the About panel.
+        } else {
+          setUpdateAvailable(null);
+          setUpdateMessage("You're up to date.");
+          void emit("texthalo:update-installable", { available: false });
+        }
+      },
+    ).then((off) => { unlisten = off; });
     return () => unlisten?.();
   }, [checkForUpdates]);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    void listen("texthalo:install-update-requested", () => void installAvailableUpdate())
+      .then((off) => { unlisten = off; });
+    return () => unlisten?.();
+  }, [installAvailableUpdate]);
 
   const refresh = useCallback(async () => {
     if (pendingSaves.current > 0) return;
@@ -1031,6 +1157,8 @@ export default function App() {
       }}
       onRecordShortcut={() => setRecording("speak")}
       onFinish={() => setSetupOpen(false)}
+      onLoadPlans={() => invoke<SetupPlansResponse>("desktop_billing_plans")}
+      onOpenPlans={() => { void openUrl(`${websiteUrl}/pricing/`); }}
     />;
   }
 

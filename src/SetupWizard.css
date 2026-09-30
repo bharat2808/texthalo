@@ -205,6 +205,43 @@
   font: 16px var(--mono);
 }
 
+.setup-plans {
+  width: 100%;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.setup-plan-card {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 11px 10px;
+  border: 1px solid var(--separator);
+  border-radius: var(--radius-card);
+  background: color-mix(in srgb, var(--control-bg) 50%, transparent);
+}
+
+.setup-plan-card.featured {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--separator));
+  background: color-mix(in srgb, var(--accent) 7%, var(--control-bg));
+}
+
+.setup-plan-card > span:not(.setup-plan-price),
+.setup-plan-card small,
+.setup-plan-loading {
+  color: var(--label-secondary);
+  font-size: 10px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.setup-plan-price {
+  font-size: 13px;
+  font-weight: 650;
+}
+
 .setup-wizard-footer {
   min-height: 48px;
   padding-top: 12px;

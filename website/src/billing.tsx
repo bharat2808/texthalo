@@ -2,10 +2,20 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { authClient, billingApiHeaders, billingApiUrl, getAccessToken, promptSignIn, safeInternalReturnTo, startCheckout, startCreditTopupCheckout } from "./auth";
 
 type PlanId = "plus" | "creator";
-type Plan = { id: PlanId; creditsPerPeriod: number };
+type PlanCard = {
+  id: "free" | PlanId;
+  name: string;
+  description: string;
+  price: { unitAmount: number; currency: string; interval: string | null; intervalCount?: number } | null;
+  creditsPerPeriod: number;
+  cloneLimit: number;
+  features: string[];
+  displayOrder: number;
+  action?: string;
+};
 type CreditTopupPack = { id: string; priceCents: number; credits: number };
 type CreditBalanceBreakdown = { totalCredits: number; planCredits: number; topupCredits: number; otherCredits: number };
-type BillingStatus = { billingEnabled: boolean; plans: Plan[]; topups?: CreditTopupPack[] };
+type BillingStatus = { billingEnabled: boolean; plans: PlanCard[]; topups?: CreditTopupPack[] };
 type BillingAccount = {
   availableCredits?: number;
   creditBreakdown?: CreditBalanceBreakdown;
@@ -20,11 +30,14 @@ const PUBLIC_TOPUP_PACKS: CreditTopupPack[] = [
   { id: "topup-20", priceCents: 2_000, credits: 120_000 },
 ];
 
-const PLANS = [
+const FALLBACK_PLANS: PlanCard[] = [
   {
     id: "free" as const,
     name: "Free",
-    price: "$0",
+    price: { unitAmount: 0, currency: "usd", interval: null },
+    creditsPerPeriod: 0,
+    cloneLimit: 0,
+    displayOrder: 0,
     description: "A calm place to start listening.",
     features: [
       "Apple native voices",
@@ -37,31 +50,44 @@ const PLANS = [
   {
     id: "plus" as const,
     name: "Plus",
-    price: "$9.99",
+    price: { unitAmount: 999, currency: "usd", interval: "month", intervalCount: 1 },
+    creditsPerPeriod: 80_000,
+    cloneLimit: 0,
+    displayOrder: 1,
     description: "Hosted voices when you want a faster path.",
     features: [
       "Everything in Free",
       "Fish Audio hosted voices",
-      "80,000 credits each month",
-      "About 195 minutes of spoken English*",
+      "80,000 hosted credits each month",
     ],
     action: "Choose Plus",
   },
   {
     id: "creator" as const,
     name: "Creator",
-    price: "$19.99",
+    price: { unitAmount: 1999, currency: "usd", interval: "month", intervalCount: 1 },
+    creditsPerPeriod: 150_000,
+    cloneLimit: 5,
+    displayOrder: 2,
     description: "More hosted audio, with saved Fish clones.",
     features: [
       "Everything in Free",
       "Fish Audio hosted voices",
-      "150,000 credits each month",
-      "About 370 minutes of spoken English*",
+      "150,000 hosted credits each month",
       "Up to five saved Fish Audio clones",
     ],
     action: "Choose Creator",
   },
 ];
+
+function formatPlanPrice(price: PlanCard["price"]): string {
+  if (!price) return "Price unavailable";
+  const fractionDigits = new Intl.NumberFormat(undefined, { style: "currency", currency: price.currency }).resolvedOptions().maximumFractionDigits ?? 2;
+  const amount = new Intl.NumberFormat(undefined, { style: "currency", currency: price.currency }).format(price.unitAmount / (10 ** fractionDigits));
+  if (!price.interval) return amount;
+  const count = price.intervalCount ?? 1;
+  return `${amount} / ${count > 1 ? `${count} ` : ""}${price.interval}${count > 1 ? "s" : ""}`;
+}
 
 const SOURCE = "https://github.com/bharat2808/texthalo";
 const DOWNLOAD = `${SOURCE}/releases/latest/download/TextHalo-macOS-aarch64.dmg`;
@@ -329,35 +355,36 @@ function PricingContent() {
     }
   }
 
-  const checkoutUnavailable = billing?.billingEnabled === false;
+  const checkoutUnavailable = billingState.loading || billingState.unavailable || !billingApiUrl || billing?.billingEnabled === false;
   const topupPacks = billing?.topups?.length ? billing.topups : PUBLIC_TOPUP_PACKS;
   const signedIn = Boolean(session.data?.user);
   const topupCheckoutUnavailable = billingState.loading || billingState.unavailable || billing?.billingEnabled !== true || !billing?.topups?.length || !billingApiUrl;
+  const planCards = billingState.unavailable || !billing ? FALLBACK_PLANS : billing.plans;
 
   return <div className="site-shell"><SiteHeader /><main className="pricing-page section-wrap">
     <div className="eyebrow"><span className="eyebrow-line" /> A VOICE THAT FITS YOUR WORKFLOW</div>
     <h1>Start free.<br /><em>Listen for longer.</em></h1>
     <p className="pricing-intro">Every plan includes TextHalo’s local voices. Add Fish Audio hosted generation when you want the convenience of cloud voices and monthly usage credits.</p>
     <div className="plan-grid">
-      {PLANS.map((plan) => {
+      {planCards.map((plan) => {
         const paid = plan.id !== "free";
         const isCurrentPlan = paid && plan.id === currentPlan;
         const missingPlan = paid && billing?.billingEnabled && !billing.plans.some((item) => item.id === plan.id);
-        const disabled = paid && (checkoutUnavailable || missingPlan || busyPlan !== null || busyTopup !== null);
-        const actionLabel = isCurrentPlan ? "Manage current plan" : currentPlan ? `Switch to ${plan.name}` : plan.action;
+        const disabled = paid && (checkoutUnavailable || missingPlan || !plan.price || busyPlan !== null || busyTopup !== null);
+        const actionLabel = isCurrentPlan ? "Manage current plan" : currentPlan ? `Switch to ${plan.name}` : plan.action ?? `Choose ${plan.name}`;
         return <article key={plan.id} className={`plan-card${plan.id === "creator" ? " plan-card-featured" : ""}${isCurrentPlan ? " plan-card-current" : ""}`}>
           {plan.id === "creator" && <span className="plan-ribbon">FOR YOUR CREATIVE WORK</span>}
           {isCurrentPlan && <span className="plan-current-badge">CURRENT PLAN</span>}
           <div className="plan-name">{plan.name}</div>
-          <div className="plan-price">{plan.price}<span>{paid ? "/ month" : ""}</span></div>
+          <div className="plan-price">{formatPlanPrice(plan.price)}</div>
           <p className="plan-description">{plan.description}</p>
           <ul>{plan.features.map((feature) => <li key={feature}><span aria-hidden="true">✓</span>{feature}</li>)}</ul>
           {plan.id === "free"
             ? <a className="button button-plan button-plan-light" href={DOWNLOAD}>Download TextHalo <span className="arrow">→</span></a>
-            : <button className={`button button-plan${plan.id === "creator" ? " button-plan-dark" : " button-plan-light"}`} type="button" disabled={disabled} onClick={() => void choosePlan(plan.id)}>
+            : <button className={`button button-plan${plan.id === "creator" ? " button-plan-dark" : " button-plan-light"}`} type="button" disabled={disabled} onClick={() => plan.id !== "free" && void choosePlan(plan.id)}>
                 {busyPlan === plan.id ? "Opening checkout…" : actionLabel}<span className="arrow">→</span>
               </button>}
-          {paid && <small className="plan-note">{checkoutUnavailable ? "Checkout is temporarily unavailable." : missingPlan ? "Checkout setup is pending for this plan." : isCurrentPlan ? "Manage your subscription securely with Stripe." : currentPlan ? "Plan changes are confirmed securely with Stripe." : "Monthly checkout is processed securely by Stripe."}</small>}
+          {paid && <small className="plan-note">{checkoutUnavailable ? "Checkout is temporarily unavailable." : missingPlan ? "Checkout setup is pending for this plan." : !plan.price ? "Pricing is temporarily unavailable." : isCurrentPlan ? "Manage your subscription securely with Stripe." : currentPlan ? "Plan changes are confirmed securely with Stripe." : "Checkout is processed securely by Stripe."}</small>}
         </article>;
       })}
     </div>

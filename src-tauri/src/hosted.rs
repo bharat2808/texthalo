@@ -434,6 +434,10 @@ pub async fn desktop_account() -> Result<Value, String> {
     json_request(reqwest::Method::GET, "/v1/account", None).await
 }
 #[tauri::command]
+pub async fn desktop_billing_plans() -> Result<Value, String> {
+    public_json_request("/v1/billing/plans").await
+}
+#[tauri::command]
 pub async fn desktop_voices(query: String, language: String, page: u32) -> Result<Value, String> {
     let q = url::form_urlencoded::byte_serialize(query.as_bytes()).collect::<String>();
     let language = url::form_urlencoded::byte_serialize(language.as_bytes()).collect::<String>();

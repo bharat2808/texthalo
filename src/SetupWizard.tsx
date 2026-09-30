@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import "./SetupWizard.css";
 
 type WizardSettings = {
@@ -10,6 +10,14 @@ type WizardSettings = {
 };
 
 type WizardVoice = { name: string; locale: string; novelty: boolean };
+type SetupPlan = {
+  id: string;
+  name: string;
+  description: string;
+  price: { unitAmount: number; currency: string; interval: string | null; intervalCount?: number } | null;
+  features: string[];
+};
+export type SetupPlansResponse = { billingEnabled: boolean; plans: SetupPlan[] };
 
 type SetupWizardProps = {
   settings: WizardSettings;
@@ -27,9 +35,21 @@ type SetupWizardProps = {
   onInstallKokoro: () => void;
   onRecordShortcut: () => void;
   onFinish: () => void | Promise<void>;
+  onLoadPlans: () => Promise<SetupPlansResponse>;
+  onOpenPlans: () => void;
 };
 
 const STEPS = ["Access", "Voice", "Shortcut", "Ready"];
+
+function formatPlanPrice(price: SetupPlan["price"]): string {
+  if (!price) return "Pricing unavailable";
+  const formatter = new Intl.NumberFormat(undefined, { style: "currency", currency: price.currency });
+  const digits = formatter.resolvedOptions().maximumFractionDigits ?? 2;
+  const amount = formatter.format(price.unitAmount / (10 ** digits));
+  if (!price.interval) return amount;
+  const count = price.intervalCount ?? 1;
+  return `${amount} / ${count > 1 ? `${count} ` : ""}${price.interval}${count > 1 ? "s" : ""}`;
+}
 
 export default function SetupWizard({
   settings,
@@ -47,8 +67,13 @@ export default function SetupWizard({
   onInstallKokoro,
   onRecordShortcut,
   onFinish,
+  onLoadPlans,
+  onOpenPlans,
 }: SetupWizardProps) {
   const [step, setStep] = useState(0);
+  const plansRequested = useRef(false);
+  const [plans, setPlans] = useState<SetupPlan[] | null>(null);
+  const [plansError, setPlansError] = useState(false);
   const [selectedEngine, setSelectedEngine] = useState<"apple" | "kokoro" | null>(
     settings.engine === "apple" || settings.engine === "kokoro" ? settings.engine : null,
   );
@@ -64,6 +89,12 @@ export default function SetupWizard({
   useEffect(() => {
     if (kokoroInstall) setStartingKokoro(false);
   }, [kokoroInstall]);
+
+  useEffect(() => {
+    if (step !== 3 || plansRequested.current) return;
+    plansRequested.current = true;
+    void onLoadPlans().then((result) => setPlans(result.plans)).catch(() => setPlansError(true));
+  }, [onLoadPlans, step]);
 
   const finish = async () => {
     if (settings.engine === "kokoro" && !kokoroInstalled) await onSave({ engine: "apple" });
@@ -148,8 +179,17 @@ export default function SetupWizard({
 
         {step === 3 ? <>
           <div className="setup-wizard-kicker">YOU’RE ALL SET</div>
-          <h1>A little more<br />room to listen.</h1>
-          <p>Choose text in another app and press <strong>{settings.shortcuts.speak.split("+").join(" + ")}</strong>. You can change voices, shortcuts, and capture preferences any time in Settings.</p>
+          <h1>Free to start.<br />More when you need it.</h1>
+          <p>Choose text in another app and press <strong>{settings.shortcuts.speak.split("+").join(" + ")}</strong>. Local voices are free; hosted voices are optional.</p>
+          {plans ? <div className="setup-plans" aria-label="TextHalo plans">
+            {plans.map((plan) => <article className={`setup-plan-card${plan.id === "creator" ? " featured" : ""}`} key={plan.id}>
+              <strong>{plan.name}</strong>
+              <span className="setup-plan-price">{formatPlanPrice(plan.price)}</span>
+              <span>{plan.description}</span>
+              {plan.features.filter((feature) => feature !== "Everything in Free").slice(0, 3).map((feature) => <small key={feature}>{feature}</small>)}
+            </article>)}
+          </div> : <span className="setup-plan-loading">{plansError ? "Plan details aren’t available right now." : "Loading current plans…"}</span>}
+          <button className="plain" onClick={onOpenPlans}>Compare plans ↗</button>
           {!trusted ? <div className="setup-permission-state">You can finish setup now, but grant Accessibility access before trying to read selections.</div> : null}
         </> : null}
       </section>
