@@ -29,7 +29,7 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
         WebviewUrl::App("index.html?update-overlay".into()),
     )
     .title("TextHalo update")
-    .inner_size(390.0, 180.0)
+    .inner_size(430.0, 250.0)
     .decorations(false)
     .transparent(true)
     .resizable(false)
@@ -51,18 +51,24 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
 }
 
 pub fn show_update_result(app: &AppHandle, version: Option<String>) {
-    let status = crate::UpdateOverlayStatus {
-        visible: true,
-        version,
-        installable: false,
-        installing: false,
-        message: None,
-        error: false,
+    let state = app.state::<AppState>();
+    let mut current = state.update_overlay_status.lock().unwrap();
+    let status = if current.installing {
+        let mut status = current.clone();
+        status.visible = true;
+        status
+    } else {
+        crate::UpdateOverlayStatus {
+            visible: true,
+            version,
+            installable: false,
+            installing: false,
+            message: None,
+            error: false,
+        }
     };
-    *app.state::<AppState>()
-        .update_overlay_status
-        .lock()
-        .unwrap() = status.clone();
+    *current = status.clone();
+    drop(current);
 
     if let Some(window) = app.get_webview_window("update-overlay") {
         let _ = window.center();

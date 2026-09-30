@@ -162,6 +162,32 @@ type UpdateOverlayStatus = {
   error: boolean;
 };
 
+// Persist before broadcasting so opening/reloading a window cannot lose a result.
+let updateStatusQueue = Promise.resolve();
+function publishUpdateStatus(status: Omit<UpdateOverlayStatus, "visible">) {
+  updateStatusQueue = updateStatusQueue.then(() => invoke<void>("publish_update_status", {
+    status: { ...status, visible: false },
+  })).catch((error) => console.error("Could not publish update status", error));
+  return updateStatusQueue;
+}
+
+function updateErrorMessage(error: unknown): string {
+  const detail = String(error);
+  if (/platform.*(not found|were found)/i.test(detail)) {
+    return "This release has no compatible update for this build of TextHalo. Please wait for a release supporting your Mac architecture.";
+  }
+  if (/os error (1|13)\b|permission denied|authentication failed|Failed to move the new app/i.test(detail)) {
+    return `macOS could not replace TextHalo. Quit the app and use Finder to install the new version; ask your administrator if prompted. Details: ${detail}`;
+  }
+  if (/os error (18|30)\b|cross-device|read-only/i.test(detail)) {
+    return `Copy TextHalo into Applications on your startup disk, eject the installer, and reopen it before updating. Details: ${detail}`;
+  }
+  if (/os error 28\b|no space left/i.test(detail)) {
+    return "There is not enough free disk space to install the update. Free some space and try again.";
+  }
+  return detail;
+}
+
 function UpdateResultOverlay() {
   // Paint immediately. The native window can be shown as soon as the tray check
   // finishes, before this webview has completed its first invoke/listener setup.
@@ -176,47 +202,21 @@ function UpdateResultOverlay() {
 
   useEffect(() => {
     let disposed = false;
-    const unlisteners: Array<() => void> = [];
-    let statusPoll: number | undefined;
-    const syncStatus = () => void invoke<UpdateOverlayStatus>("get_update_overlay_status")
-      .then((initial) => {
-        // This webview starts hidden at app launch. Keep the immediate placeholder
-        // when the initial state is empty; poll until a tray action publishes a result.
-        if (!disposed && initial.visible) {
-          setStatus(initial);
-          if (statusPoll !== undefined) {
-            window.clearInterval(statusPoll);
-            statusPoll = undefined;
-          }
-        }
-      })
-      .catch((cause) => {
-        if (!disposed) setStatus((current) => ({
-          ...current,
-          message: `Could not load update status: ${String(cause)}`,
-          error: true,
-        }));
+    let off: (() => void) | undefined;
+    let receivedEvent = false;
+    void (async () => {
+      off = await listen<UpdateOverlayStatus>("texthalo:update-overlay", (event) => {
+        receivedEvent = true;
+        if (!disposed) setStatus(event.payload);
       });
-    syncStatus();
-    statusPoll = window.setInterval(syncStatus, 500);
-    void listen<UpdateOverlayStatus>("texthalo:update-overlay", (event) => setStatus(event.payload))
-      .then((off) => { if (disposed) off(); else unlisteners.push(off); });
-    void listen<{ available: boolean; version?: string | null; error?: string }>("texthalo:update-installable", (event) => {
-      setStatus((current) => current ? {
-        ...current,
-        installable: event.payload.available,
-        message: event.payload.error ?? current.message,
-        error: Boolean(event.payload.error),
-      } : current);
-    }).then((off) => { if (disposed) off(); else unlisteners.push(off); });
-    void listen<{ installing: boolean; message: string; error: boolean }>("texthalo:update-overlay-progress", (event) => {
-      setStatus((current) => current ? { ...current, ...event.payload } : current);
-    }).then((off) => { if (disposed) off(); else unlisteners.push(off); });
-    return () => {
-      disposed = true;
-      if (statusPoll !== undefined) window.clearInterval(statusPoll);
-      unlisteners.forEach((off) => off());
-    };
+      if (disposed) { off(); return; }
+      const initial = await invoke<UpdateOverlayStatus>("get_update_overlay_status");
+      if (!disposed && !receivedEvent) setStatus(initial);
+    })().catch((cause) => {
+      if (!disposed) setStatus((current) => ({ ...current, visible: true,
+        message: `Could not load update status: ${String(cause)}`, error: true }));
+    });
+    return () => { disposed = true; off?.(); };
   }, []);
 
   const close = () => void invoke("close_update_overlay");
@@ -229,7 +229,7 @@ function UpdateResultOverlay() {
       <button className="update-overlay-close" onClick={close} aria-label="Close">×</button>
       <img className="update-overlay-mark" src={appLogo} alt="" />
       <h1 id="update-title">
-        {checking ? "Checking for updates…" : status.error ? "Couldn’t check for updates" : hasUpdate ? `TextHalo ${status.version} is available` : "You’re up to date"}
+        {checking ? "Checking for updates…" : status.error ? "Update needs attention" : hasUpdate ? `TextHalo ${status.version} is available` : "You’re up to date"}
       </h1>
       <p className={status.error ? "update-overlay-message error" : "update-overlay-message"}>
         {status.message ?? (hasUpdate
@@ -243,7 +243,7 @@ function UpdateResultOverlay() {
             disabled={!status.installable || status.installing}
             onClick={() => void emit("texthalo:install-update-requested")}
           >
-            {status.installing ? "Installing…" : status.installable ? `Install ${status.version}` : "Preparing…"}
+            {status.installing ? "Installing…" : status.installable ? `Install ${status.version}` : status.error ? "Installation unavailable" : "Preparing…"}
           </button>
         ) : null}
         <button className="update-overlay-later" onClick={close} disabled={status.installing}>
@@ -638,6 +638,8 @@ function MainApp() {
   const saveRevision = useRef(0);
   const pendingSaves = useRef(0);
   const updateDownload = useRef({ downloaded: 0, total: 0 });
+  const updateBusy = useRef(false);
+  const checkBusy = useRef(false);
 
   useEffect(() => {
     void getVersion().then(setAppVersion).catch(() => setAppVersion("unknown"));
@@ -729,57 +731,88 @@ function MainApp() {
   };
 
   const checkForUpdates = useCallback(async () => {
+    if (updateBusy.current || checkBusy.current) return;
+    checkBusy.current = true;
     setCheckingUpdate(true);
     setUpdateMessage("Checking for updates…");
     setUpdateAvailable(null);
     try {
       const update = await check();
-      setUpdateAvailable(update);
-      setUpdateMessage(update ? `Version ${update.version} is available.` : "You're up to date.");
-      void emit("texthalo:update-installable", { available: Boolean(update), version: update?.version ?? null });
+      let issue: string | null = null;
+      if (update) {
+        try { await invoke("check_update_installation"); }
+        catch (e) {
+          issue = updateErrorMessage(e);
+          void invoke("record_update_failure", { stage: "preflight", detail: String(e) }).catch(console.error);
+        }
+      }
+      setUpdateAvailable(issue ? null : update);
+      const message = issue ?? (update ? `Version ${update.version} is available.` : "You're up to date.");
+      setUpdateMessage(message);
+      await publishUpdateStatus({ version: update?.version ?? null, installable: Boolean(update) && !issue,
+        installing: false, message, error: Boolean(issue) });
       void invoke("set_update_menu_status_from_settings", {
         version: update?.version ?? null,
       }).catch(() => {});
     } catch (e) {
-      setUpdateMessage(`Could not check for updates: ${String(e)}`);
-      void emit("texthalo:update-installable", { available: false, error: String(e) });
+      const message = updateErrorMessage(e);
+      setUpdateMessage(message);
+      void invoke("record_update_failure", { stage: "check", detail: String(e) }).catch(console.error);
+      await publishUpdateStatus({ version: null, installable: false, installing: false, message, error: true });
     } finally {
+      checkBusy.current = false;
       setCheckingUpdate(false);
     }
   }, []);
 
   const installAvailableUpdate = useCallback(async () => {
-    if (!updateAvailable) return;
+    if (!updateAvailable || updateBusy.current) return;
+    updateBusy.current = true;
     setInstallingUpdate(true);
-    setUpdateMessage(`Downloading version ${updateAvailable.version}…`);
-    void emit("texthalo:update-overlay-progress", { installing: true, message: "Preparing update…", error: false });
+    let stage = "preflight";
+    let prepared = false;
+    const report = (message: string, error = false, installing = true) => {
+      setUpdateMessage(message);
+      return publishUpdateStatus({ version: updateAvailable.version, installable: !installing && stage !== "relaunch",
+        installing, message, error });
+    };
+    await report("Checking installation permissions…");
     try {
+      await invoke("prepare_update_installation");
+      prepared = true;
+      stage = "download";
       await updateAvailable.downloadAndInstall((event) => {
         if (event.event === "Started") {
           updateDownload.current = { downloaded: 0, total: event.data.contentLength ?? 0 };
-          setUpdateMessage("Downloading update…");
-          void emit("texthalo:update-overlay-progress", { installing: true, message: "Downloading update…", error: false });
+          void report("Downloading update…");
         } else if (event.event === "Progress") {
           updateDownload.current.downloaded += event.data.chunkLength;
           const { downloaded, total } = updateDownload.current;
-          setUpdateMessage(
+          void report(
             total
               ? `Downloading update (${formatBytes(downloaded)} of ${formatBytes(total)})…`
               : `Downloaded ${formatBytes(downloaded)}…`,
           );
-          void emit("texthalo:update-overlay-progress", { installing: true, message: total
-            ? `Downloading update (${formatBytes(downloaded)} of ${formatBytes(total)})…`
-            : `Downloaded ${formatBytes(downloaded)}…`, error: false });
         } else {
-          setUpdateMessage("Installing update and restarting…");
-          void emit("texthalo:update-overlay-progress", { installing: true, message: "Installing update and restarting…", error: false });
+          stage = "install";
+          void report("Installing update…");
         }
       });
+      prepared = false;
+      await invoke("finish_update_installation", { success: true }).catch(console.error);
+      stage = "relaunch";
+      await report("Update installed. Restarting TextHalo…");
       await relaunch();
     } catch (e) {
-      setUpdateMessage(`Update failed: ${String(e)}`);
+      const recovery = prepared
+        ? await invoke<string>("finish_update_installation", { success: false }).catch(String)
+        : "";
+      void invoke("record_update_failure", { stage, detail: String(e) }).catch(console.error);
+      await report(stage === "relaunch" ? "The update was installed, but TextHalo could not restart. Quit and reopen TextHalo from Applications." : `${updateErrorMessage(e)} ${recovery}`.trim(), true, false);
+      if (stage === "relaunch") setUpdateAvailable(null);
+    } finally {
+      updateBusy.current = false;
       setInstallingUpdate(false);
-      void emit("texthalo:update-overlay-progress", { installing: false, message: `Update failed: ${String(e)}`, error: true });
     }
   }, [updateAvailable]);
 
@@ -797,13 +830,15 @@ function MainApp() {
     void listen<{ version: string | null }>(
       "texthalo:background-update-status",
       (event) => {
+        if (updateBusy.current) return;
         if (event.payload.version) {
           setUpdateMessage(`Version ${event.payload.version} is available.`);
           void checkForUpdates(); // Load the installable Update object for the About panel.
         } else {
           setUpdateAvailable(null);
           setUpdateMessage("You're up to date.");
-          void emit("texthalo:update-installable", { available: false });
+          void publishUpdateStatus({ version: null, installable: false, installing: false,
+            message: "You're up to date.", error: false });
         }
       },
     ).then((off) => { unlisten = off; });

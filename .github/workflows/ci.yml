@@ -7,7 +7,7 @@ on:
 
 jobs:
   check:
-    runs-on: macos-latest
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
 
@@ -35,6 +35,12 @@ jobs:
       - name: frontend typecheck + build
         run: npm run build
 
+      - name: release and website regression tests
+        run: npm test
+
+      - name: website build and prerender
+        run: npm run website:build
+
       # The licence decision, enforced. Two independent checks:
       #  1. offline graph scan (no install needed, works on any contributor machine)
       #  2. cargo-deny (authoritative: SPDX evaluation, exceptions, source pinning)
@@ -47,7 +53,7 @@ jobs:
         working-directory: src-tauri
 
   bundle:
-    runs-on: macos-latest
+    runs-on: macos-15
     needs: check
     steps:
       - uses: actions/checkout@v4
@@ -65,5 +71,5 @@ jobs:
           APPLE_SIGNING_IDENTITY: "-"
       - uses: actions/upload-artifact@v4
         with:
-          name: texthalo-app
+          name: texthalo-app-aarch64
           path: src-tauri/target/release/bundle/macos/TextHalo.app

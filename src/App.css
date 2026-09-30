@@ -94,6 +94,9 @@ body:has(.update-overlay) {
 }
 
 .update-overlay-message {
+  max-height: 85px;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
   min-height: 18px;
   margin: 0;
   color: var(--label-secondary);

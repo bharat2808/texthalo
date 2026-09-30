@@ -11,6 +11,7 @@ node_modules
 dist
 dist-website
 dist-ssr
+release-artifacts/
 *.local
 .playwright-cli
 output/playwright

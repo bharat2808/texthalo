@@ -1,7 +1,7 @@
 import { SiteHeader } from "./billing";
+import { DOWNLOAD_PAGE as DOWNLOAD } from "./downloads";
+import { version } from "../../package.json";
 
-const RELEASES = "https://github.com/bharat2808/texthalo/releases/latest";
-const DOWNLOAD = `${RELEASES}/download/TextHalo-macOS-aarch64.dmg`;
 const SOURCE = "https://github.com/bharat2808/texthalo";
 
 function Mark({ small = false }: { small?: boolean }) {
@@ -98,7 +98,7 @@ function Website() {
           <div className="privacy-copy"><div className="eyebrow"><span className="eyebrow-line" /> YOUR WORDS, YOUR CHOICE</div><h2>Privacy by<br /><em>where it happens.</em></h2><p>Apple, Kokoro, and Chatterbox speech runs on your Mac. If you choose hosted speech, selected text is sent to TextHalo’s service and the speech provider to generate audio. Optional text enhancement and hosted voice cloning involve additional processing.</p><div className="privacy-points"><div><span className="check-mark">✓</span><span><strong>Choose local or hosted speech</strong><small>Local voices process text on your Mac; hosted voices process it remotely.</small></span></div><div><span className="check-mark">✓</span><span><strong>Optional features stay optional</strong><small>Text enhancement and voice cloning are used only when you choose them.</small></span></div></div><a className="text-link" href="/privacy/">Read the privacy policy <Arrow /></a></div>
         </section>
 
-        <section className="closing-cta"><div className="closing-inner"><div className="closing-mark"><Mark /></div><div className="eyebrow eyebrow-light"><span className="eyebrow-line" /> READY WHEN YOU ARE</div><h2>Give your eyes<br /><em>a little break.</em></h2><p>TextHalo is free, open source, and made for your Mac.</p><a className="button button-cream button-large" href={DOWNLOAD} target="_blank" rel="noreferrer">Get TextHalo for macOS <Arrow /></a><span className="cta-version">Current version 0.1.6 <span>·</span> Requires macOS</span></div><div className="cta-decoration cta-dec-a"/><div className="cta-decoration cta-dec-b"/></section>
+        <section className="closing-cta"><div className="closing-inner"><div className="closing-mark"><Mark /></div><div className="eyebrow eyebrow-light"><span className="eyebrow-line" /> READY WHEN YOU ARE</div><h2>Give your eyes<br /><em>a little break.</em></h2><p>TextHalo is free, open source, and made for your Mac.</p><a className="button button-cream button-large" href={DOWNLOAD} target="_blank" rel="noreferrer">Get TextHalo for macOS <Arrow /></a><span className="cta-version">Current version {version} <span>·</span> Requires macOS</span></div><div className="cta-decoration cta-dec-a"/><div className="cta-decoration cta-dec-b"/></section>
       </main>
 
       <footer className="site-footer"><a className="wordmark footer-wordmark" href="#top"><Mark /><span>TextHalo</span></a><span className="footer-copy">A little more room to listen.</span><div className="footer-links"><a href="/pricing/">Pricing</a><a href="/demo/">Demo</a><a href="/stories/">Stories</a><a href="/blog/">Blog</a><a href={SOURCE} target="_blank" rel="noreferrer">GitHub <Arrow diagonal /></a><a href={`${SOURCE}/blob/master/LICENSE-APACHE`} target="_blank" rel="noreferrer">Apache 2.0</a><a href={`${SOURCE}/issues/new`} target="_blank" rel="noreferrer">Feedback <Arrow diagonal /></a></div><span className="copyright">© {new Date().getFullYear()} TextHalo</span></footer>

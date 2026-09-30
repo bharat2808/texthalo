@@ -25,11 +25,12 @@ mod speech;
 mod speech_job;
 pub mod spoken;
 mod streaming;
+mod update_safety;
 pub mod voices;
 
 use std::sync::Mutex;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Emitter, Manager};
@@ -63,7 +64,7 @@ pub struct AppState {
     update_overlay_status: Mutex<UpdateOverlayStatus>,
 }
 
-#[derive(Serialize, Clone, Default)]
+#[derive(Deserialize, Serialize, Clone, Default)]
 struct UpdateOverlayStatus {
     visible: bool,
     version: Option<String>,
@@ -179,6 +180,16 @@ fn get_update_overlay_status(app: AppHandle) -> UpdateOverlayStatus {
 }
 
 #[tauri::command]
+fn publish_update_status(app: AppHandle, mut status: UpdateOverlayStatus) {
+    let state = app.state::<AppState>();
+    let mut current = state.update_overlay_status.lock().unwrap();
+    status.visible = current.visible;
+    *current = status.clone();
+    drop(current);
+    let _ = app.emit("texthalo:update-overlay", status);
+}
+
+#[tauri::command]
 fn close_update_overlay(app: AppHandle) {
     app.state::<AppState>()
         .update_overlay_status
@@ -191,42 +202,70 @@ fn close_update_overlay(app: AppHandle) {
 }
 
 async fn check_for_updates_in_background(app: &AppHandle, show_result: bool) {
+    if app
+        .state::<AppState>()
+        .update_overlay_status
+        .lock()
+        .unwrap()
+        .installing
+    {
+        return;
+    }
     match app.updater() {
-        Ok(updater) => match updater.check().await {
-            Ok(Some(update)) => {
-                let version = update.version;
-                set_update_menu_status(app, Some(&version));
-                if show_result {
-                    overlay::show_update_result(app, Some(version.clone()));
-                }
-                let _ = app.emit(
-                    "texthalo:background-update-status",
-                    BackgroundUpdateStatus {
-                        version: Some(version),
-                    },
-                );
+        Ok(updater) => {
+            let result = updater.check().await;
+            if app
+                .state::<AppState>()
+                .update_overlay_status
+                .lock()
+                .unwrap()
+                .installing
+            {
+                return;
             }
-            Ok(None) => {
-                set_update_menu_status(app, None);
-                if show_result {
-                    overlay::show_update_result(app, None);
-                }
-                let _ = app.emit(
-                    "texthalo:background-update-status",
-                    BackgroundUpdateStatus { version: None },
-                );
-            }
-            Err(error) => {
-                eprintln!("[TextHalo] background update check failed: {error}");
-                if show_result {
-                    overlay::show_update_error(
-                        app,
-                        format!("Could not check for updates: {error}"),
+            match result {
+                Ok(Some(update)) => {
+                    let version = update.version;
+                    set_update_menu_status(app, Some(&version));
+                    if show_result {
+                        overlay::show_update_result(app, Some(version.clone()));
+                    }
+                    let _ = app.emit(
+                        "texthalo:background-update-status",
+                        BackgroundUpdateStatus {
+                            version: Some(version),
+                        },
                     );
                 }
+                Ok(None) => {
+                    set_update_menu_status(app, None);
+                    if show_result {
+                        overlay::show_update_result(app, None);
+                    }
+                    let _ = app.emit(
+                        "texthalo:background-update-status",
+                        BackgroundUpdateStatus { version: None },
+                    );
+                }
+                Err(error) => {
+                    eprintln!("[TextHalo] background update check failed: {error}");
+                    let _ = update_safety::record_update_failure(
+                        app.clone(),
+                        "check".into(),
+                        error.to_string(),
+                    );
+                    if show_result {
+                        overlay::show_update_error(app, update_safety::check_error(&error));
+                    }
+                }
             }
-        },
-        Err(error) => eprintln!("[TextHalo] could not initialize updater: {error}"),
+        }
+        Err(error) => {
+            eprintln!("[TextHalo] could not initialize updater: {error}");
+            if show_result {
+                overlay::show_update_error(app, update_safety::check_error(&error));
+            }
+        }
     }
 }
 
@@ -1015,6 +1054,7 @@ pub fn run() {
                 update_available_version: Mutex::new(None),
                 update_overlay_status: Mutex::new(UpdateOverlayStatus::default()),
             });
+            app.manage(update_safety::UpdateRecovery::default());
 
             if let Err(error) = shortcuts::apply(&handle) {
                 eprintln!("[TextHalo] shortcut setup failed: {error}");
@@ -1034,9 +1074,14 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            update_safety::check_update_installation,
+            update_safety::prepare_update_installation,
+            update_safety::finish_update_installation,
+            update_safety::record_update_failure,
             get_state,
             get_speech_status,
             get_update_overlay_status,
+            publish_update_status,
             close_update_overlay,
             save_settings,
             speak_selection_now,

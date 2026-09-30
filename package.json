@@ -5,6 +5,8 @@
   "license": "Apache-2.0",
   "type": "module",
   "scripts": {
+    "test": "node --test scripts/*.test.mjs",
+    "release:mac": "node scripts/release-macos.mjs",
     "dev": "vite",
     "build": "tsc && vite build",
     "typecheck": "tsc --noEmit",

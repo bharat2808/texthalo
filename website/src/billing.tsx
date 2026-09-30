@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
+import { DOWNLOAD_PAGE as DOWNLOAD } from "./downloads";
 import { authClient, billingApiHeaders, billingApiUrl, getAccessToken, promptSignIn, safeInternalReturnTo, startCheckout, startCreditTopupCheckout } from "./auth";
 
 type PlanId = "plus" | "creator";
@@ -90,7 +91,6 @@ function formatPlanPrice(price: PlanCard["price"]): string {
 }
 
 const SOURCE = "https://github.com/bharat2808/texthalo";
-const DOWNLOAD = `${SOURCE}/releases/latest/download/TextHalo-macOS-aarch64.dmg`;
 const TURNSTILE_SITE_KEY = import.meta.env.VITE_TURNSTILE_SITE_KEY?.trim() ?? "";
 
 declare global {
