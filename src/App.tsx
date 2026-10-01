@@ -629,6 +629,8 @@ function MainApp() {
   const pendingCloneIds = hostedClones.filter((clone) => cloneIsPending(clone.status)).map((clone) => clone.id);
   const pendingCloneKey = pendingCloneIds.join("\u0000");
   const [cloneName, setCloneName] = useState("");
+  const [cloneUploadError, setCloneUploadError] = useState("");
+  const [cloneUploadSuccess, setCloneUploadSuccess] = useState("");
   const [clonePath, setClonePath] = useState("");
   const [cloneConsent, setCloneConsent] = useState(false);
   const hostedQueryRef = useRef("");
@@ -1307,13 +1309,15 @@ function MainApp() {
   };
 
   const uploadClone = async () => {
-    if (!clonePath || !cloneName.trim() || !cloneConsent) return;
+    if (accountBusy || !clonePath || !cloneName.trim() || !cloneConsent) return;
     setAccountBusy(true); setAccountError("");
+    setCloneUploadError(""); setCloneUploadSuccess("");
     try {
-      await invoke("desktop_upload_clone", { path: clonePath, name: cloneName.trim(), consent: cloneConsent });
+      const created = await invoke<HostedClone>("desktop_upload_clone", { path: clonePath, name: cloneName.trim(), consent: cloneConsent });
       setClonePath(""); setCloneName(""); setCloneConsent(false);
-      const data = await invoke<{items: HostedClone[]}>("desktop_clones"); setHostedClones(data.items);
-    } catch (cause) { setAccountError(cause instanceof Error ? cause.message : String(cause)); }
+      setHostedClones((items) => [created, ...items.filter((item) => item.id !== created.id)]);
+      setCloneUploadSuccess(`“${created.name}” was uploaded and saved. ${created.status === "trained" ? "Ready to select in Voice → My hosted clones." : created.status === "failed" ? "Training failed; see its status above." : "Training is pending. It will be available in Voice → My hosted clones when ready."}`);
+    } catch (cause) { setCloneUploadError(cause instanceof Error ? cause.message : String(cause)); }
     finally { setAccountBusy(false); }
   };
 
@@ -2097,6 +2101,8 @@ function MainApp() {
                   <label className="toggle-row"><input type="checkbox" checked={cloneConsent} onChange={(event) => setCloneConsent(event.target.checked)} /><span>I own this voice or have permission to clone it. I understand this recording is uploaded to Fish Audio and saved to my account.</span></label>
                   <p className="field-hint" role="status">{!cloneName.trim() ? "Enter a voice name to continue." : !clonePath ? "Choose an audio recording to continue." : !cloneConsent ? "Confirm voice ownership or permission before uploading." : "Ready to upload your recording to Fish Audio."}</p>
                   <button className="plain" disabled={accountBusy || !cloneName.trim() || !clonePath || !cloneConsent} onClick={() => void uploadClone()}>{accountBusy ? "Uploading and creating…" : "Upload and create clone"}</button>
+                  {cloneUploadError ? <div role="alert"><Note kind="error" icon={Icon.xCircle()}>Clone was not created: {cloneUploadError}</Note></div> : null}
+                  {cloneUploadSuccess ? <div role="status"><Note kind="info" icon={Icon.checkCircle()}>{cloneUploadSuccess}</Note></div> : null}
                   <div className="card-note">Your plan includes up to {account.plans.find((plan) => plan.id === account.subscription?.planId)?.cloneLimit ?? 0} saved clones when cloning is enabled by the service.</div>
                 </Card> : null}
               </>

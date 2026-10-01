@@ -730,6 +730,7 @@ pub async fn stream_speech(
     voice_id: String,
     model_id: String,
     enhance: bool,
+    archive: bool,
 ) -> Result<(), String> {
     let token = access_token(false).await?;
     let base = origin()?;
@@ -766,6 +767,10 @@ pub async fn stream_speech(
         return Ok(());
     }
     app_state.spoken.activate_pcm(player.clone());
+    let history_root = archive.then(|| crate::history_dir(&app).ok()).flatten();
+    // One recorder for the entire request, across all provider chunks.
+    let mut recorder = history_root.as_deref()
+        .and_then(|dir| crate::history::PcmRecorder::new(dir).ok());
     let mut buffer = Vec::<u8>::new();
     let mut received = 0u64;
     let mut is_started = false;
@@ -786,6 +791,9 @@ pub async fn stream_speech(
                     .collect::<Vec<_>>();
                 buffer.drain(..even);
                 if !samples.is_empty() {
+                    if let Some(recorder) = recorder.as_mut() {
+                        recorder.write(&samples);
+                    }
                     player.push(samples, false);
                     if !is_started {
                         player.start()?;
@@ -864,6 +872,13 @@ pub async fn stream_speech(
     player.push(Vec::new(), true);
     while player.is_playing()? && app_state.job.lock().unwrap().is_current(job_id) {
         tokio::time::sleep(Duration::from_millis(40)).await;
+    }
+    if app_state.job.lock().unwrap().is_current(job_id) {
+        if let (Some(recorder), Some(dir)) = (recorder, history_root.as_deref()) {
+            if let Err(error) = recorder.save(dir, "Fish Audio", &voice_id, &text) {
+                eprintln!("[TextHalo] could not save hosted audio history: {error}");
+            }
+        }
     }
     Ok(())
 }

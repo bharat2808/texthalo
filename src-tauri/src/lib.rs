@@ -345,7 +345,7 @@ fn run_speech(
         let enhance = settings.fish.enhance_text;
         tauri::async_runtime::spawn(async move {
             let result =
-                hosted::stream_speech(app.clone(), id, text.clone(), voice, model_id, enhance)
+                hosted::stream_speech(app.clone(), id, text.clone(), voice, model_id, enhance, archive)
                     .await;
             let state = app.state::<AppState>();
             let mut job = state.job.lock().unwrap();
