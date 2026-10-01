@@ -27,22 +27,44 @@ export function createManifest(version, entries, notes = "") {
   return { version, notes, pub_date: new Date().toISOString(), platforms };
 }
 
+// Tauri updater 2.12 removes the first component from every tar entry. An
+// unwrapped TextHalo.app/ root therefore maps to the existing temp directory
+// and fails to unpack. Require and model the wrapper explicitly.
+export function updaterExtractionPaths(entries) {
+  const plist = entries.find((entry) => /^[^/]+\/[^/]+\.app\/Contents\/Info\.plist$/.test(entry));
+  if (!plist) throw new Error("Archive must contain one wrapper directory followed by a macOS app bundle (required by the Tauri updater extractor)");
+  const [wrapper, appName] = plist.split("/");
+  if (entries.some((entry) => !entry.startsWith(`${wrapper}/${appName}/`))) {
+    throw new Error("Updater archive entries must all be inside the wrapped app bundle");
+  }
+  return entries.map((entry) => {
+    const path = entry.split("/").slice(1).join("/");
+    if (!path) throw new Error("Updater archive contains an entry that would unpack into the existing temporary directory");
+    return path;
+  });
+}
+
 export async function inspectArchive(target, url, archivePath, signaturePath, verifyBundle) {
   // Inspect the actual executable in local release artifacts, not their filenames.
   const directory = await mkdtemp(join(tmpdir(), "texthalo-manifest-"));
   try {
     const entries = execFileSync("tar", ["-tzf", resolve(archivePath)], { encoding: "utf8" }).trim().split("\n");
     if (entries.some((entry) => entry.startsWith("/") || entry.split("/").includes(".."))) throw new Error("Unsafe archive path");
-    const plist = entries.find((entry) => /^[^/]+\.app\/Contents\/Info\.plist$/.test(entry));
-    if (!plist) throw new Error("Archive must contain a top-level macOS app bundle");
+    updaterExtractionPaths(entries);
+    const plist = entries.find((entry) => /^[^/]+\/[^/]+\.app\/Contents\/Info\.plist$/.test(entry));
+    const [wrapper, appName] = plist.split("/");
+    if (entries.some((entry) => !entry.startsWith(`${wrapper}/${appName}/`))) {
+      throw new Error("Updater archive entries must all be inside the wrapped app bundle");
+    }
     execFileSync("tar", ["-xzf", resolve(archivePath), "-C", directory]);
-    const readPlist = (key) => execFileSync("/usr/bin/plutil", ["-extract", key, "raw", "-o", "-", join(directory, plist)], { encoding: "utf8" }).trim();
+    const bundle = join(directory, wrapper, appName);
+    const readPlist = (key) => execFileSync("/usr/bin/plutil", ["-extract", key, "raw", "-o", "-", join(bundle, "Contents/Info.plist")], { encoding: "utf8" }).trim();
     const executable = readPlist("CFBundleExecutable");
     if (executable.includes("/") || executable === "..") throw new Error("Invalid bundle executable");
-    const binary = join(directory, plist.split("/")[0], "Contents", "MacOS", executable);
+    const binary = join(bundle, "Contents", "MacOS", executable);
     const archs = execFileSync("/usr/bin/lipo", ["-archs", binary], { encoding: "utf8" }).trim().split(/\s+/);
     if (readPlist("CFBundleIdentifier") !== "com.kiegen.app") throw new Error("Wrong bundle identifier");
-    if (verifyBundle) await verifyBundle(join(directory, plist.split("/")[0]));
+    if (verifyBundle) await verifyBundle(bundle);
     return { target, url, architectures: archs, bundleVersion: readPlist("CFBundleShortVersionString"),
       signature: await readFile(signaturePath, "utf8") };
   } finally {
