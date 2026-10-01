@@ -31,16 +31,17 @@ test("refuses mismatched versions, missing signatures, duplicate targets, and in
   assert.throws(() => createManifest("1.2.3", [...entries(), ...entries()]), /duplicate/);
 });
 
-test("updater archive wrapper produces an app path after Tauri strips the first component", () => {
+test("updater archive strips the app-name component and rejects AppleDouble sidecars", () => {
   assert.deepEqual(updaterExtractionPaths([
-    "aarch64-updater-root/TextHalo.app/",
-    "aarch64-updater-root/TextHalo.app/Contents/",
-    "aarch64-updater-root/TextHalo.app/Contents/Info.plist",
-  ]), ["TextHalo.app/", "TextHalo.app/Contents/", "TextHalo.app/Contents/Info.plist"]);
+    "TextHalo.app/",
+    "TextHalo.app/Contents/",
+    "TextHalo.app/Contents/Info.plist",
+  ]), ["", "Contents/", "Contents/Info.plist"]);
   assert.throws(() => updaterExtractionPaths([
+    "._TextHalo.app",
     "TextHalo.app/",
     "TextHalo.app/Contents/Info.plist",
-  ]), /wrapper directory/);
+  ]), /AppleDouble/);
 });
 
 test("CLI inspects real Mach-O archives and rejects swapped architectures", { skip: process.platform !== "darwin" }, async () => {
@@ -49,12 +50,12 @@ test("CLI inspects real Mach-O archives and rejects swapped architectures", { sk
     const artifacts = [];
     for (const arch of ["arm64", "x86_64"]) {
       const folder = join(root, arch);
-      const contents = join(folder, "updater-root", "TextHalo.app", "Contents");
+      const contents = join(folder, "TextHalo.app", "Contents");
       await mkdir(join(contents, "MacOS"), { recursive: true });
       execFileSync("/usr/bin/clang", ["-arch", arch, "-mmacosx-version-min=11.0", "-x", "c", "-o", join(contents, "MacOS", "texthalo"), "-"], { input: "int main(void) { return 0; }" });
       await writeFile(join(contents, "Info.plist"), `<?xml version="1.0"?><plist version="1.0"><dict><key>CFBundleExecutable</key><string>texthalo</string><key>CFBundleIdentifier</key><string>com.kiegen.app</string><key>CFBundleShortVersionString</key><string>1.2.3</string></dict></plist>`);
       const archive = join(root, `${arch}.app.tar.gz`);
-      execFileSync("tar", ["-czf", archive, "-C", folder, "updater-root/TextHalo.app"]);
+      execFileSync("tar", ["-czf", archive, "-C", folder, "TextHalo.app"], { env: { ...process.env, COPYFILE_DISABLE: "1" } });
       const archiveEntries = execFileSync("tar", ["-tzf", archive], { encoding: "utf8" }).trim().split("\n");
       assert.doesNotThrow(() => updaterExtractionPaths(archiveEntries));
       await writeFile(`${archive}.sig`, `${arch}-test-signature`);

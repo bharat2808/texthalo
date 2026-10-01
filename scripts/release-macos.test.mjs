@@ -57,9 +57,9 @@ test("build plan produces the Apple Silicon DMG and signs updater archives only 
     const staple = steps.findIndex((s, i) => i > build && s.args[0] === "stapler" && s.args[1] === "staple" && s.args[2].endsWith(".app"));
     const tar = steps.findIndex(s => s.command === "tar" && s.args.includes(`/out/TextHalo-${arch}.app.tar.gz`));
     const sign = steps.findIndex(s => s.args.includes("signer") && s.args.includes(`/out/TextHalo-${arch}.app.tar.gz`));
-    const stageApp = steps.findIndex(s => s.command === "/usr/bin/ditto" && s.args[1] === `/out/${arch}-updater-root/TextHalo.app`);
-    assert.ok(build < staple && staple < stageApp && stageApp < tar && tar < sign);
-    assert.ok(steps[tar].args.includes(`${arch}-updater-root/TextHalo.app`));
+    assert.ok(build < staple && staple < tar && tar < sign);
+    assert.ok(steps[tar].args.includes("TextHalo.app"));
+    assert.equal(steps[tar].env.COPYFILE_DISABLE, "1");
     assert.ok(steps.some(s => s.args.includes(`/out/TextHalo-macOS-${arch}.dmg`) && s.args.includes("create")));
   }
 });

@@ -27,21 +27,21 @@ export function createManifest(version, entries, notes = "") {
   return { version, notes, pub_date: new Date().toISOString(), platforms };
 }
 
-// Tauri updater 2.12 removes the first component from every tar entry. An
-// unwrapped TextHalo.app/ root therefore maps to the existing temp directory
-// and fails to unpack. Require and model the wrapper explicitly.
+// Tauri updater 2.12 removes the first component from every tar entry. The
+// app bundle must therefore be the root component so Contents/ is installed
+// directly at the app root. AppleDouble ._ entries are unsafe: stripping
+// their only component maps a file onto the existing temp directory.
 export function updaterExtractionPaths(entries) {
-  const plist = entries.find((entry) => /^[^/]+\/[^/]+\.app\/Contents\/Info\.plist$/.test(entry));
-  if (!plist) throw new Error("Archive must contain one wrapper directory followed by a macOS app bundle (required by the Tauri updater extractor)");
-  const [wrapper, appName] = plist.split("/");
-  if (entries.some((entry) => !entry.startsWith(`${wrapper}/${appName}/`))) {
-    throw new Error("Updater archive entries must all be inside the wrapped app bundle");
+  const plist = entries.find((entry) => /^[^/]+\.app\/Contents\/Info\.plist$/.test(entry));
+  if (!plist) throw new Error("Archive must contain a top-level macOS app bundle");
+  const appName = plist.split("/")[0];
+  if (entries.some((entry) => entry.split("/").some((part) => part.startsWith("._")))) {
+    throw new Error("Updater archive must not contain AppleDouble ._ metadata entries");
   }
-  return entries.map((entry) => {
-    const path = entry.split("/").slice(1).join("/");
-    if (!path) throw new Error("Updater archive contains an entry that would unpack into the existing temporary directory");
-    return path;
-  });
+  if (entries.some((entry) => entry !== `${appName}/` && !entry.startsWith(`${appName}/`))) {
+    throw new Error("Updater archive entries must all be inside the app bundle");
+  }
+  return entries.map((entry) => entry.split("/").slice(1).join("/"));
 }
 
 export async function inspectArchive(target, url, archivePath, signaturePath, verifyBundle) {
@@ -51,13 +51,10 @@ export async function inspectArchive(target, url, archivePath, signaturePath, ve
     const entries = execFileSync("tar", ["-tzf", resolve(archivePath)], { encoding: "utf8" }).trim().split("\n");
     if (entries.some((entry) => entry.startsWith("/") || entry.split("/").includes(".."))) throw new Error("Unsafe archive path");
     updaterExtractionPaths(entries);
-    const plist = entries.find((entry) => /^[^/]+\/[^/]+\.app\/Contents\/Info\.plist$/.test(entry));
-    const [wrapper, appName] = plist.split("/");
-    if (entries.some((entry) => !entry.startsWith(`${wrapper}/${appName}/`))) {
-      throw new Error("Updater archive entries must all be inside the wrapped app bundle");
-    }
+    const plist = entries.find((entry) => /^[^/]+\.app\/Contents\/Info\.plist$/.test(entry));
+    const appName = plist.split("/")[0];
     execFileSync("tar", ["-xzf", resolve(archivePath), "-C", directory]);
-    const bundle = join(directory, wrapper, appName);
+    const bundle = join(directory, appName);
     const readPlist = (key) => execFileSync("/usr/bin/plutil", ["-extract", key, "raw", "-o", "-", join(bundle, "Contents/Info.plist")], { encoding: "utf8" }).trim();
     const executable = readPlist("CFBundleExecutable");
     if (executable.includes("/") || executable === "..") throw new Error("Invalid bundle executable");

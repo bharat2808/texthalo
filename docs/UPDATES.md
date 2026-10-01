@@ -82,11 +82,10 @@ bumps versions automatically.
 
 `prepare` runs tests, builds the Apple Silicon app, signs it with Developer ID,
 notarizes and staples it, then creates and signs the updater archive from that
-stapled app. The updater archive places `TextHalo.app` inside a wrapper directory:
-Tauri's macOS updater strips the first archive path component while extracting,
-so an archive rooted directly at `TextHalo.app/` fails before installation. The
-release validator checks this layout and rejects unwrapped archives. It creates
-a DMG with an Applications shortcut and signs, notarizes,
+stapled app. The updater archive roots entries at `TextHalo.app/Contents/`;
+Tauri's macOS updater strips the first path component and installs `Contents/`
+at the bundle root. The release disables and rejects AppleDouble `._` sidecars,
+which otherwise cause extraction to fail. It creates a DMG with an Applications shortcut and signs, notarizes,
 and staples the DMG. It verifies Gatekeeper, the actual Mach-O architecture,
 bundle version, and updater signature against the existing trusted public key.
 Apple notarization must return Accepted. Outputs and a source-commit/checksum
@@ -129,9 +128,9 @@ After signing and notarizing the app and refreshing its updater archive/signatur
 
 ```sh
 node scripts/write-updater-manifest.mjs \
-  0.1.8 latest.json \
+  0.1.9 latest.json \
   --platform darwin-aarch64 \
-  https://github.com/bharat2808/texthalo/releases/download/v0.1.8/TextHalo-aarch64.app.tar.gz \
+  https://github.com/bharat2808/texthalo/releases/download/v0.1.9/TextHalo-aarch64.app.tar.gz \
   release/arm64/TextHalo.app.tar.gz release/arm64/TextHalo.app.tar.gz.sig
 ```
 

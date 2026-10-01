@@ -29,7 +29,6 @@ export function buildPlan({ root, output, version, identity, profile }) {
     const app = join(root, "src-tauri/target", target, "release/bundle/macos/TextHalo.app");
     const zip = join(output, `${arch}-notarization.zip`);
     const staging = join(output, `${arch}-dmg`);
-    const updaterRoot = join(output, `${arch}-updater-root`);
     const dmg = join(output, `TextHalo-macOS-${arch}.dmg`);
     const archive = join(output, `TextHalo-${arch}.app.tar.gz`);
     step("npm", ["run", "tauri", "build", "--", "--target", target, "--bundles", "app", "--config", JSON.stringify({ bundle: { createUpdaterArtifacts: false, macOS: { signingIdentity: identity } } })]);
@@ -39,12 +38,11 @@ export function buildPlan({ root, output, version, identity, profile }) {
     step("xcrun", ["stapler", "staple", app]);
     step("xcrun", ["stapler", "validate", app]);
     step("/usr/sbin/spctl", ["--assess", "--type", "execute", "--verbose", app]);
-    // Tauri updater 2.12 strips the first archive path component before
-    // extraction. Put the app under a wrapper directory so its root entry
-    // becomes TextHalo.app/ rather than colliding with the existing tempdir.
-    step("/bin/mkdir", ["-p", updaterRoot]);
-    step("/usr/bin/ditto", [app, join(updaterRoot, "TextHalo.app")]);
-    step("tar", ["-czf", archive, "-C", output, `${arch}-updater-root/TextHalo.app`]);
+    // Tauri updater 2.12 strips the first archive path component, so the app
+    // must be the root component and its Contents/ becomes the installed app
+    // root. Disable Apple's implicit ._ sidecar entries; those have no child
+    // path to strip and make the updater fail while unpacking.
+    step("tar", ["-czf", archive, "-C", resolve(app, ".."), "TextHalo.app"], { env: { COPYFILE_DISABLE: "1" } });
     step("npm", ["run", "tauri", "signer", "sign", "--", "--app-version", version, archive]);
     step("/bin/mkdir", [staging]);
     step("/usr/bin/ditto", [app, join(staging, "TextHalo.app")]);
@@ -61,7 +59,7 @@ export function buildPlan({ root, output, version, identity, profile }) {
 
 export async function executePlan(steps, execute = run, env = process.env) {
   for (const step of steps) {
-    const result = await execute(step.command, step.args, { env, capture: Boolean(step.acceptedNotarization) });
+    const result = await execute(step.command, step.args, { env: { ...env, ...step.env }, capture: Boolean(step.acceptedNotarization) });
     if (step.acceptedNotarization && JSON.parse(result).status !== "Accepted") {
       throw new Error("Apple notarization was not Accepted. No release will be published; inspect the notarytool log.");
     }
