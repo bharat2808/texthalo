@@ -38,7 +38,11 @@ export function buildPlan({ root, output, version, identity, profile }) {
     step("xcrun", ["stapler", "staple", app]);
     step("xcrun", ["stapler", "validate", app]);
     step("/usr/sbin/spctl", ["--assess", "--type", "execute", "--verbose", app]);
-    step("tar", ["-czf", archive, "-C", resolve(app, ".."), "TextHalo.app"]);
+    // Tauri updater 2.12 strips the first archive path component, so the app
+    // must be the root component and its Contents/ becomes the installed app
+    // root. Disable Apple's implicit ._ sidecar entries; those have no child
+    // path to strip and make the updater fail while unpacking.
+    step("tar", ["-czf", archive, "-C", resolve(app, ".."), "TextHalo.app"], { env: { COPYFILE_DISABLE: "1" } });
     step("npm", ["run", "tauri", "signer", "sign", "--", "--app-version", version, archive]);
     step("/bin/mkdir", [staging]);
     step("/usr/bin/ditto", [app, join(staging, "TextHalo.app")]);
@@ -55,7 +59,7 @@ export function buildPlan({ root, output, version, identity, profile }) {
 
 export async function executePlan(steps, execute = run, env = process.env) {
   for (const step of steps) {
-    const result = await execute(step.command, step.args, { env, capture: Boolean(step.acceptedNotarization) });
+    const result = await execute(step.command, step.args, { env: { ...env, ...step.env }, capture: Boolean(step.acceptedNotarization) });
     if (step.acceptedNotarization && JSON.parse(result).status !== "Accepted") {
       throw new Error("Apple notarization was not Accepted. No release will be published; inspect the notarytool log.");
     }
@@ -97,6 +101,21 @@ export function productionBranch(projects) {
   const project = projects.find(p => p.name === "texthalo");
   if (!project?.production_branch) throw new Error("Cannot determine texthalo Pages production branch");
   return project.production_branch;
+}
+
+export function validateReleaseBuildEnvironment(env) {
+  for (const name of ["VITE_TEXTHALO_API_URL", "VITE_TURNSTILE_SITE_KEY"]) {
+    if (!env[name]?.trim()) throw new Error(`Set ${name} before building the production app and website.`);
+  }
+  for (const name of ["VITE_TEXTHALO_API_URL", "VITE_NEON_AUTH_URL", "VITE_TEXTHALO_WEBSITE_URL"]) {
+    const value = env[name]?.trim();
+    if (!value) continue;
+    let url;
+    try { url = new URL(value); } catch { throw new Error(`${name} must be an absolute HTTPS URL.`); }
+    if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash) {
+      throw new Error(`${name} must be an absolute HTTPS URL without credentials, query, or fragment.`);
+    }
+  }
 }
 
 async function pagesProject() {
@@ -259,6 +278,7 @@ async function main() {
   const { version, config } = await configuration();
   const directory = join(ROOT, "release-artifacts", version);
   if (mode === "plan") return console.log(JSON.stringify(buildPlan({ root: ROOT, output: directory, version, identity: config.bundle.macOS.signingIdentity, profile: process.env.NOTARY_KEYCHAIN_PROFILE ?? "<keychain-profile>" }), null, 2));
+  validateReleaseBuildEnvironment(process.env);
   if (process.platform !== "darwin") throw new Error("Signed macOS releases must run on macOS");
   await runReleaseWorkflow(options, {
     prepare: () => prepare(directory, version, config),

@@ -5,7 +5,7 @@ import { mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createManifest } from "./write-updater-manifest.mjs";
+import { createManifest, updaterExtractionPaths } from "./write-updater-manifest.mjs";
 
 const entries = () => [
   { target: "darwin-aarch64", architectures: ["arm64"], bundleVersion: "1.2.3", url: "https://example.com/arm.app.tar.gz", signature: "arm-signature" },
@@ -31,6 +31,19 @@ test("refuses mismatched versions, missing signatures, duplicate targets, and in
   assert.throws(() => createManifest("1.2.3", [...entries(), ...entries()]), /duplicate/);
 });
 
+test("updater archive strips the app-name component and rejects AppleDouble sidecars", () => {
+  assert.deepEqual(updaterExtractionPaths([
+    "TextHalo.app/",
+    "TextHalo.app/Contents/",
+    "TextHalo.app/Contents/Info.plist",
+  ]), ["", "Contents/", "Contents/Info.plist"]);
+  assert.throws(() => updaterExtractionPaths([
+    "._TextHalo.app",
+    "TextHalo.app/",
+    "TextHalo.app/Contents/Info.plist",
+  ]), /AppleDouble/);
+});
+
 test("CLI inspects real Mach-O archives and rejects swapped architectures", { skip: process.platform !== "darwin" }, async () => {
   const root = await mkdtemp(join(tmpdir(), "texthalo-manifest-test-"));
   try {
@@ -42,7 +55,9 @@ test("CLI inspects real Mach-O archives and rejects swapped architectures", { sk
       execFileSync("/usr/bin/clang", ["-arch", arch, "-mmacosx-version-min=11.0", "-x", "c", "-o", join(contents, "MacOS", "texthalo"), "-"], { input: "int main(void) { return 0; }" });
       await writeFile(join(contents, "Info.plist"), `<?xml version="1.0"?><plist version="1.0"><dict><key>CFBundleExecutable</key><string>texthalo</string><key>CFBundleIdentifier</key><string>com.kiegen.app</string><key>CFBundleShortVersionString</key><string>1.2.3</string></dict></plist>`);
       const archive = join(root, `${arch}.app.tar.gz`);
-      execFileSync("tar", ["-czf", archive, "-C", folder, "TextHalo.app"]);
+      execFileSync("tar", ["-czf", archive, "-C", folder, "TextHalo.app"], { env: { ...process.env, COPYFILE_DISABLE: "1" } });
+      const archiveEntries = execFileSync("tar", ["-tzf", archive], { encoding: "utf8" }).trim().split("\n");
+      assert.doesNotThrow(() => updaterExtractionPaths(archiveEntries));
       await writeFile(`${archive}.sig`, `${arch}-test-signature`);
       artifacts.push([`https://example.com/${arch}.app.tar.gz`, archive, `${archive}.sig`]);
     }

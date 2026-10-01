@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { buildPlan, executePlan, validateAssetSet, verifyUpdaterSignature, productionBranch, publishRelease, parseReleaseArgs, runReleaseWorkflow } from "./release-macos.mjs";
+import { buildPlan, executePlan, validateAssetSet, verifyUpdaterSignature, productionBranch, publishRelease, parseReleaseArgs, runReleaseWorkflow, validateReleaseBuildEnvironment } from "./release-macos.mjs";
 
 test("combined release accepts only explicit supported deployment flags", () => {
   assert.deepEqual(parseReleaseArgs(["release"]), { mode: "release", deployCloudflare: false });
@@ -58,6 +58,8 @@ test("build plan produces the Apple Silicon DMG and signs updater archives only 
     const tar = steps.findIndex(s => s.command === "tar" && s.args.includes(`/out/TextHalo-${arch}.app.tar.gz`));
     const sign = steps.findIndex(s => s.args.includes("signer") && s.args.includes(`/out/TextHalo-${arch}.app.tar.gz`));
     assert.ok(build < staple && staple < tar && tar < sign);
+    assert.ok(steps[tar].args.includes("TextHalo.app"));
+    assert.equal(steps[tar].env.COPYFILE_DISABLE, "1");
     assert.ok(steps.some(s => s.args.includes(`/out/TextHalo-macOS-${arch}.dmg`) && s.args.includes("create")));
   }
 });
@@ -83,6 +85,18 @@ test("publication refuses a partial or tampered asset set", async () => {
 test("production deployment uses the actual Pages production branch, not the Git branch", () => {
   assert.equal(productionBranch([{ name: "texthalo", production_branch: "voiceovers" }]), "voiceovers");
   assert.throws(() => productionBranch([{ name: "another-project", production_branch: "master" }]), /texthalo/);
+});
+
+test("production release requires API and Turnstile browser configuration", () => {
+  assert.throws(() => validateReleaseBuildEnvironment({}), /VITE_TEXTHALO_API_URL/);
+  assert.throws(() => validateReleaseBuildEnvironment({ VITE_TEXTHALO_API_URL: "https://api.example.com" }), /VITE_TURNSTILE_SITE_KEY/);
+  assert.throws(() => validateReleaseBuildEnvironment({ VITE_TEXTHALO_API_URL: "http://api.example.com", VITE_TURNSTILE_SITE_KEY: "public-key" }), /HTTPS/);
+  assert.doesNotThrow(() => validateReleaseBuildEnvironment({
+    VITE_TEXTHALO_API_URL: "https://api.example.com",
+    VITE_NEON_AUTH_URL: "https://auth.example.com/neondb/auth",
+    VITE_TEXTHALO_WEBSITE_URL: "https://texthalo.app",
+    VITE_TURNSTILE_SITE_KEY: "public-key",
+  }));
 });
 
 test("a failed upload stays a draft; a verified upload alone can become latest", async () => {
