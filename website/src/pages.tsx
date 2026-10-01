@@ -1,8 +1,7 @@
 import { blogPosts, stories, type EditorialPage } from "./content";
 import { BillingAccountPage, BillingSuccessPage, DesktopConnectPage, PasswordResetPage, PricingPage, SignInPage } from "./billing";
 import Website from "./website";
-import { DownloadPage } from "./DownloadPage";
-import { DOWNLOAD_PAGE } from "./downloads";
+import { MAC_DOWNLOAD } from "./downloads";
 
 const SITE_URL = "https://texthalo.app";
 const SOURCE = "https://github.com/bharat2808/texthalo";
@@ -10,7 +9,6 @@ const SOURCE = "https://github.com/bharat2808/texthalo";
 export function getSitePaths(): string[] {
   return [
     "/",
-    DOWNLOAD_PAGE,
     "/pricing/",
     "/privacy/",
     "/sign-in/",
@@ -43,7 +41,7 @@ function VideoWatchPage() {
       <h2>A small Mac app for listening while you work</h2>
       <p>TextHalo reads a passage you select in another app. Start playback with a keyboard shortcut, keep the floating player nearby, and choose Apple system voices or local AI speech engines.</p>
       <p>Speech synthesis runs locally on your Mac. Kokoro and Chatterbox model files are downloaded when you choose to use those engines.</p>
-      <a className="button button-dark" href={DOWNLOAD_PAGE}>Download TextHalo for Mac <span aria-hidden="true">→</span></a>
+      <a className="button button-dark" href={MAC_DOWNLOAD}>Download TextHalo for Apple Silicon <span aria-hidden="true">→</span></a>
     </section>
   </main><EditorialFooter /></div>;
 }
@@ -54,7 +52,7 @@ function Mark() {
 
 function EditorialHeader() {
   return <>
-    <div className="announcement"><span className="announcement-dot" /> TextHalo is open source <span className="announcement-separator">·</span> Made for macOS</div>
+    <div className="announcement"><span className="announcement-dot" /> TextHalo is open source <span className="announcement-separator">·</span> Requires Apple Silicon</div>
     <header className="site-header editorial-header">
       <a className="wordmark" href="/" aria-label="TextHalo home"><Mark /><span>TextHalo</span></a>
       <nav className="editorial-nav" aria-label="Main navigation">
@@ -65,7 +63,7 @@ function EditorialHeader() {
         <a href="/stories/">Stories</a>
         <a href="/blog/">Blog</a>
         <a href="/privacy/">Privacy</a>
-        <a className="button button-dark nav-download" href={DOWNLOAD_PAGE}>Download for Mac <span aria-hidden="true">→</span></a>
+        <a className="button button-dark nav-download" href={MAC_DOWNLOAD}>Download for Apple Silicon <span aria-hidden="true">→</span></a>
       </nav>
     </header>
   </>;
@@ -142,13 +140,12 @@ function EditorialArticle({ page, kind }: { page: EditorialPage; kind: "blog" | 
         return <p key={index}>{block.text}</p>;
       })}</div>
     </article>
-    <aside className="article-cta"><div><strong>Listen to selected text on your Mac.</strong><span>TextHalo is free and open source.</span></div><a className="button button-dark" href={DOWNLOAD_PAGE}>Download TextHalo <span aria-hidden="true">→</span></a></aside>
+    <aside className="article-cta"><div><strong>Listen to selected text on your Mac.</strong><span>TextHalo is free and open source. Requires Apple Silicon.</span></div><a className="button button-dark" href={MAC_DOWNLOAD}>Download TextHalo <span aria-hidden="true">→</span></a></aside>
     <a className="text-link back-link" href={basePath}>← Back to {kind}</a>
   </main><EditorialFooter /></div>;
 }
 
 export function SitePage({ pathname }: { pathname: string }) {
-  if (pathname === DOWNLOAD_PAGE) return <DownloadPage />;
   if (pathname === "/") return <Website />;
   if (pathname === "/privacy/") return <PrivacyPolicyPage />;
   if (pathname === "/pricing/") return <PricingPage />;
@@ -206,7 +203,7 @@ const defaultMetadata = (path: string): SeoMetadata => ({
     operatingSystem: "macOS",
     description: "A free, open-source Mac menu bar app for reading selected text aloud with local speech engines.",
     url: SITE_URL,
-    downloadUrl: `${SITE_URL}${DOWNLOAD_PAGE}`,
+    downloadUrl: MAC_DOWNLOAD,
     offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
     license: `${SOURCE}/blob/master/LICENSE-APACHE`,
   },
@@ -214,7 +211,6 @@ const defaultMetadata = (path: string): SeoMetadata => ({
 
 export function getSeoMetadata(pathname: string): SeoMetadata {
   const path = normalizePath(pathname);
-  if (path === DOWNLOAD_PAGE) return { ...defaultMetadata(path), title: "Download TextHalo for Apple Silicon Mac", description: "Download TextHalo for your Apple Silicon Mac and start listening to selected text." };
   if (path === "/") return defaultMetadata(path);
   if (path === "/pricing/") {
     return { ...defaultMetadata(path), title: "TextHalo Plans — Local Voices and Hosted Speech", description: "Compare TextHalo Free, Plus, and Creator plans. Keep local Apple, Kokoro, and Chatterbox voices, then add hosted Fish Audio credits when you need them." };

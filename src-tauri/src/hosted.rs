@@ -198,6 +198,13 @@ fn api_error(status: reqwest::StatusCode, body: &Value) -> String {
         "unknown_voice" | "unknown_voice_clone" => "That voice is no longer available. Choose another voice.".into(),
         "voice_not_ready" => "This voice is still training. Try again when it is ready.".into(),
         "voice_clone_limit_reached" => "You’ve reached the saved voice clone limit for your plan.".into(),
+        "consent_required" => "Confirm that you own this voice or have permission to clone it.".into(),
+        "invalid_audio_upload" => "Enter a voice name and choose a supported, non-empty audio recording.".into(),
+        "audio_too_large" => "Choose an audio recording smaller than 25 MB.".into(),
+        "provider_rejected" => body.get("message").and_then(Value::as_str)
+            .filter(|message| !message.trim().is_empty())
+            .map(|message| message.chars().take(600).collect())
+            .unwrap_or_else(|| "Fish Audio rejected this recording. Try another recording or contact support.".into()),
         _ if status.is_server_error() => "The TextHalo speech service is temporarily unavailable.".into(),
         _ => "The request could not be completed. Check your settings and try again.".into(),
     }

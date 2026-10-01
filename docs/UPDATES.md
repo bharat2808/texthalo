@@ -110,13 +110,14 @@ It then verifies the public latest-download URLs against the same checksums.
 
 `deploy` verifies the public artifacts first, reads the existing texthalo Pages
 project's actual production branch using Wrangler's active credentials, builds
-and deploys the website, and checks the live download page. Set
+and deploys the website, and checks the live direct download links and legacy redirect. Set
 `CLOUDFLARE_ACCOUNT_ID` if the authenticated user has multiple accounts.
 The script never creates a project or changes its production branch.
 
-All website download buttons lead to `/download/`, which clearly states the
-Apple Silicon requirement and offers the stable Apple Silicon DMG link.
-There is no Intel download or browser architecture detection.
+All website download buttons link directly to the stable Apple Silicon DMG URL.
+The website states the Apple Silicon requirement. `/download` and `/download/`
+remain as HTTP 302 redirects for existing links; there is no separate download
+page, Intel download, or browser architecture detection.
 
 ### Manual manifest generation
 

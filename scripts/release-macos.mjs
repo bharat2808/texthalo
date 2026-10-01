@@ -222,10 +222,12 @@ async function deploy(receipt) {
   const { branch, account } = await pagesProject();
   run("npm", ["run", "website:build"]);
   run("npx", ["--no-install", "wrangler", "pages", "deploy", "dist-website", "--project-name", "texthalo", "--branch", branch, "--commit-hash", receipt.commit], { env: { ...process.env, CLOUDFLARE_ACCOUNT_ID: account } });
-  const response = await fetch(`https://texthalo.app/download/?release=${receipt.version}`, { signal: AbortSignal.timeout(30_000), cache: "no-store" });
+  const response = await fetch(`https://texthalo.app/?release=${receipt.version}`, { signal: AbortSignal.timeout(30_000), cache: "no-store" });
   const html = await response.text();
   if (!response.ok || !ARCHITECTURES.every(arch => html.includes(`TextHalo-macOS-${arch}.dmg`))) throw new Error("Deployment submitted, but the live download page has not verified. Check Pages status before retrying.");
-  console.log("Verified production download page: https://texthalo.app/download/");
+  const redirect = await fetch("https://texthalo.app/download/", { redirect: "manual", signal: AbortSignal.timeout(30_000) });
+  if (redirect.status !== 302 || redirect.headers.get("location") !== `https://github.com/${REPO}/releases/latest/download/TextHalo-macOS-aarch64.dmg`) throw new Error("Legacy download redirect did not verify.");
+  console.log("Verified production download links and legacy redirect: https://texthalo.app/");
 }
 
 export function parseReleaseArgs(args) {

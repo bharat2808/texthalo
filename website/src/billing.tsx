@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
-import { DOWNLOAD_PAGE as DOWNLOAD } from "./downloads";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import { MAC_DOWNLOAD as DOWNLOAD } from "./downloads";
 import { authClient, billingApiHeaders, billingApiUrl, getAccessToken, promptSignIn, safeInternalReturnTo, startCheckout, startCreditTopupCheckout } from "./auth";
 
 type PlanId = "plus" | "creator";
@@ -141,7 +141,7 @@ export function SiteHeader() {
   }
 
   return <>
-    <div className="announcement"><span className="announcement-dot" /> TextHalo is open source <span className="announcement-separator">·</span> Made for macOS <a href={SOURCE} target="_blank" rel="noreferrer">Explore the project <span className="arrow">→</span></a></div>
+    <div className="announcement"><span className="announcement-dot" /> TextHalo is open source <span className="announcement-separator">·</span> Requires Apple Silicon <a href={SOURCE} target="_blank" rel="noreferrer">Explore the project <span className="arrow">→</span></a></div>
     <header className="site-header billing-header">
       <a className="wordmark" href="/"><Mark /><span>TextHalo</span></a>
       <nav className={menuOpen ? "nav-open" : ""} aria-label="Main navigation">
@@ -222,10 +222,30 @@ function BillingFooter() {
   return <footer className="site-footer"><a className="wordmark footer-wordmark" href="/"><Mark /><span>TextHalo</span></a><span className="footer-copy">A little more room to listen.</span><div className="footer-links"><a href="/">Home</a><a href="/demo/">Demo</a><a href="https://github.com/bharat2808/texthalo">GitHub <span className="arrow">↗</span></a></div><span className="copyright">© {new Date().getFullYear()} TextHalo</span></footer>;
 }
 
+export function createDesktopHandoffAttempt() {
+  let started = false;
+  let inFlight = false;
+  let completed = false;
+  return {
+    async run(connect: () => Promise<void>, retry = false) {
+      if (inFlight || completed || (started && !retry)) return;
+      started = true;
+      inFlight = true;
+      try {
+        await connect();
+        completed = true;
+      } finally {
+        inFlight = false;
+      }
+    },
+  };
+}
+
 export function DesktopConnectPage() {
   const session = authClient.useSession();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [attempt] = useState(createDesktopHandoffAttempt);
   const params = new URLSearchParams(typeof window === "undefined" ? "" : window.location.search);
   const redirectUri = params.get("redirect_uri") ?? "";
   const state = params.get("state") ?? "";
@@ -238,32 +258,46 @@ export function DesktopConnectPage() {
   })();
   const returnTo = typeof window === "undefined" ? "/desktop-connect/" : `${window.location.pathname}${window.location.search}`;
 
-  async function continueToApp() {
-    setBusy(true); setError("");
+  const accountEmail = session.data?.user?.email;
+  const continueToApp = useCallback(async (retry = false) => {
     try {
-      if (!validRequest) throw new Error("This sign-in link is invalid or has expired. Return to TextHalo and start again.");
-      if (!billingApiUrl) throw new Error("The TextHalo service is not configured on this website.");
-      const token = await getAccessToken();
-      if (!token) throw new Error("Your browser sign-in has expired. Please sign in again.");
-      const response = await fetch(`${billingApiUrl}/v1/desktop/handoffs`, {
-        method: "POST",
-        headers: billingApiHeaders({ Authorization: `Bearer ${token}`, "Content-Type": "application/json" }),
-        body: JSON.stringify({ codeChallenge, state, redirectUri, accountEmail: session.data?.user?.email }),
-      });
-      const result = await response.json().catch(() => null) as { callbackUrl?: string; error?: string } | null;
-      if (!response.ok || !result?.callbackUrl) throw new Error("Could not connect this sign-in to the app. Return to TextHalo and try again.");
-      const callback = new URL(result.callbackUrl);
-      const expected = new URL(redirectUri);
-      if (callback.origin !== expected.origin || callback.pathname !== expected.pathname || callback.searchParams.get("state") !== state || !callback.searchParams.get("code")) throw new Error("The sign-in service returned an invalid app callback.");
-      window.location.assign(callback.toString());
+      await attempt.run(async () => {
+        setBusy(true); setError("");
+        if (!validRequest) throw new Error("This sign-in link is invalid or has expired. Return to TextHalo and start again.");
+        if (!billingApiUrl) throw new Error("The TextHalo service is not configured on this website.");
+        const token = await getAccessToken();
+        if (!token) throw new Error("Your browser sign-in has expired. Please sign in again.");
+        const response = await fetch(`${billingApiUrl}/v1/desktop/handoffs`, {
+          method: "POST",
+          headers: billingApiHeaders({ Authorization: `Bearer ${token}`, "Content-Type": "application/json" }),
+          body: JSON.stringify({ codeChallenge, state, redirectUri, accountEmail }),
+          signal: AbortSignal.timeout(15_000),
+        });
+        const result = await response.json().catch(() => null) as { callbackUrl?: string; error?: string } | null;
+        if (!response.ok || !result?.callbackUrl) throw new Error("Could not connect this sign-in to the app. Return to TextHalo and try again.");
+        const callback = new URL(result.callbackUrl);
+        const expected = new URL(redirectUri);
+        if (callback.origin !== expected.origin || callback.pathname !== expected.pathname || callback.searchParams.get("state") !== state || !callback.searchParams.get("code")) throw new Error("The sign-in service returned an invalid app callback.");
+        window.location.assign(callback.toString());
+      }, retry);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not finish sign-in. Please try again.");
       setBusy(false);
     }
-  }
+  }, [attempt, validRequest, codeChallenge, state, redirectUri, accountEmail]);
+
+  useEffect(() => {
+    if (validRequest && !session.isPending && accountEmail) void continueToApp();
+  }, [validRequest, session.isPending, accountEmail, continueToApp]);
 
   return <div className="site-shell"><SiteHeader /><main className="section-wrap signin-page desktop-connect-page"><div className="signin-decoration" aria-hidden="true"><span className="ring-a" /><span className="ring-b" /><div className="privacy-center"><Mark /><span>TEXT HALO</span></div></div><section className="signin-panel"><div className="eyebrow"><span className="eyebrow-line" /> SECURE DESKTOP SIGN-IN</div><h1>Connect <em>TextHalo.</em></h1><p className="signin-intro">Use your TextHalo account in the Mac app. Your sign-in returns to the app through a one-time, short-lived code.</p>
-    {!validRequest ? <p className="billing-error" role="alert">This sign-in request is invalid. Start sign-in again from the TextHalo app.</p> : !session.data?.user ? <><a className="button button-dark" href={`/sign-in/?returnTo=${encodeURIComponent(returnTo)}`}>Sign in to continue <span className="arrow">→</span></a><p className="signin-terms">New to TextHalo? <a href={`/sign-in/?mode=sign-up&returnTo=${encodeURIComponent(returnTo)}`}>Create an account</a></p></> : <div className="signed-in-card"><span className="signed-in-check" aria-hidden="true">✓</span><div><strong>Signed in as</strong><span>{session.data.user.email}</span></div><button className="button button-dark" type="button" disabled={busy} onClick={() => void continueToApp()}>{busy ? "Connecting…" : "Continue to TextHalo"}<span className="arrow">→</span></button>{error && <p className="billing-error" role="alert">{error}</p>}</div>}
+    {!validRequest ? <p className="billing-error" role="alert">This sign-in request is invalid. Start sign-in again from the TextHalo app.</p>
+      : session.isPending ? <p role="status">Checking your sign-in…</p>
+      : !session.data?.user ? <><a className="button button-dark" href={`/sign-in/?returnTo=${encodeURIComponent(returnTo)}`}>Sign in to continue <span className="arrow">→</span></a><p className="signin-terms">New to TextHalo? <a href={`/sign-in/?mode=sign-up&returnTo=${encodeURIComponent(returnTo)}`}>Create an account</a></p></>
+      : <div className="signed-in-card"><span className="signed-in-check" aria-hidden="true">✓</span><div><strong>Signed in as</strong><span>{session.data.user.email}</span></div>
+        <p className="desktop-connect-status" role="status">{error ? "We couldn’t return to the app automatically." : "Returning to TextHalo…"}</p>
+        {error && <><p className="billing-error" role="alert">{error}</p><button className="button button-dark button-plan" type="button" disabled={busy} onClick={() => void continueToApp(true)}>Try again<span className="arrow">→</span></button></>}
+      </div>}
     <p className="signin-terms">TextHalo never places your account password or access token in this browser redirect.</p>
   </section></main><BillingFooter /></div>;
 }
@@ -384,6 +418,7 @@ function PricingContent() {
             : <button className={`button button-plan${plan.id === "creator" ? " button-plan-dark" : " button-plan-light"}`} type="button" disabled={disabled} onClick={() => plan.id !== "free" && void choosePlan(plan.id)}>
                 {busyPlan === plan.id ? "Opening checkout…" : actionLabel}<span className="arrow">→</span>
               </button>}
+          {plan.id === "free" && <small className="plan-note">Requires Apple Silicon</small>}
           {paid && <small className="plan-note">{checkoutUnavailable ? "Checkout is temporarily unavailable." : missingPlan ? "Checkout setup is pending for this plan." : !plan.price ? "Pricing is temporarily unavailable." : isCurrentPlan ? "Manage your subscription securely with Stripe." : currentPlan ? "Plan changes are confirmed securely with Stripe." : "Checkout is processed securely by Stripe."}</small>}
         </article>;
       })}
