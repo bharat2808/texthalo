@@ -16,6 +16,7 @@ struct SampleBuffer {
     underrun_frames: usize,
     draining: bool,
     error: i32,
+    played_audio_bytes: u64,
 }
 impl SampleBuffer {
     fn read(&mut self, output: &mut [f32]) -> usize {
@@ -27,6 +28,7 @@ impl SampleBuffer {
         for sample in &mut output[..copied] {
             *sample = self.samples.pop_front().expect("length checked");
         }
+        self.played_audio_bytes = self.played_audio_bytes.saturating_add((copied as u64) * 2);
         if self.finished {
             return copied;
         }
@@ -190,6 +192,13 @@ impl Player {
             .samples
             .len() as f64
             / SAMPLE_RATE as f64
+    }
+
+    pub fn played_audio_bytes(&self) -> u64 {
+        self.state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .played_audio_bytes
     }
 
     pub fn underrun_seconds(&self) -> f64 {

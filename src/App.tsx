@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { emit, listen } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
 import { open } from "@tauri-apps/plugin-dialog";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type Update } from "@tauri-apps/plugin-updater";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import SetupWizard, { type SetupPlansResponse } from "./SetupWizard";
+import appLogo from "../src-tauri/icons/icon.png";
 import "./App.css";
 
 /* ── types mirroring the Rust side ─────────────────────────────────── */
@@ -14,7 +17,7 @@ type CaptureMode = "ax_then_copy" | "ax_only" | "copy_only";
 type Voice = { name: string; locale: string; novelty: boolean };
 
 /** Which synthesis backend is selected. Mirrors the Rust `Engine` enum's wire format. */
-type EngineId = "apple" | "kokoro" | "chatterbox";
+type EngineId = "apple" | "kokoro" | "chatterbox" | "fish";
 
 /** One voice offered by whichever engine is active. */
 type EngineVoice = {
@@ -74,6 +77,17 @@ type ChatterboxSettings = {
   keep_warm: boolean;
 };
 
+type FishSettings = { voice_id: string; model_id: string; enhance_text: boolean; privacy_accepted: boolean };
+type HostedVoice = { id: string; name: string; description: string; languageCodes: string[]; tags: string[]; previewAvailable: boolean; samples: { id: string; title: string; text: string }[] };
+type HostedVoiceLanguage = { code: string; voiceCount: number };
+type HostedAccount = { availableCredits: number; accountEmail?: string | null; creditBreakdown: { totalCredits: number; planCredits: number; topupCredits: number; otherCredits: number }; billingEnabled: boolean; subscription: { planId: string; status: string; currentPeriodEnd: string; cancelAtPeriodEnd: boolean } | null; plans: { id: string; creditsPerPeriod: number; cloneLimit: number }[] };
+type HostedCloneStatus = "created" | "training" | "trained" | "failed";
+type HostedClone = { id: string; name: string; status: HostedCloneStatus; createdAt: string };
+
+const cloneIsPending = (status: HostedCloneStatus) => status === "created" || status === "training";
+
+const websiteUrl = (import.meta.env.VITE_TEXTHALO_WEBSITE_URL || "https://texthalo.app").replace(/\/$/, "");
+
 /** Progress of a weight download, emitted by the Rust side as `kiegen:install`. */
 type InstallEvent = {
   engine: EngineId;
@@ -95,10 +109,13 @@ type AudioHistoryEntry = {
 };
 
 type Settings = {
+  accessibility_prompted: boolean;
+  onboarding_completed: boolean;
   shortcuts: { speak: string; stop: string };
   engine: EngineId;
   kokoro: KokoroSettings;
   chatterbox: ChatterboxSettings;
+  fish: FishSettings;
   voice: string | null;
   rate: number;
   capture_mode: CaptureMode;
@@ -121,7 +138,7 @@ type UiState = {
 type Phase = "idle" | "capturing" | "preparing" | "speaking" | "error";
 type Status = { phase: Phase; message?: string | null; chars?: number | null };
 
-type Tab = "general" | "voice" | "shortcuts" | "capture" | "history";
+type Tab = "general" | "voice" | "account" | "shortcuts" | "capture" | "history";
 
 /* ── icons (16×16, currentColor) ───────────────────────────────────── */
 
@@ -134,6 +151,112 @@ function ico(paths: string[], size = 16) {
       ))}
     </svg>
   );
+}
+
+type UpdateOverlayStatus = {
+  visible: boolean;
+  version: string | null;
+  installable: boolean;
+  installing: boolean;
+  message: string | null;
+  error: boolean;
+};
+
+// Persist before broadcasting so opening/reloading a window cannot lose a result.
+let updateStatusQueue = Promise.resolve();
+function publishUpdateStatus(status: Omit<UpdateOverlayStatus, "visible">) {
+  updateStatusQueue = updateStatusQueue.then(() => invoke<void>("publish_update_status", {
+    status: { ...status, visible: false },
+  })).catch((error) => console.error("Could not publish update status", error));
+  return updateStatusQueue;
+}
+
+function updateErrorMessage(error: unknown): string {
+  const detail = String(error);
+  if (/platform.*(not found|were found)/i.test(detail)) {
+    return "This release has no compatible update for this build of TextHalo. Please wait for a release supporting your Mac architecture.";
+  }
+  if (/os error (1|13)\b|permission denied|authentication failed|Failed to move the new app/i.test(detail)) {
+    return `macOS could not replace TextHalo. Quit the app and use Finder to install the new version; ask your administrator if prompted. Details: ${detail}`;
+  }
+  if (/os error (18|30)\b|cross-device|read-only/i.test(detail)) {
+    return `Copy TextHalo into Applications on your startup disk, eject the installer, and reopen it before updating. Details: ${detail}`;
+  }
+  if (/os error 28\b|no space left/i.test(detail)) {
+    return "There is not enough free disk space to install the update. Free some space and try again.";
+  }
+  return detail;
+}
+
+function UpdateResultOverlay() {
+  // Paint immediately. The native window can be shown as soon as the tray check
+  // finishes, before this webview has completed its first invoke/listener setup.
+  const [status, setStatus] = useState<UpdateOverlayStatus>({
+    visible: true,
+    version: null,
+    installable: false,
+    installing: false,
+    message: "Checking for updates…",
+    error: false,
+  });
+
+  useEffect(() => {
+    let disposed = false;
+    let off: (() => void) | undefined;
+    let receivedEvent = false;
+    void (async () => {
+      off = await listen<UpdateOverlayStatus>("texthalo:update-overlay", (event) => {
+        receivedEvent = true;
+        if (!disposed) setStatus(event.payload);
+      });
+      if (disposed) { off(); return; }
+      const initial = await invoke<UpdateOverlayStatus>("get_update_overlay_status");
+      if (!disposed && !receivedEvent) setStatus(initial);
+    })().catch((cause) => {
+      if (!disposed) setStatus((current) => ({ ...current, visible: true,
+        message: `Could not load update status: ${String(cause)}`, error: true }));
+    });
+    return () => { disposed = true; off?.(); };
+  }, []);
+
+  const close = () => void invoke("close_update_overlay");
+  if (!status.visible) return null;
+
+  const hasUpdate = Boolean(status.version);
+  const checking = status.message === "Checking for updates…";
+  return (
+    <main className="update-overlay" role="dialog" aria-labelledby="update-title" aria-live="polite">
+      <button className="update-overlay-close" onClick={close} aria-label="Close">×</button>
+      <img className="update-overlay-mark" src={appLogo} alt="" />
+      <h1 id="update-title">
+        {checking ? "Checking for updates…" : status.error ? "Update needs attention" : hasUpdate ? `TextHalo ${status.version} is available` : "You’re up to date"}
+      </h1>
+      <p className={status.error ? "update-overlay-message error" : "update-overlay-message"}>
+        {status.message ?? (hasUpdate
+          ? status.installing ? "Preparing to install…" : "A newer version is ready to install."
+          : status.error ? "Please try again in a moment." : "You have the latest version of TextHalo.")}
+      </p>
+      <div className="update-overlay-actions">
+        {hasUpdate ? (
+          <button
+            className="update-overlay-install"
+            disabled={!status.installable || status.installing}
+            onClick={() => void emit("texthalo:install-update-requested")}
+          >
+            {status.installing ? "Installing…" : status.installable ? `Install ${status.version}` : status.error ? "Installation unavailable" : "Preparing…"}
+          </button>
+        ) : null}
+        <button className="update-overlay-later" onClick={close} disabled={status.installing}>
+          {hasUpdate ? "Later" : "Done"}
+        </button>
+      </div>
+    </main>
+  );
+}
+
+export default function App() {
+  const isUpdateOverlay = new URLSearchParams(window.location.search).has("update-overlay");
+  return isUpdateOverlay ? <UpdateResultOverlay /> : <MainApp />;
 }
 
 const Icon = {
@@ -287,6 +410,8 @@ const LANGUAGE_FAMILIES: Record<string, string> = {
 };
 
 const languageName = (locale: string) => LANGUAGE_NAMES[locale] ?? locale.replace("_", " ");
+const languageDisplayNames = new Intl.DisplayNames([navigator.language || "en"], { type: "language" });
+const hostedLanguageName = (code: string) => languageDisplayNames.of(code) ?? code;
 
 /** `Eddy (English (US))` → `Eddy`: the locale column already says the language. */
 const voiceLabel = (name: string) => name.split(" (")[0].trim();
@@ -450,9 +575,12 @@ function Note({
 
 /* ── app ───────────────────────────────────────────────────────────── */
 
-export default function App() {
+function MainApp() {
   const [state, setState] = useState<UiState | null>(null);
   const [appVersion, setAppVersion] = useState<string | null>(null);
+  const [setupOpen, setSetupOpen] = useState(false);
+  const [setupRevision, setSetupRevision] = useState(0);
+  const accessibilityPromptStarted = useRef(false);
   // The last word from an espeak-ng install attempt. Kept until the next attempt rather
   // than timed out, because the message is the only answer the user gets.
   const [espeakMessage, setEspeakMessage] = useState<string | null>(null);
@@ -475,16 +603,98 @@ export default function App() {
   const [historyEntries, setHistoryEntries] = useState<AudioHistoryEntry[]>([]);
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [account, setAccount] = useState<HostedAccount | null>(null);
+  const [accountEmail, setAccountEmail] = useState("");
+  const [accountBusy, setAccountBusy] = useState(false);
+  const [accountError, setAccountError] = useState("");
+  const [hostedVoices, setHostedVoices] = useState<HostedVoice[]>([]);
+  const [hostedLanguages, setHostedLanguages] = useState<HostedVoiceLanguage[]>([]);
+  const [hostedLanguage, setHostedLanguage] = useState("en");
+  const hostedVoicesByLanguage = useMemo(() => {
+    const grouped = new Map<string, HostedVoice[]>();
+    for (const voice of hostedVoices) {
+      const codes = hostedLanguage === "all" ? voice.languageCodes : [hostedLanguage];
+      for (const code of codes) {
+        const voices = grouped.get(code) ?? [];
+        if (!voices.some((item) => item.id === voice.id)) voices.push(voice);
+        grouped.set(code, voices);
+      }
+    }
+    return [...grouped.entries()].sort(([a], [b]) => hostedLanguageName(a).localeCompare(hostedLanguageName(b)));
+  }, [hostedVoices, hostedLanguage]);
+  const [hostedQuery, setHostedQuery] = useState("");
+  const [hostedLoading, setHostedLoading] = useState(false);
+  const hostedLoadRevision = useRef(0);
+  const [hostedClones, setHostedClones] = useState<HostedClone[]>([]);
+  const pendingCloneIds = hostedClones.filter((clone) => cloneIsPending(clone.status)).map((clone) => clone.id);
+  const pendingCloneKey = pendingCloneIds.join("\u0000");
+  const [cloneName, setCloneName] = useState("");
+  const [cloneUploadError, setCloneUploadError] = useState("");
+  const [cloneUploadSuccess, setCloneUploadSuccess] = useState("");
+  const [clonePath, setClonePath] = useState("");
+  const [cloneConsent, setCloneConsent] = useState(false);
+  const hostedQueryRef = useRef("");
   const rateTimer = useRef<number | null>(null);
   const latestState = useRef(state);
   const saveTail = useRef<Promise<void>>(Promise.resolve());
   const saveRevision = useRef(0);
   const pendingSaves = useRef(0);
   const updateDownload = useRef({ downloaded: 0, total: 0 });
+  const updateBusy = useRef(false);
+  const checkBusy = useRef(false);
 
   useEffect(() => {
     void getVersion().then(setAppVersion).catch(() => setAppVersion("unknown"));
   }, []);
+
+  const refreshHostedAccount = useCallback(async () => {
+    setAccountError("");
+    try {
+      if (!(await invoke<boolean>("desktop_is_signed_in"))) {
+        setAccount(null);
+        setAccountEmail("");
+        return;
+      }
+      const next = await invoke<HostedAccount>("desktop_account");
+      setAccount(next);
+      setAccountEmail(next.accountEmail ?? "");
+    } catch (cause) {
+      setAccount(null);
+      setAccountError(cause instanceof Error ? cause.message : String(cause));
+    }
+  }, []);
+
+  useEffect(() => { void refreshHostedAccount(); }, [refreshHostedAccount]);
+
+  useEffect(() => {
+    if (!account) return;
+    const refreshTimer = window.setInterval(() => void refreshHostedAccount(), 3 * 60 * 1000);
+    return () => window.clearInterval(refreshTimer);
+  }, [account, refreshHostedAccount]);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    void listen<Status>("kiegen:status", (event) => {
+      if ((event.payload.phase === "idle" || event.payload.phase === "error") && latestState.current?.settings.engine === "fish") {
+        void refreshHostedAccount();
+      }
+    }).then((off) => { unlisten = off; });
+    return () => unlisten?.();
+  }, [refreshHostedAccount]);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    void listen<{ success: boolean; message?: string }>("texthalo:desktop-auth", (event) => {
+      if (event.payload.success) {
+        setAccountError("");
+        void refreshHostedAccount();
+      } else if (event.payload.message === "Sign-in cancelled.") {
+        setAccountError("");
+      } else if (event.payload.message) setAccountError(event.payload.message);
+      setAccountBusy(false);
+    }).then((off) => { unlisten = off; });
+    return () => unlisten?.();
+  }, [refreshHostedAccount]);
 
   const refreshHistory = useCallback(async () => {
     setHistoryLoading(true);
@@ -523,47 +733,126 @@ export default function App() {
   };
 
   const checkForUpdates = useCallback(async () => {
+    if (updateBusy.current || checkBusy.current) return;
+    checkBusy.current = true;
     setCheckingUpdate(true);
     setUpdateMessage("Checking for updates…");
     setUpdateAvailable(null);
     try {
       const update = await check();
-      setUpdateAvailable(update);
-      setUpdateMessage(update ? `Version ${update.version} is available.` : "You're up to date.");
+      let issue: string | null = null;
+      if (update) {
+        try { await invoke("check_update_installation"); }
+        catch (e) {
+          issue = updateErrorMessage(e);
+          void invoke("record_update_failure", { stage: "preflight", detail: String(e) }).catch(console.error);
+        }
+      }
+      setUpdateAvailable(issue ? null : update);
+      const message = issue ?? (update ? `Version ${update.version} is available.` : "You're up to date.");
+      setUpdateMessage(message);
+      await publishUpdateStatus({ version: update?.version ?? null, installable: Boolean(update) && !issue,
+        installing: false, message, error: Boolean(issue) });
+      void invoke("set_update_menu_status_from_settings", {
+        version: update?.version ?? null,
+      }).catch(() => {});
     } catch (e) {
-      setUpdateMessage(`Could not check for updates: ${String(e)}`);
+      const message = updateErrorMessage(e);
+      setUpdateMessage(message);
+      void invoke("record_update_failure", { stage: "check", detail: String(e) }).catch(console.error);
+      await publishUpdateStatus({ version: null, installable: false, installing: false, message, error: true });
     } finally {
+      checkBusy.current = false;
       setCheckingUpdate(false);
     }
   }, []);
 
   const installAvailableUpdate = useCallback(async () => {
-    if (!updateAvailable) return;
+    if (!updateAvailable || updateBusy.current) return;
+    updateBusy.current = true;
     setInstallingUpdate(true);
-    setUpdateMessage(`Downloading version ${updateAvailable.version}…`);
+    let stage = "preflight";
+    let prepared = false;
+    const report = (message: string, error = false, installing = true) => {
+      setUpdateMessage(message);
+      return publishUpdateStatus({ version: updateAvailable.version, installable: !installing && stage !== "relaunch",
+        installing, message, error });
+    };
+    await report("Checking installation permissions…");
     try {
+      await invoke("prepare_update_installation");
+      prepared = true;
+      stage = "download";
       await updateAvailable.downloadAndInstall((event) => {
         if (event.event === "Started") {
           updateDownload.current = { downloaded: 0, total: event.data.contentLength ?? 0 };
-          setUpdateMessage("Downloading update…");
+          void report("Downloading update…");
         } else if (event.event === "Progress") {
           updateDownload.current.downloaded += event.data.chunkLength;
           const { downloaded, total } = updateDownload.current;
-          setUpdateMessage(
+          void report(
             total
               ? `Downloading update (${formatBytes(downloaded)} of ${formatBytes(total)})…`
               : `Downloaded ${formatBytes(downloaded)}…`,
           );
         } else {
-          setUpdateMessage("Installing update and restarting…");
+          stage = "install";
+          void report("Installing update…");
         }
       });
+      prepared = false;
+      await invoke("finish_update_installation", { success: true }).catch(console.error);
+      stage = "relaunch";
+      await report("Update installed. Restarting TextHalo…");
       await relaunch();
     } catch (e) {
-      setUpdateMessage(`Update failed: ${String(e)}`);
+      const recovery = prepared
+        ? await invoke<string>("finish_update_installation", { success: false }).catch(String)
+        : "";
+      void invoke("record_update_failure", { stage, detail: String(e) }).catch(console.error);
+      await report(stage === "relaunch" ? "The update was installed, but TextHalo could not restart. Quit and reopen TextHalo from Applications." : `${updateErrorMessage(e)} ${recovery}`.trim(), true, false);
+      if (stage === "relaunch") setUpdateAvailable(null);
+    } finally {
+      updateBusy.current = false;
       setInstallingUpdate(false);
     }
   }, [updateAvailable]);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    void listen("texthalo:open-update-settings", () => {
+      setTab("general");
+      void checkForUpdates();
+    }).then((off) => { unlisten = off; });
+    return () => unlisten?.();
+  }, [checkForUpdates]);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    void listen<{ version: string | null }>(
+      "texthalo:background-update-status",
+      (event) => {
+        if (updateBusy.current) return;
+        if (event.payload.version) {
+          setUpdateMessage(`Version ${event.payload.version} is available.`);
+          void checkForUpdates(); // Load the installable Update object for the About panel.
+        } else {
+          setUpdateAvailable(null);
+          setUpdateMessage("You're up to date.");
+          void publishUpdateStatus({ version: null, installable: false, installing: false,
+            message: "You're up to date.", error: false });
+        }
+      },
+    ).then((off) => { unlisten = off; });
+    return () => unlisten?.();
+  }, [checkForUpdates]);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    void listen("texthalo:install-update-requested", () => void installAvailableUpdate())
+      .then((off) => { unlisten = off; });
+    return () => unlisten?.();
+  }, [installAvailableUpdate]);
 
   const refresh = useCallback(async () => {
     if (pendingSaves.current > 0) return;
@@ -576,6 +865,19 @@ export default function App() {
       }
     } catch (e) {
       setError(String(e));
+    }
+  }, []);
+
+  const requestAccessibility = useCallback(async () => {
+    if (accessibilityPromptStarted.current) return;
+    accessibilityPromptStarted.current = true;
+    try {
+      const next = await invoke<UiState>("request_accessibility");
+      latestState.current = next;
+      setState(next);
+    } catch (cause) {
+      accessibilityPromptStarted.current = false;
+      setError(String(cause));
     }
   }, []);
 
@@ -596,6 +898,10 @@ export default function App() {
       setEspeakInstalling(installing);
       if (!installing) void refresh();
     });
+    const setupWizard = listen("texthalo:open-setup", () => {
+      setSetupOpen(true);
+      setSetupRevision((revision) => revision + 1);
+    });
     // Permission is granted outside the app, and speech ends on its own: poll rather
     // than pretend we can observe either.
     const poll = window.setInterval(() => void refresh(), 2000);
@@ -603,9 +909,18 @@ export default function App() {
       void unlisten.then((off) => off());
       void uninstall.then((off) => off());
       void unespeak.then((off) => off());
+      void setupWizard.then((off) => off());
       window.clearInterval(poll);
     };
   }, [refresh]);
+
+  useEffect(() => {
+    if (
+      !state || state.trusted ||
+      state.settings.accessibility_prompted || accessibilityPromptStarted.current
+    ) return;
+    void requestAccessibility();
+  }, [state, requestAccessibility]);
 
   const save = useCallback(
     async (patch: Partial<Settings>) => {
@@ -634,6 +949,81 @@ export default function App() {
     },
     [refresh],
   );
+
+  const loadHostedVoices = useCallback(async (query: string, language: string) => {
+    const revision = ++hostedLoadRevision.current;
+    setHostedLoading(true);
+    try {
+      let page = 1;
+      let voices: HostedVoice[] = [];
+      let hasMore = true;
+      while (hasMore) {
+        const result = await invoke<{ items: HostedVoice[]; hasMore: boolean; modelId: string }>("desktop_voices", { query, language, page });
+        if (revision !== hostedLoadRevision.current) return;
+        voices = page === 1 ? result.items : [...voices, ...result.items];
+        setHostedVoices(voices);
+        if (page === 1 && result.modelId && latestState.current?.settings.fish.model_id !== result.modelId) {
+          const current = latestState.current!.settings;
+          void save({ fish: { ...current.fish, model_id: result.modelId } });
+        }
+        hasMore = result.hasMore && result.items.length > 0;
+        page++;
+      }
+      setAccountError("");
+    } catch (cause) {
+      if (revision === hostedLoadRevision.current) setAccountError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      if (revision === hostedLoadRevision.current) setHostedLoading(false);
+    }
+  }, [save]);
+
+  useEffect(() => {
+    if (tab === "voice" && state?.settings.engine === "fish") {
+      void invoke<{items: HostedVoiceLanguage[]}>("desktop_voice_languages").then((result) => {
+        setHostedLanguages(result.items);
+        const preferred = state.system_language.split(/[_-]/)[0]?.toLocaleLowerCase() || "en";
+        const selected = result.items.some((item) => item.code === preferred) ? preferred : "en";
+        setHostedLanguage(selected);
+        void loadHostedVoices(hostedQueryRef.current, selected);
+      }).catch((cause) => setAccountError(cause instanceof Error ? cause.message : String(cause)));
+    }
+    const canClone = (account?.plans.find((plan) => plan.id === account.subscription?.planId)?.cloneLimit ?? 0) > 0;
+    if ((tab === "account" || (tab === "voice" && state?.settings.engine === "fish")) && account && canClone) void invoke<{items: HostedClone[]}>("desktop_clones").then((v) => setHostedClones(v.items)).catch((cause) => setAccountError(cause instanceof Error ? cause.message : String(cause)));
+  }, [tab, state?.settings.engine, state?.system_language, account, loadHostedVoices]);
+
+  useEffect(() => {
+    if (!pendingCloneKey) return;
+    const cloneIds = pendingCloneKey.split("\u0000");
+    let active = true;
+    let refreshing = false;
+    const refreshStatuses = async () => {
+      if (refreshing) return;
+      refreshing = true;
+      try {
+        const updated = await Promise.all(
+          cloneIds.map((voiceId) => invoke<HostedClone>("desktop_clone_status", { voiceId })),
+        );
+        if (active) {
+          setHostedClones((current) => current.map((clone) => updated.find((item) => item.id === clone.id) ?? clone));
+          const currentState = latestState.current;
+          const selectedClone = updated.find((clone) => clone.id === currentState?.settings.fish.voice_id);
+          if (currentState?.settings.engine === "fish" && selectedClone && selectedClone.status !== "trained") {
+            void save({ fish: { ...currentState.settings.fish, voice_id: "" } });
+          }
+        }
+      } catch {
+        // Keep the last known status and retry on the next interval.
+      } finally {
+        refreshing = false;
+      }
+    };
+    void refreshStatuses();
+    const timer = window.setInterval(() => void refreshStatuses(), 10_000);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [pendingCloneKey, save]);
 
   /* Voice + language derivation. */
   const voices = state?.voices ?? [];
@@ -780,6 +1170,33 @@ export default function App() {
     (voice) => voice.id === activeEngine?.selected_voice,
   );
 
+  if (setupOpen || !settings.onboarding_completed) {
+    const kokoroEngine = engines.find((engine) => engine.id === "kokoro");
+    return <SetupWizard
+      key={setupRevision}
+      settings={settings}
+      voices={voices}
+      trusted={state.trusted}
+      recordingShortcut={recording === "speak"}
+      kokoroReady={kokoroEngine?.can_speak ?? false}
+      kokoroDownloadBytes={kokoroEngine?.download_bytes ?? 346_258_435}
+      kokoroInstall={install?.engine === "kokoro" ? install : null}
+      onSave={save}
+      onRequestAccessibility={() => { void requestAccessibility(); }}
+      onOpenAccessibilitySettings={() => { void invoke("open_accessibility_settings"); }}
+      onPreviewVoice={(voice) => preview(voice)}
+      onChooseEngine={(engine) => { void save({ engine }); }}
+      onInstallKokoro={() => {
+        setInstall(null);
+        void invoke("install_engine", { engine: "kokoro" }).catch((cause) => setError(String(cause)));
+      }}
+      onRecordShortcut={() => setRecording("speak")}
+      onFinish={() => setSetupOpen(false)}
+      onLoadPlans={() => invoke<SetupPlansResponse>("desktop_billing_plans")}
+      onOpenPlans={() => { void openUrl(`${websiteUrl}/pricing/`); }}
+    />;
+  }
+
   /*
    * Download progress, when the Rust side is fetching weights for the engine on screen.
    * Keyed to the active engine so a background download for another one cannot post its
@@ -850,6 +1267,86 @@ export default function App() {
     }
   };
 
+  const beginDesktopSignIn = async () => {
+    setAccountBusy(true); setAccountError("");
+    try {
+      const url = await invoke<string>("begin_desktop_signin");
+      await openUrl(url);
+    } catch (cause) {
+      void invoke("cancel_desktop_signin").catch(() => {});
+      setAccountError(cause instanceof Error ? cause.message : String(cause));
+      setAccountBusy(false);
+    }
+  };
+
+  const cancelDesktopSignIn = async () => {
+    try { await invoke("cancel_desktop_signin"); }
+    finally {
+      setAccountBusy(false);
+      setAccountError("");
+    }
+  };
+
+  const signOut = async () => {
+    setAccountBusy(true); setAccountError("");
+    try {
+      await invoke("stop_speaking");
+      await invoke("desktop_sign_out");
+      setAccount(null); setAccountEmail(""); setHostedClones([]);
+    } catch (cause) { setAccountError(cause instanceof Error ? cause.message : String(cause)); }
+    finally { setAccountBusy(false); }
+  };
+
+  const previewHostedVoice = async (voiceId: string, sampleId?: string) => {
+    try {
+      await invoke("desktop_voice_preview", { voiceId, sampleId });
+    } catch (cause) { setAccountError(cause instanceof Error ? cause.message : String(cause)); }
+  };
+
+  const pickCloneAudio = async () => {
+    const picked = await open({ multiple: false, title: "Choose a voice recording", filters: [{ name: "Audio", extensions: ["wav", "mp3", "m4a", "ogg", "flac"] }] });
+    if (typeof picked === "string") setClonePath(picked);
+  };
+
+  const uploadClone = async () => {
+    if (accountBusy || !clonePath || !cloneName.trim() || !cloneConsent) return;
+    setAccountBusy(true); setAccountError("");
+    setCloneUploadError(""); setCloneUploadSuccess("");
+    try {
+      const created = await invoke<HostedClone>("desktop_upload_clone", { path: clonePath, name: cloneName.trim(), consent: cloneConsent });
+      setClonePath(""); setCloneName(""); setCloneConsent(false);
+      setHostedClones((items) => [created, ...items.filter((item) => item.id !== created.id)]);
+      setCloneUploadSuccess(`“${created.name}” was uploaded and saved. ${created.status === "trained" ? "Ready to select in Voice → My hosted clones." : created.status === "failed" ? "Training failed; see its status above." : "Training is pending. It will be available in Voice → My hosted clones when ready."}`);
+    } catch (cause) { setCloneUploadError(cause instanceof Error ? cause.message : String(cause)); }
+    finally { setAccountBusy(false); }
+  };
+
+  const deleteHostedClone = async (voiceId: string) => {
+    const clone = hostedClones.find((item) => item.id === voiceId);
+    if (!window.confirm(`Delete “${clone?.name ?? "this voice clone"}” from your Fish Audio account?`)) return;
+    setAccountError("");
+    try {
+      await invoke("desktop_delete_clone", { voiceId });
+      setHostedClones((items) => items.filter((item) => item.id !== voiceId));
+      if (latestState.current?.settings.fish.voice_id === voiceId) void save({ fish: { ...latestState.current.settings.fish, voice_id: "" } });
+    }
+    catch (cause) { setAccountError(cause instanceof Error ? cause.message : String(cause)); }
+  };
+
+  const openCheckout = async (planId: string) => {
+    setAccountBusy(true); setAccountError("");
+    try { const url = await invoke<string>("desktop_checkout", { planId }); await openUrl(url); }
+    catch (cause) { setAccountError(cause instanceof Error ? cause.message : String(cause)); }
+    finally { setAccountBusy(false); }
+  };
+
+  const buyTopup = async (packId: string) => {
+    setAccountBusy(true); setAccountError("");
+    try { const url = await invoke<string>("desktop_topup", { packId }); await openUrl(url); }
+    catch (cause) { setAccountError(cause instanceof Error ? cause.message : String(cause)); }
+    finally { setAccountBusy(false); }
+  };
+
   const statusLine =
     status.phase === "error"
       ? { kind: "error" as const, text: status.message ?? "failed" }
@@ -867,6 +1364,7 @@ export default function App() {
   const tabs: { id: Tab; title: string; icon: React.ReactNode }[] = [
     { id: "general", title: "General", icon: Icon.gear() },
     { id: "voice", title: "Voice", icon: Icon.speaker() },
+    { id: "account", title: "Account", icon: Icon.gear() },
     { id: "shortcuts", title: "Shortcuts", icon: Icon.command() },
     { id: "capture", title: "Capture", icon: Icon.textCursor() },
     { id: "history", title: "History", icon: Icon.history() },
@@ -929,31 +1427,72 @@ export default function App() {
             <h1 className="pane-title">General</h1>
             <p className="pane-subtitle">
               Select text anywhere, press <span className="mono">{settings.shortcuts.speak}</span>{" "}
-              and it is read aloud. Nothing is sent anywhere.
+              and it is read aloud. {settings.engine === "fish" ? "Selected text is sent to TextHalo and Fish Audio for hosted speech." : "Local engines process text on this Mac."}
             </p>
 
             <Card title="Permission" icon={Icon.textCursor()}>
               {state.trusted ? (
-                <Note kind="secondary" icon={Icon.checkCircle()}>
-                  Accessibility access granted — TextHalo can read the selection.
-                </Note>
+                <>
+                  <Note kind="secondary" icon={Icon.checkCircle()}>
+                    Accessibility access granted. TextHalo uses it when you press your Speak
+                    shortcut to capture the selected text.
+                  </Note>
+                  <div className="card-note">
+                    The default method simulates ⌘C and reads the copied selection. macOS
+                    requires Accessibility access to send that keystroke. The clipboard is
+                    temporarily used; its previous text is restored when the restore option is
+                    enabled. Accessibility-based capture methods use this access to read the
+                    selection directly.
+                  </div>
+                </>
               ) : (
                 <>
                   <Note kind="warning" icon={Icon.warn()}>
-                    TextHalo needs Accessibility access before it can read anything.
+                    TextHalo needs Accessibility access to capture selected text when you press
+                    your Speak shortcut. macOS requires this permission for the default
+                    simulated ⌘C method.
                   </Note>
-                  <div className="inline">
-                    <button
-                      className="plain"
-                      onClick={() => void invoke("open_accessibility_settings")}
-                    >
-                      Open System Settings…
-                    </button>
-                  </div>
                   <div className="card-note">
-                    Switch <strong>TextHalo</strong> on under Privacy &amp; Security →
-                    Accessibility. This panel notices by itself once you do.
+                    TextHalo does not capture text continuously. The default method briefly uses
+                    the clipboard to read what the focused app copies; its previous text is
+                    restored when the restore option is enabled. You can also choose an
+                    Accessibility-based method that reads the selection directly.
                   </div>
+                  <div className="inline">
+                    {state.settings.accessibility_prompted ? (
+                      <button
+                        className="plain"
+                        onClick={() => void invoke("open_accessibility_settings")}
+                      >
+                        Open Accessibility Settings…
+                      </button>
+                    ) : (
+                      <button
+                        className="plain"
+                        onClick={() =>
+                          void invoke<UiState>("request_accessibility")
+                            .then((next) => {
+                              latestState.current = next;
+                              setState(next);
+                            })
+                            .catch((cause) => setError(String(cause)))
+                        }
+                      >
+                        Continue to macOS permission prompt…
+                      </button>
+                    )}
+                  </div>
+                  {state.settings.accessibility_prompted ? (
+                    <div className="card-note">
+                      In System Settings, switch <strong>TextHalo</strong> on under Privacy
+                      &amp; Security → Accessibility. This panel notices by itself once you do.
+                    </div>
+                  ) : (
+                    <div className="card-note">
+                      macOS will show its standard permission prompt. Afterward, enable
+                      <strong> TextHalo</strong> under Privacy &amp; Security → Accessibility.
+                    </div>
+                  )}
                   <div className="card-note">
                     Rebuilding from source invalidates the grant, and the stale entry keeps
                     failing. Clear it with:
@@ -1007,11 +1546,19 @@ export default function App() {
 
         {tab === "voice" ? (
           <div className="pane-inner">
-            <h1 className="pane-title">Voice</h1>
-            <p className="pane-subtitle">
-              Which engine speaks, and which of its voices it uses.
-            </p>
-
+            <div className="history-heading">
+              <div>
+                <h1 className="pane-title">Voice</h1>
+                <p className="pane-subtitle">
+                  Which engine speaks, and which of its voices it uses.
+                </p>
+              </div>
+              {!account ? (
+                <button className="plain" onClick={() => setTab("account")}>
+                  Sign in
+                </button>
+              ) : null}
+            </div>
             <Card title="Engine" icon={Icon.speaker()}>
               <div className="row-stack">
                 {engines.map((engine) => (
@@ -1082,7 +1629,55 @@ export default function App() {
               ) : null}
             </Card>
 
-            {settings.engine === "apple" ? (
+            {settings.engine === "fish" ? (
+              <>
+                <Card title="Fish Audio hosted voices" icon={Icon.speaker()}>
+                  <div className="field">
+                    <span className="field-label">Language</span>
+                    <select value={hostedLanguage} onChange={(event) => { const selected = event.target.value; setHostedLanguage(selected); void loadHostedVoices(hostedQuery, selected); }}>
+                      <option value="all">All languages</option>
+                      {hostedLanguages.map((item) => <option key={item.code} value={item.code}>{hostedLanguageName(item.code)} — {item.voiceCount}</option>)}
+                    </select>
+                  </div>
+                  <div className="field">
+                    <span className="field-label">Find a voice</span>
+                    <div className="inline">
+                      <input value={hostedQuery} placeholder="Search voices" onChange={(event) => { setHostedQuery(event.target.value); hostedQueryRef.current = event.target.value; }} onKeyDown={(event) => { if (event.key === "Enter") void loadHostedVoices(hostedQuery, hostedLanguage); }} />
+                      <button className="plain" disabled={hostedLoading} onClick={() => void loadHostedVoices(hostedQuery, hostedLanguage)}>{hostedLoading ? "Loading…" : "Search"}</button>
+                    </div>
+                    <span className="field-hint">Choose a voice, then use your Speak shortcut anywhere.</span>
+                  </div>
+                  {!account ? <Note kind="warning" icon={Icon.warn()}>Sign in to use hosted speech. Preview samples are available without signing in.</Note> : null}
+                  {accountError ? <Note kind="error" icon={Icon.xCircle()}>{accountError}</Note> : null}
+                  <div className="voice-list">
+                    {hostedVoicesByLanguage.map(([code, voices]) => (
+                      <div key={code}>
+                        {hostedLanguage === "all" ? <div className="group-heading">{hostedLanguageName(code)}</div> : null}
+                        <div className="row-stack" style={{ marginTop: hostedLanguage === "all" ? 6 : 0 }}>
+                          {voices.map((voice) => {
+                            const selected = settings.fish.voice_id === voice.id;
+                            return <Row key={`${code}-${voice.id}`} selected={selected} glyph={selected ? Icon.checkCircle() : Icon.circle()} title={voice.name} subtitle={[voice.languageCodes?.join(", "), voice.description].filter(Boolean).join(" · ")} badge={selected ? "Selected" : undefined} onSelect={() => void save({ fish: { ...settings.fish, voice_id: voice.id } })} trailing={voice.previewAvailable ? <button className="icon" title={`Preview ${voice.name}`} onClick={(event) => { event.stopPropagation(); void previewHostedVoice(voice.id, voice.samples?.[0]?.id); }}>{Icon.play()}</button> : undefined} />;
+                          })}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  {hostedClones.length > 0 ? <div className="field"><span className="field-label">My hosted clones</span><div className="row-stack">{hostedClones.map((clone) => { const ready = clone.status === "trained"; const selected = settings.fish.voice_id === clone.id; const status = clone.status === "trained" ? "Ready" : clone.status === "failed" ? "Training failed" : clone.status === "created" ? "Queued" : "Training"; return <Row key={clone.id} selected={selected} disabled={!ready} glyph={selected && ready ? Icon.checkCircle() : Icon.circle()} title={clone.name} subtitle={ready ? "Clone · Ready to use" : `Clone · ${status} · unavailable until training completes`} badge={selected ? "Selected" : status} onSelect={() => void save({ fish: { ...settings.fish, voice_id: clone.id } })} />; })}</div></div> : null}
+                  {hostedVoices.length === 0 && !accountError && !hostedLoading ? <span className="card-note">No voices loaded. Search or refresh to browse.</span> : null}
+                  <label className="toggle-row"><input type="checkbox" checked={settings.fish.enhance_text} onChange={(event) => void save({ fish: { ...settings.fish, enhance_text: event.target.checked } })} /><span>Enhance text with semantic delivery cues</span></label>
+                </Card>
+                <Card title="Custom voice cloning" icon={Icon.speaker()}>
+                  <p className="card-note">Fish Audio supports personal voice clones. You can browse this feature while signed out; signing in and an eligible Creator plan are required to upload recordings and manage clones.</p>
+                  {!account ? <Note kind="info" icon={Icon.info()}>Sign in to see your plan and create a custom voice clone.</Note> : (account.plans.find((plan) => plan.id === account.subscription?.planId)?.cloneLimit ?? 0) > 0 ? <Note kind="info" icon={Icon.info()}>Your current plan includes voice cloning. Upload and manage your clones from Account.</Note> : <Note kind="secondary" icon={Icon.info()}>Voice cloning is available with the Creator plan. Visit Account to review plans.</Note>}
+                  <button className="plain" onClick={() => setTab("account")}>{!account ? "Sign in to create a clone" : (account.plans.find((plan) => plan.id === account.subscription?.planId)?.cloneLimit ?? 0) > 0 ? "Manage voice clones" : "View plans"}</button>
+                </Card>
+                <Card title="Privacy for hosted speech" icon={Icon.info()}>
+                  <p className="card-note">When you use hosted speech, selected text is sent to TextHalo’s service and the speech provider to generate audio. Optional text enhancement processes the text through an additional service. Local Apple, Kokoro, and Chatterbox engines process speech on your Mac.</p>
+                  <button className="plain" onClick={() => void openUrl(`${websiteUrl}/privacy/`)}>Read the privacy policy ↗</button>
+                  <label className="toggle-row"><input type="checkbox" checked={settings.fish.privacy_accepted} onChange={(event) => void save({ fish: { ...settings.fish, privacy_accepted: event.target.checked } })} /><span>I understand how hosted speech processes selected text.</span></label>
+                </Card>
+              </>
+            ) : settings.engine === "apple" ? (
               <Card title="Spoken voice" icon={Icon.speaker()}>
               <div className="field">
                 <span className="field-label">Language</span>
@@ -1473,6 +2068,60 @@ export default function App() {
           </div>
         ) : null}
 
+        {tab === "account" ? (
+          <div className="pane-inner">
+            <h1 className="pane-title">Account</h1>
+            <p className="pane-subtitle">Sign in to sync hosted speech with your TextHalo account.</p>
+            {accountError ? <Note kind="error" icon={Icon.xCircle()}>{accountError}</Note> : null}
+            {account ? (
+              <>
+                <Card title="Signed in" icon={Icon.checkCircle()}>
+                  <div className="inline"><strong>{accountEmail || "TextHalo account"}</strong><button className="plain" disabled={accountBusy} onClick={() => void refreshHostedAccount()}>Refresh</button><button className="plain" disabled={accountBusy} onClick={() => void signOut()}>Sign out</button></div>
+                </Card>
+                <Card title="Credits and plan" icon={Icon.gauge()}>
+                  <div className="row-stack">
+                    <Row selected={false} glyph={Icon.checkCircle()} title={`${account.availableCredits.toLocaleString()} credits available`} subtitle={account.subscription ? `${account.subscription.planId} · ${account.subscription.status}${account.subscription.cancelAtPeriodEnd ? " · cancels at period end" : ""}` : "Free plan"} onSelect={() => {}} />
+                    <Row selected={false} glyph={Icon.circle()} title={`${account.creditBreakdown.planCredits.toLocaleString()} plan credits`} subtitle="Monthly subscription balance" onSelect={() => {}} />
+                    <Row selected={false} glyph={Icon.circle()} title={`${account.creditBreakdown.topupCredits.toLocaleString()} top-up credits`} subtitle="Purchased credit packs" onSelect={() => {}} />
+                    {account.creditBreakdown.otherCredits ? <Row selected={false} glyph={Icon.circle()} title={`${account.creditBreakdown.otherCredits.toLocaleString()} other credits`} onSelect={() => {}} /> : null}
+                  </div>
+                  {account.subscription?.currentPeriodEnd ? <div className="card-note">Current period ends {new Date(account.subscription.currentPeriodEnd).toLocaleDateString()}.</div> : null}
+                  <div className="inline"><button className="plain" onClick={() => void openUrl(`${websiteUrl}/pricing/`)}>Explore plans</button><button className="plain" onClick={() => void openUrl(`${websiteUrl}/account/billing/`)}>Billing portal</button></div>
+                  {account.plans.map((plan) => <div className="inline" key={plan.id}><span className="card-note">{plan.id === "plus" ? "Plus" : plan.id === "creator" ? "Creator" : plan.id}: {plan.creditsPerPeriod.toLocaleString()} credits per period · {plan.cloneLimit} saved clones</span><button className="plain" disabled={accountBusy} onClick={() => void openCheckout(plan.id)}>Choose plan</button></div>)}
+                </Card>
+                <Card title="One-time credit packs" icon={Icon.gauge()}>
+                  <div className="card-note">Top-up credits are separate from monthly plan credits. They remain available according to the credit pack terms.</div>
+                  <div className="inline"><button className="plain" disabled={accountBusy} onClick={() => void buyTopup("topup-5")}>$5 · 30,000 credits</button><button className="plain" disabled={accountBusy} onClick={() => void buyTopup("topup-10")}>$10 · 60,000 credits</button><button className="plain" disabled={accountBusy} onClick={() => void buyTopup("topup-20")}>$20 · 120,000 credits</button></div>
+                </Card>
+                {(account.plans.find((plan) => plan.id === account.subscription?.planId)?.cloneLimit ?? 0) > 0 ? <Card title="Your hosted voice clones" icon={Icon.speaker()}>
+                  <div className="row-stack">{hostedClones.map((clone) => <Row key={clone.id} selected={false} glyph={Icon.speaker()} title={clone.name} subtitle={`Status: ${clone.status}`} onSelect={() => {}} trailing={<button className="plain" onClick={() => void deleteHostedClone(clone.id)}>Delete</button>} />)}</div>
+                  <p className="card-note">Name your voice, choose a recording, and confirm permission. Nothing is uploaded until you click “Upload and create clone”.</p>
+                  <div className="field"><label className="field-label" htmlFor="hosted-clone-name">1. Voice name (required)</label><input id="hosted-clone-name" value={cloneName} placeholder="e.g. My narration voice" maxLength={100} required aria-describedby="hosted-clone-name-hint" onChange={(event) => setCloneName(event.target.value)} /><span id="hosted-clone-name-hint" className="field-hint">The name shown in your saved voices. Up to 100 characters.</span></div>
+                  <div className="field"><span className="field-label">2. Voice recording (required)</span><div className="inline"><button className="plain" disabled={accountBusy} onClick={() => void pickCloneAudio()}>{clonePath ? "Choose another file" : "Choose audio…"}</button><span className="field-hint">{clonePath ? `Selected: ${clonePath.split(/[\\/]/).pop()} — not uploaded yet` : "WAV, MP3, M4A, OGG, or FLAC · up to 25 MB"}</span></div></div>
+                  <label className="toggle-row"><input type="checkbox" checked={cloneConsent} onChange={(event) => setCloneConsent(event.target.checked)} /><span>I own this voice or have permission to clone it. I understand this recording is uploaded to Fish Audio and saved to my account.</span></label>
+                  <p className="field-hint" role="status">{!cloneName.trim() ? "Enter a voice name to continue." : !clonePath ? "Choose an audio recording to continue." : !cloneConsent ? "Confirm voice ownership or permission before uploading." : "Ready to upload your recording to Fish Audio."}</p>
+                  <button className="plain" disabled={accountBusy || !cloneName.trim() || !clonePath || !cloneConsent} onClick={() => void uploadClone()}>{accountBusy ? "Uploading and creating…" : "Upload and create clone"}</button>
+                  {cloneUploadError ? <div role="alert"><Note kind="error" icon={Icon.xCircle()}>Clone was not created: {cloneUploadError}</Note></div> : null}
+                  {cloneUploadSuccess ? <div role="status"><Note kind="info" icon={Icon.checkCircle()}>{cloneUploadSuccess}</Note></div> : null}
+                  <div className="card-note">Your plan includes up to {account.plans.find((plan) => plan.id === account.subscription?.planId)?.cloneLimit ?? 0} saved clones when cloning is enabled by the service.</div>
+                </Card> : null}
+              </>
+            ) : (
+              <Card title="Sign in to TextHalo" icon={Icon.gear()}>
+                <div className="account-brand">
+                  <img className="account-brand-mark" src={appLogo} alt="" />
+                  <div><strong>TextHalo</strong><div className="card-note">Your account for hosted speech</div></div>
+                  <div className="account-brand-actions">
+                    <button className="plain" disabled={accountBusy} onClick={() => void beginDesktopSignIn()}>{accountBusy ? "Waiting for browser sign-in…" : "Sign in"}</button>
+                    {accountBusy ? <button className="text" onClick={() => void cancelDesktopSignIn()}>Cancel</button> : null}
+                  </div>
+                </div>
+                <div className="inline"><button className="text" onClick={() => void openUrl(`${websiteUrl}/sign-in/?mode=sign-up`)}>Create an account</button><button className="text" onClick={() => void openUrl(`${websiteUrl}/sign-in/?mode=forgot-password`)}>Forgot password?</button></div>
+              </Card>
+            )}
+          </div>
+        ) : null}
+
         {tab === "shortcuts" ? (
           <div className="pane-inner">
             <h1 className="pane-title">Shortcuts</h1>
@@ -1541,6 +2190,12 @@ export default function App() {
                 {(
                   [
                     {
+                      mode: "copy_only" as CaptureMode,
+                      title: "Simulated ⌘C only (recommended)",
+                      subtitle:
+                        "Avoids inconsistent Accessibility text by simulating ⌘C; requires macOS Accessibility permission and temporarily uses the clipboard",
+                    },
+                    {
                       mode: "ax_then_copy" as CaptureMode,
                       title: "Accessibility, then copy",
                       subtitle:
@@ -1550,12 +2205,6 @@ export default function App() {
                       mode: "ax_only" as CaptureMode,
                       title: "Accessibility only",
                       subtitle: "Never touches the clipboard",
-                    },
-                    {
-                      mode: "copy_only" as CaptureMode,
-                      title: "Simulated ⌘C only",
-                      subtitle:
-                        "For apps with no usable accessibility tree — Chrome, Electron, some terminals",
                     },
                   ] as const
                 ).map((option) => (

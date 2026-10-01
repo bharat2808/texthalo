@@ -1,5 +1,7 @@
 import { blogPosts, stories, type EditorialPage } from "./content";
+import { BillingAccountPage, BillingSuccessPage, DesktopConnectPage, PasswordResetPage, PricingPage, SignInPage } from "./billing";
 import Website from "./website";
+import { MAC_DOWNLOAD } from "./downloads";
 
 const SITE_URL = "https://texthalo.app";
 const SOURCE = "https://github.com/bharat2808/texthalo";
@@ -7,6 +9,13 @@ const SOURCE = "https://github.com/bharat2808/texthalo";
 export function getSitePaths(): string[] {
   return [
     "/",
+    "/pricing/",
+    "/privacy/",
+    "/sign-in/",
+    "/desktop-connect/",
+    "/reset-password/",
+    "/account/billing/",
+    "/account/billing/success/",
     "/demo/",
     "/blog/",
     ...blogPosts.map((page) => `/blog/${page.slug}/`),
@@ -32,7 +41,7 @@ function VideoWatchPage() {
       <h2>A small Mac app for listening while you work</h2>
       <p>TextHalo reads a passage you select in another app. Start playback with a keyboard shortcut, keep the floating player nearby, and choose Apple system voices or local AI speech engines.</p>
       <p>Speech synthesis runs locally on your Mac. Kokoro and Chatterbox model files are downloaded when you choose to use those engines.</p>
-      <a className="button button-dark" href="https://github.com/bharat2808/texthalo/releases/latest/download/TextHalo-macOS-aarch64.dmg">Download TextHalo for Mac <span aria-hidden="true">→</span></a>
+      <a className="button button-dark" href={MAC_DOWNLOAD}>Download TextHalo for Apple Silicon <span aria-hidden="true">→</span></a>
     </section>
   </main><EditorialFooter /></div>;
 }
@@ -43,23 +52,50 @@ function Mark() {
 
 function EditorialHeader() {
   return <>
-    <div className="announcement"><span className="announcement-dot" /> TextHalo is open source <span className="announcement-separator">·</span> Made for macOS</div>
+    <div className="announcement"><span className="announcement-dot" /> TextHalo is open source <span className="announcement-separator">·</span> Requires Apple Silicon</div>
     <header className="site-header editorial-header">
       <a className="wordmark" href="/" aria-label="TextHalo home"><Mark /><span>TextHalo</span></a>
       <nav className="editorial-nav" aria-label="Main navigation">
         <a href="/#how-it-works">How it works</a>
         <a href="/#voices">Voices</a>
+        <a href="/pricing/">Pricing</a>
         <a href="/demo/">Demo</a>
         <a href="/stories/">Stories</a>
         <a href="/blog/">Blog</a>
-        <a className="button button-dark nav-download" href="https://github.com/bharat2808/texthalo/releases/latest/download/TextHalo-macOS-aarch64.dmg">Download for Mac <span aria-hidden="true">→</span></a>
+        <a href="/privacy/">Privacy</a>
+        <a className="button button-dark nav-download" href={MAC_DOWNLOAD}>Download for Apple Silicon <span aria-hidden="true">→</span></a>
       </nav>
     </header>
   </>;
 }
 
 function EditorialFooter() {
-  return <footer className="site-footer"><a className="wordmark footer-wordmark" href="/"><Mark /><span>TextHalo</span></a><span className="footer-copy">A little more room to listen.</span><div className="footer-links"><a href="/blog/">Blog</a><a href="/stories/">Stories</a><a href={SOURCE}>GitHub</a><a href={`${SOURCE}/blob/master/LICENSE-APACHE`}>Apache 2.0</a></div><span className="copyright">© {new Date().getFullYear()} TextHalo</span></footer>;
+  return <footer className="site-footer"><a className="wordmark footer-wordmark" href="/"><Mark /><span>TextHalo</span></a><span className="footer-copy">A little more room to listen.</span><div className="footer-links"><a href="/privacy/">Privacy</a><a href="/blog/">Blog</a><a href="/stories/">Stories</a><a href={SOURCE}>GitHub</a><a href={`${SOURCE}/blob/master/LICENSE-APACHE`}>Apache 2.0</a></div><span className="copyright">© {new Date().getFullYear()} TextHalo</span></footer>;
+}
+
+function PrivacyPolicyPage() {
+  return <div className="site-shell"><EditorialHeader /><main className="editorial-main article-main privacy-policy">
+    <nav className="breadcrumbs" aria-label="Breadcrumb"><a href="/">Home</a><span>/</span><span>Privacy</span></nav>
+    <article>
+      <header className="article-header"><div className="eyebrow"><span className="eyebrow-line" /> YOUR WORDS, YOUR CHOICE</div><h1>Privacy policy</h1><p className="article-deck">This policy explains what TextHalo processes when you use the Mac app and related hosted services.</p><div className="article-byline"><span>Effective September 29, 2026</span></div></header>
+      <div className="article-body">
+        <h2>Speech on your Mac</h2>
+        <p>When you use Apple system voices or a downloaded local speech model, TextHalo processes the selected text and generates speech on your Mac. TextHalo may download model files or app updates when you request them; those downloads are separate from sending text for speech.</p>
+        <h2>Hosted speech</h2>
+        <p>If you choose a hosted voice, the selected text is sent to TextHalo’s service and on to the speech provider so it can generate audio. The service streams the generated audio back to the app. Hosted speech requires an account and may require an eligible plan or credits. Do not send text to a hosted voice unless you are comfortable processing it this way.</p>
+        <h2>Optional text enhancement</h2>
+        <p>If you turn on semantic delivery-cue enhancement for hosted speech, the selected text is also sent to the configured enhancement service to prepare the speech request. You can turn this option off in the app’s voice settings.</p>
+        <h2>Voice cloning</h2>
+        <p>If you submit a recording to create a hosted voice clone, that recording and the details you provide are sent to TextHalo’s service and the voice-cloning provider for training and clone management. Only submit recordings you own or have permission to use. You can manage or delete your hosted clones from the app’s account area; deletion from TextHalo does not make claims about any independent copies or records retained by a provider.</p>
+        <h2>Account and payments</h2>
+        <p>If you create an account or use hosted features, TextHalo’s service processes account and service information needed to authenticate you, manage your hosted access, and maintain your credits or subscription. Payments and checkout are handled by the payment provider. TextHalo’s service receives payment-related identifiers and subscription or credit events needed to provide the service; payment card details are handled through checkout.</p>
+        <h2>Local app data</h2>
+        <p>App preferences, selected voice settings, and playback history are stored by the app on your Mac. Model files and audio used by the app may also be stored in local app data. Content submitted to hosted speech or hosted voice cloning is transmitted as described above.</p>
+        <h2>Your choices and questions</h2>
+        <p>You can choose local speech instead of hosted speech, disable optional text enhancement, and avoid hosted cloning. The app presents a separate acknowledgement before hosted speech can be used. For questions about this policy, contact the TextHalo maintainers through the project’s <a href={`${SOURCE}/issues`} target="_blank" rel="noreferrer">GitHub repository</a>.</p>
+      </div>
+    </article>
+  </main><EditorialFooter /></div>;
 }
 
 function Card({ page, basePath }: { page: EditorialPage; basePath: string }) {
@@ -104,13 +140,20 @@ function EditorialArticle({ page, kind }: { page: EditorialPage; kind: "blog" | 
         return <p key={index}>{block.text}</p>;
       })}</div>
     </article>
-    <aside className="article-cta"><div><strong>Listen to selected text on your Mac.</strong><span>TextHalo is free and open source.</span></div><a className="button button-dark" href="https://github.com/bharat2808/texthalo/releases/latest/download/TextHalo-macOS-aarch64.dmg">Download TextHalo <span aria-hidden="true">→</span></a></aside>
+    <aside className="article-cta"><div><strong>Listen to selected text on your Mac.</strong><span>TextHalo is free and open source. Requires Apple Silicon.</span></div><a className="button button-dark" href={MAC_DOWNLOAD}>Download TextHalo <span aria-hidden="true">→</span></a></aside>
     <a className="text-link back-link" href={basePath}>← Back to {kind}</a>
   </main><EditorialFooter /></div>;
 }
 
 export function SitePage({ pathname }: { pathname: string }) {
   if (pathname === "/") return <Website />;
+  if (pathname === "/privacy/") return <PrivacyPolicyPage />;
+  if (pathname === "/pricing/") return <PricingPage />;
+  if (pathname === "/sign-in/") return <SignInPage />;
+  if (pathname === "/desktop-connect/") return <DesktopConnectPage />;
+  if (pathname === "/reset-password/") return <PasswordResetPage />;
+  if (pathname === "/account/billing/") return <BillingAccountPage />;
+  if (pathname === "/account/billing/success/") return <BillingSuccessPage />;
   if (pathname === "/demo/") return <VideoWatchPage />;
   if (pathname === "/blog/") return <EditorialIndex kind="blog" />;
   if (pathname === "/stories/") return <EditorialIndex kind="stories" />;
@@ -160,7 +203,7 @@ const defaultMetadata = (path: string): SeoMetadata => ({
     operatingSystem: "macOS",
     description: "A free, open-source Mac menu bar app for reading selected text aloud with local speech engines.",
     url: SITE_URL,
-    downloadUrl: "https://github.com/bharat2808/texthalo/releases/latest/download/TextHalo-macOS-aarch64.dmg",
+    downloadUrl: MAC_DOWNLOAD,
     offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
     license: `${SOURCE}/blob/master/LICENSE-APACHE`,
   },
@@ -169,6 +212,29 @@ const defaultMetadata = (path: string): SeoMetadata => ({
 export function getSeoMetadata(pathname: string): SeoMetadata {
   const path = normalizePath(pathname);
   if (path === "/") return defaultMetadata(path);
+  if (path === "/pricing/") {
+    return { ...defaultMetadata(path), title: "TextHalo Plans — Local Voices and Hosted Speech", description: "Compare TextHalo Free, Plus, and Creator plans. Keep local Apple, Kokoro, and Chatterbox voices, then add hosted Fish Audio credits when you need them." };
+  }
+  if (path === "/privacy/") {
+    const title = "Privacy Policy | TextHalo";
+    const description = "How TextHalo handles local speech, hosted speech, optional text enhancement, voice cloning, account data, and payments.";
+    return { ...defaultMetadata(path), title, description, schema: { "@context": "https://schema.org", "@type": "WebPage", name: title, description, url: `${SITE_URL}${path}` } };
+  }
+  if (path === "/sign-in/") {
+    return { ...defaultMetadata(path), title: "Sign in to TextHalo", description: "Sign in or create a TextHalo account to continue to hosted voice checkout." };
+  }
+  if (path === "/desktop-connect/") {
+    return { ...defaultMetadata(path), title: "Connect TextHalo Desktop", description: "Sign in securely to connect your TextHalo Mac app." };
+  }
+  if (path === "/reset-password/") {
+    return { ...defaultMetadata(path), title: "Reset your password | TextHalo", description: "Choose a new password for your TextHalo account." };
+  }
+  if (path === "/account/billing/") {
+    return { ...defaultMetadata(path), title: "Credits & billing | TextHalo", description: "View your TextHalo plan, monthly and top-up credits, and billing settings." };
+  }
+  if (path === "/account/billing/success/") {
+    return { ...defaultMetadata(path), title: "Checkout complete | TextHalo", description: "Return to TextHalo after checking out for hosted speech credits." };
+  }
   if (path === "/demo/") {
     const title = "TextHalo Mac App Demo — 15-Second Product Tour";
     const description = "Watch TextHalo read selected text aloud on Mac. This 15-second product tour shows the menu bar app, shortcut, and floating playback controls.";

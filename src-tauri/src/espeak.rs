@@ -34,7 +34,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 /// espeak IPA → Kokoro's phoneme inventory, ported from misaki's `EspeakG2P.e2m`
 /// (Apache-2.0). Applied to the same text, in the same order: misaki sorts the mapping by
@@ -509,14 +508,6 @@ struct Bottle {
 const ESPEAK_VERSION: &str = "1.52.0";
 const PCAUDIO_VERSION: &str = "1.3";
 
-fn unique_suffix() -> String {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    format!("{}-{nanos}", std::process::id())
-}
-
 fn managed_bottles(arch: &str, macos_major: u32) -> Option<(Bottle, Bottle)> {
     let (espeak, pcaudio) = match (arch, macos_major) {
         ("aarch64" | "arm64", 26..) => (
@@ -650,7 +641,7 @@ fn install_managed_into(runtime_parent: &Path, arch: &str, major: u32) -> Result
         )
     })?;
     fs::create_dir_all(runtime_parent).map_err(|e| e.to_string())?;
-    let staging = runtime_parent.join(format!(".espeak-ng-{}", unique_suffix()));
+    let staging = runtime_parent.join(format!(".espeak-ng-{}", uuid::Uuid::new_v4()));
     fs::create_dir_all(&staging).map_err(|e| e.to_string())?;
     let result = (|| {
         let espeak_archive = staging.join("espeak-ng.tar.gz");
@@ -782,7 +773,7 @@ mod tests {
     fn managed_install_downloads_and_runs_in_isolation() {
         let root = std::env::temp_dir().join(format!(
             "kiegen-espeak-install-test-{}",
-            super::unique_suffix()
+            uuid::Uuid::new_v4()
         ));
         let major = super::macos_major_version().unwrap();
         let result = super::install_managed_into(&root, std::env::consts::ARCH, major).unwrap();

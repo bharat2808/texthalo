@@ -26,6 +26,7 @@ pub struct PcmRecorder {
     path: PathBuf,
     writer: Option<hound::WavWriter<std::io::BufWriter<std::fs::File>>>,
     failed: bool,
+    samples_written: u64,
 }
 
 pub fn reserve_audio_path(dir: &Path, extension: &str) -> Result<PathBuf, String> {
@@ -50,6 +51,7 @@ impl PcmRecorder {
             path,
             writer: Some(writer),
             failed: false,
+            samples_written: 0,
         })
     }
 
@@ -66,8 +68,23 @@ impl PcmRecorder {
                     let _ = std::fs::remove_file(&self.path);
                     break;
                 }
+                self.samples_written += 1;
             }
         }
+    }
+
+    /// Commit one complete request, regardless of how many audio packets it contained.
+    pub fn save(self, dir: &Path, engine: &str, voice: &str, text: &str) -> Result<(), String> {
+        if self.samples_written == 0 {
+            return Ok(());
+        }
+        let seconds = self.samples_written as f64 / 24_000.0;
+        let path = self.finish().ok_or("Could not finish audio history recording")?;
+        if let Err(error) = save_entry(dir, &path, engine, voice, text, Some(seconds)) {
+            let _ = std::fs::remove_file(path);
+            return Err(error);
+        }
+        Ok(())
     }
 
     pub fn finish(mut self) -> Option<PathBuf> {
@@ -231,4 +248,39 @@ fn now_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn streamed_fish_audio_is_saved_with_metadata_and_duration() {
+        let dir = std::env::temp_dir().join(format!("texthalo-history-{}", uuid::Uuid::new_v4()));
+        let mut recorder = PcmRecorder::new(&dir).unwrap();
+        recorder.write(&vec![0.25; 12_000]);
+        recorder.write(&vec![-0.25; 12_000]);
+        recorder.save(&dir, "Fish Audio", "voice-id", "Hello world").unwrap();
+        let entries = list(&dir).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].engine, "Fish Audio");
+        assert_eq!(entries[0].voice, "voice-id");
+        assert_eq!(entries[0].text, "Hello world");
+        assert_eq!(entries[0].duration_seconds, Some(1.0));
+        let reader = hound::WavReader::open(audio_path(&dir, &entries[0].id).unwrap()).unwrap();
+        assert_eq!(reader.duration(), 24_000);
+        assert_eq!(reader.spec().sample_rate, 24_000);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn canceled_stream_leaves_no_recording_or_history() {
+        let dir = std::env::temp_dir().join(format!("texthalo-history-{}", uuid::Uuid::new_v4()));
+        let mut recorder = PcmRecorder::new(&dir).unwrap();
+        recorder.write(&[0.5, 0.25]);
+        drop(recorder);
+        assert!(list(&dir).unwrap().is_empty());
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }

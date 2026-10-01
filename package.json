@@ -5,6 +5,8 @@
   "license": "Apache-2.0",
   "type": "module",
   "scripts": {
+    "test": "node --test scripts/*.test.mjs",
+    "release:mac": "node scripts/release-macos.mjs",
     "dev": "vite",
     "build": "tsc && vite build",
     "typecheck": "tsc --noEmit",
@@ -14,6 +16,7 @@
     "tauri": "tauri"
   },
   "dependencies": {
+    "@neondatabase/auth": "^0.5.0-beta",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-dialog": "^2.7.3",
     "@tauri-apps/plugin-opener": "^2",

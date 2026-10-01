@@ -58,6 +58,101 @@ body {
   user-select: none;
 }
 
+body:has(.update-overlay) {
+  background: transparent;
+}
+
+.update-overlay {
+  position: relative;
+  display: flex;
+  height: 100%;
+  flex-direction: column;
+  justify-content: center;
+  padding: 24px 28px 20px 68px;
+  background: var(--window-bg);
+  border: 1px solid var(--separator);
+  overflow: hidden;
+  border-radius: 16px;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.24);
+}
+
+.update-overlay-mark {
+  position: absolute;
+  left: 24px;
+  top: 30px;
+  width: 30px;
+  height: 30px;
+  display: block;
+  border-radius: 8px;
+  object-fit: cover;
+}
+
+.update-overlay h1 {
+  margin: 0 20px 5px 0;
+  font-size: 16px;
+  font-weight: 650;
+}
+
+.update-overlay-message {
+  max-height: 85px;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+  min-height: 18px;
+  margin: 0;
+  color: var(--label-secondary);
+  font-size: 12px;
+}
+
+.update-overlay-message.error {
+  color: var(--danger);
+}
+
+.update-overlay-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.update-overlay-actions button,
+.update-overlay-close {
+  border: 0;
+  border-radius: 7px;
+  cursor: pointer;
+  font: inherit;
+}
+
+.update-overlay-install {
+  padding: 7px 13px;
+  background: var(--accent);
+  color: white;
+  font-weight: 600 !important;
+}
+
+.update-overlay-install:disabled,
+.update-overlay-later:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.update-overlay-later {
+  padding: 7px 12px;
+  background: var(--control-bg);
+  color: var(--label);
+}
+
+.update-overlay-close {
+  position: absolute;
+  top: 9px;
+  right: 10px;
+  width: 24px;
+  height: 24px;
+  background: transparent;
+  color: var(--label-secondary);
+  font-size: 20px;
+  line-height: 1;
+}
+
 /* ─────────────────────────── window shell ─────────────────────────── */
 
 .settings {
@@ -232,6 +327,36 @@ body {
 .card-note {
   font-size: 10px;
   color: var(--label-secondary);
+}
+
+.account-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 0 2px;
+}
+
+.account-brand-mark,
+.account-brand-mark {
+  width: 40px;
+  height: 40px;
+  display: block;
+  object-fit: contain;
+}
+
+.account-brand strong {
+  font-size: 15px;
+}
+
+.account-brand-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.account-brand-actions .plain {
+  white-space: nowrap;
 }
 
 .field {

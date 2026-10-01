@@ -23,6 +23,22 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
     .visible(false)
     .build()?;
 
+    WebviewWindowBuilder::new(
+        app,
+        "update-overlay",
+        WebviewUrl::App("index.html?update-overlay".into()),
+    )
+    .title("TextHalo update")
+    .inner_size(430.0, 250.0)
+    .decorations(false)
+    .transparent(true)
+    .resizable(false)
+    .always_on_top(true)
+    .visible_on_all_workspaces(true)
+    .skip_taskbar(true)
+    .visible(false)
+    .build()?;
+
     let app = app.clone();
     std::thread::spawn(move || loop {
         std::thread::sleep(Duration::from_millis(100));
@@ -32,6 +48,56 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
         }
     });
     Ok(())
+}
+
+pub fn show_update_result(app: &AppHandle, version: Option<String>) {
+    let state = app.state::<AppState>();
+    let mut current = state.update_overlay_status.lock().unwrap();
+    let status = if current.installing {
+        let mut status = current.clone();
+        status.visible = true;
+        status
+    } else {
+        crate::UpdateOverlayStatus {
+            visible: true,
+            version,
+            installable: false,
+            installing: false,
+            message: None,
+            error: false,
+        }
+    };
+    *current = status.clone();
+    drop(current);
+
+    if let Some(window) = app.get_webview_window("update-overlay") {
+        let _ = window.center();
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+    let _ = app.emit("texthalo:update-overlay", status);
+}
+
+pub fn show_update_error(app: &AppHandle, message: String) {
+    let status = crate::UpdateOverlayStatus {
+        visible: true,
+        version: None,
+        installable: false,
+        installing: false,
+        message: Some(message),
+        error: true,
+    };
+    *app.state::<AppState>()
+        .update_overlay_status
+        .lock()
+        .unwrap() = status.clone();
+
+    if let Some(window) = app.get_webview_window("update-overlay") {
+        let _ = window.center();
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+    let _ = app.emit("texthalo:update-overlay", status);
 }
 
 fn tick(app: &AppHandle) {

@@ -2,7 +2,7 @@ use crate::config::Engine;
 use std::sync::Mutex;
 
 #[derive(Default)]
-pub struct EngineLocks([Mutex<()>; 3]);
+pub struct EngineLocks([Mutex<()>; 4]);
 
 impl EngineLocks {
     pub fn for_engine(&self, engine: Engine) -> &Mutex<()> {
@@ -10,6 +10,7 @@ impl EngineLocks {
             Engine::Apple => 0,
             Engine::Kokoro => 1,
             Engine::Chatterbox => 2,
+            Engine::Fish => 3,
         }]
     }
 }

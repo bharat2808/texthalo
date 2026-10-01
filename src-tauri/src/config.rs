@@ -7,17 +7,17 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tauri::{AppHandle, Manager};
 
-/// How to obtain the selection. AX is non-destructive; ⌘C is universal but
-/// briefly owns the clipboard.
+/// How to obtain the selection. ⌘C is the default because some apps return stale
+/// or over-inclusive text through Accessibility; it briefly owns the clipboard.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum CaptureMode {
     /// Accessibility first, synthetic ⌘C + pasteboard only if AX yields nothing.
-    #[default]
     AxThenCopy,
     /// Accessibility only. Never touches the clipboard.
     AxOnly,
-    /// Synthetic ⌘C only. For apps whose AX tree is useless (Chrome, Electron).
+    /// Synthetic ⌘C only. Avoids inconsistent Accessibility selection results.
+    #[default]
     CopyOnly,
 }
 
@@ -61,6 +61,8 @@ pub enum Engine {
     /// languages this build otherwise cannot. ~1.5 GB including its four graphs and the
     /// Chinese character mapping.
     Chatterbox,
+    /// Hosted Fish Audio through the authenticated TextHalo service.
+    Fish,
 }
 
 /// Kokoro engine settings. Defaults follow the benchmark in docs/DESIGN.md §5: fp32 was
@@ -136,11 +138,15 @@ impl Default for ChatterboxSettings {
 pub struct Settings {
     /// Whether the macOS Accessibility prompt has been requested on a previous launch.
     pub accessibility_prompted: bool,
+    /// Whether first-run setup has been completed. Pre-wizard settings files are migrated
+    /// as complete so an app update does not interrupt existing users.
+    pub onboarding_completed: bool,
     pub shortcuts: Shortcuts,
     /// Which engine speaks. Apple unless the user opts into a local model.
     pub engine: Engine,
     pub kokoro: KokoroSettings,
     pub chatterbox: ChatterboxSettings,
+    pub fish: FishSettings,
     /// macOS voice name (`say -v ?`). `None` = system default voice. Apple engine only.
     pub voice: Option<String>,
     /// Words per minute, passed to `say -r`. Apple engine only.
@@ -152,14 +158,36 @@ pub struct Settings {
     pub restore_clipboard: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FishSettings {
+    pub voice_id: String,
+    pub model_id: String,
+    pub enhance_text: bool,
+    pub privacy_accepted: bool,
+}
+
+impl Default for FishSettings {
+    fn default() -> Self {
+        Self {
+            voice_id: String::new(),
+            model_id: String::new(),
+            enhance_text: true,
+            privacy_accepted: false,
+        }
+    }
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
             accessibility_prompted: false,
+            onboarding_completed: false,
             shortcuts: Shortcuts::default(),
             engine: Engine::default(),
             kokoro: KokoroSettings::default(),
             chatterbox: ChatterboxSettings::default(),
+            fish: FishSettings::default(),
             voice: None,
             rate: 200,
             capture_mode: CaptureMode::default(),
@@ -181,12 +209,22 @@ pub fn settings_path(app: &AppHandle) -> PathBuf {
 pub fn load(app: &AppHandle) -> Settings {
     let path = settings_path(app);
     match std::fs::read_to_string(&path) {
-        Ok(raw) => serde_json::from_str(&raw).unwrap_or_else(|e| {
+        Ok(raw) => parse_settings(&raw).unwrap_or_else(|e| {
             eprintln!("[TextHalo] settings at {path:?} are invalid ({e}); using defaults");
             Settings::default()
         }),
         Err(_) => Settings::default(),
     }
+}
+
+fn parse_settings(raw: &str) -> Result<Settings, serde_json::Error> {
+    let value: serde_json::Value = serde_json::from_str(raw)?;
+    let has_onboarding_state = value.get("onboarding_completed").is_some();
+    let mut settings: Settings = serde_json::from_value(value)?;
+    if !has_onboarding_state {
+        settings.onboarding_completed = true;
+    }
+    Ok(settings)
 }
 
 pub fn save(app: &AppHandle, settings: &Settings) -> Result<(), String> {
@@ -209,6 +247,12 @@ mod tests {
         let settings = Settings::default();
         assert_eq!(settings.engine, Engine::Apple);
         assert_eq!(serde_json::to_value(&settings).unwrap()["engine"], "apple");
+        assert_eq!(settings.capture_mode, CaptureMode::CopyOnly);
+        assert_eq!(
+            serde_json::to_value(&settings).unwrap()["capture_mode"],
+            "copy_only"
+        );
+        assert!(!settings.onboarding_completed);
     }
 
     /// Config files written before the engine choice existed must keep working: they have
@@ -294,5 +338,19 @@ mod tests {
         // the library's own signature sets and therefore not a field to guess at.
         assert_eq!(settings.chatterbox.exaggeration, 0.1);
         assert_eq!(settings.chatterbox.cfg_weight, 0.5);
+    }
+
+    #[test]
+    fn legacy_settings_are_migrated_without_showing_onboarding() {
+        let settings = parse_settings(r#"{"accessibility_prompted": true}"#).unwrap();
+        assert!(settings.onboarding_completed);
+    }
+
+    #[test]
+    fn onboarding_completion_round_trips() {
+        let mut settings = Settings::default();
+        settings.onboarding_completed = true;
+        let saved = serde_json::to_string(&settings).unwrap();
+        assert!(parse_settings(&saved).unwrap().onboarding_completed);
     }
 }
