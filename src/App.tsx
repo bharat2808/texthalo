@@ -86,6 +86,15 @@ type HostedClone = { id: string; name: string; status: HostedCloneStatus; create
 
 const cloneIsPending = (status: HostedCloneStatus) => status === "created" || status === "training";
 
+function formatPlanPrice(price: SetupPlansResponse["plans"][number]["price"]): string {
+  if (!price) return "Pricing unavailable";
+  const formatter = new Intl.NumberFormat(undefined, { style: "currency", currency: price.currency });
+  const amount = formatter.format(price.unitAmount / (10 ** (formatter.resolvedOptions().maximumFractionDigits ?? 2)));
+  if (!price.interval) return amount;
+  const count = price.intervalCount ?? 1;
+  return `${amount} / ${count > 1 ? `${count} ` : ""}${price.interval}${count > 1 ? "s" : ""}`;
+}
+
 const websiteUrl = (import.meta.env.VITE_TEXTHALO_WEBSITE_URL || "https://texthalo.app").replace(/\/$/, "");
 
 /** Progress of a weight download, emitted by the Rust side as `kiegen:install`. */
@@ -614,6 +623,8 @@ function MainApp() {
     return groups;
   }, {});
   const [account, setAccount] = useState<HostedAccount | null>(null);
+  const [accountPlans, setAccountPlans] = useState<SetupPlansResponse["plans"] | null>(null);
+  const [accountPlansError, setAccountPlansError] = useState(false);
   const [accountEmail, setAccountEmail] = useState("");
   const [accountBusy, setAccountBusy] = useState(false);
   const [accountError, setAccountError] = useState("");
@@ -655,6 +666,12 @@ function MainApp() {
 
   useEffect(() => {
     void getVersion().then(setAppVersion).catch(() => setAppVersion("unknown"));
+  }, []);
+
+  useEffect(() => {
+    void invoke<SetupPlansResponse>("desktop_billing_plans")
+      .then((result) => setAccountPlans(result.plans))
+      .catch(() => setAccountPlansError(true));
   }, []);
 
   const refreshHostedAccount = useCallback(async () => {
@@ -1380,6 +1397,13 @@ function MainApp() {
     { id: "history", title: "History", icon: Icon.history() },
   ];
 
+  const paidAccountPlans = accountPlans?.filter((plan) => plan.id !== "free") ?? [];
+  const currentAccountPlanIndex = paidAccountPlans.findIndex((plan) => plan.id === account?.subscription?.planId);
+  const currentAccountPlan = currentAccountPlanIndex >= 0 ? paidAccountPlans[currentAccountPlanIndex] : null;
+  const accountUpgradePlan = currentAccountPlanIndex >= 0
+    ? paidAccountPlans[currentAccountPlanIndex + 1] ?? null
+    : paidAccountPlans[paidAccountPlans.length - 1] ?? null;
+
   const voiceRow = (voice: Voice) => (
     <Row
       key={voice.name}
@@ -2102,10 +2126,9 @@ function MainApp() {
                 <Card title="Signed in" icon={Icon.checkCircle()}>
                   <div className="inline"><strong>{accountEmail || "TextHalo account"}</strong><button className="plain" disabled={accountBusy} onClick={() => void refreshHostedAccount()}>Refresh</button><button className="plain" disabled={accountBusy} onClick={() => void signOut()}>Sign out</button></div>
                 </Card>
-                <Card title="Credits and plan" icon={Icon.gauge()}>
+                <Card title="Credits" icon={Icon.gauge()}>
                   <div className="credit-balance">
                     <div><span className="credit-eyebrow">AVAILABLE TO USE</span><strong>{account.availableCredits.toLocaleString()}</strong><span className="credit-unit">credits</span></div>
-                    <div className="credit-plan">{account.subscription ? <><span className="credit-plan-name">{account.subscription.planId} plan</span><span>{account.subscription.status}{account.subscription.cancelAtPeriodEnd ? " · ends this period" : ""}</span></> : <><span className="credit-plan-name">Free plan</span><span>No active subscription</span></>}</div>
                   </div>
                   <div className="credit-breakdown">
                     <div className="credit-breakdown-heading"><strong>Where your balance comes from</strong><span>Remaining</span></div>
@@ -2115,9 +2138,34 @@ function MainApp() {
                     <div className="credit-total"><span>Total available</span><strong>{account.creditBreakdown.totalCredits.toLocaleString()}</strong></div>
                   </div>
                   <p className="credit-explainer">The source amounts above are included in your available balance. They are not extra credits on top of it.</p>
-                  {account.subscription?.currentPeriodEnd ? <div className="card-note">Your current billing period ends {new Date(account.subscription.currentPeriodEnd).toLocaleDateString()}.</div> : null}
-                  <div className="inline"><button className="plain" onClick={() => void openUrl(`${websiteUrl}/pricing/`)}>Explore plans</button><button className="plain" onClick={() => void openUrl(`${websiteUrl}/account/billing/`)}>Billing portal</button></div>
-                  {account.plans.map((plan) => <div className="inline" key={plan.id}><span className="card-note">{plan.id === "plus" ? "Plus" : plan.id === "creator" ? "Creator" : plan.id}: {plan.creditsPerPeriod.toLocaleString()} credits per period · {plan.cloneLimit} saved clones</span><button className="plain" disabled={accountBusy} onClick={() => void openCheckout(plan.id)}>Choose plan</button></div>)}
+                </Card>
+                <Card title="Plan" icon={Icon.gauge()}>
+                  {!accountPlans && !accountPlansError ? <span className="setup-plan-loading">Loading plan options…</span> : null}
+                  {accountPlansError ? <div className="card-note">Plan details aren’t available right now. You can still manage billing online.</div> : null}
+                  {accountPlans && !account.subscription ? <>
+                    <p className="account-plan-intro">Choose a plan. Local voices are free; hosted speech is optional.</p>
+                    <div className="account-plan-grid" aria-label="TextHalo plans">
+                      {accountPlans.map((plan) => <article className={`setup-plan-card${plan.id === "creator" ? " featured" : ""}`} key={plan.id}>
+                        <strong>{plan.name}</strong><span className="setup-plan-price">{formatPlanPrice(plan.price)}</span><span>{plan.description}</span>
+                        {plan.features.filter((feature) => feature !== "Everything in Free").slice(0, 3).map((feature) => <small key={feature}>{feature}</small>)}
+                        {plan.id !== "free" && account.billingEnabled ? <button className="plain account-plan-action" disabled={accountBusy} onClick={() => void openCheckout(plan.id)}>Choose {plan.name}</button> : null}
+                      </article>)}
+                    </div>
+                    <div className="inline"><button className="plain" onClick={() => void openUrl(`${websiteUrl}/pricing/`)}>Compare plans ↗</button></div>
+                  </> : null}
+                  {accountPlans && account.subscription ? <>
+                    <div className="account-current-plan">
+                      <div className="account-current-plan-copy"><span className="credit-eyebrow">CURRENT PLAN</span><strong>{currentAccountPlan?.name ?? account.subscription.planId}</strong><span>{account.subscription.status}{account.subscription.cancelAtPeriodEnd ? " · cancels at period end" : ""}{account.subscription.currentPeriodEnd ? ` · renews ${new Date(account.subscription.currentPeriodEnd).toLocaleDateString()}` : ""}</span></div>
+                      {paidAccountPlans.length > 0 && currentAccountPlanIndex === paidAccountPlans.length - 1 ? <span className="account-plan-note">You’re on the highest plan</span> : null}
+                    </div>
+                    {accountUpgradePlan ? <article className="setup-plan-card featured account-upgrade-card">
+                      <div><span className="credit-eyebrow">AVAILABLE UPGRADE</span><strong>{accountUpgradePlan.name}</strong></div>
+                      <span className="setup-plan-price">{formatPlanPrice(accountUpgradePlan.price)}</span><span>{accountUpgradePlan.description}</span>
+                      {accountUpgradePlan.features.filter((feature) => feature !== "Everything in Free").slice(0, 3).map((feature) => <small key={feature}>{feature}</small>)}
+                      <button className="plain account-plan-action" disabled={accountBusy} onClick={() => void openCheckout(accountUpgradePlan.id)}>Upgrade to {accountUpgradePlan.name}</button>
+                    </article> : null}
+                    <div className="inline"><button className="plain" onClick={() => void openUrl(`${websiteUrl}/account/billing/`)}>Manage billing</button></div>
+                  </> : null}
                 </Card>
                 <Card title="One-time credit packs" icon={Icon.gauge()}>
                   <div className="card-note">Top-up credits are separate from monthly plan credits. They remain available according to the credit pack terms.</div>
