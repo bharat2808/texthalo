@@ -2101,13 +2101,19 @@ function MainApp() {
                   <div className="inline"><strong>{accountEmail || "TextHalo account"}</strong><button className="plain" disabled={accountBusy} onClick={() => void refreshHostedAccount()}>Refresh</button><button className="plain" disabled={accountBusy} onClick={() => void signOut()}>Sign out</button></div>
                 </Card>
                 <Card title="Credits and plan" icon={Icon.gauge()}>
-                  <div className="row-stack">
-                    <Row selected={false} glyph={Icon.checkCircle()} title={`${account.availableCredits.toLocaleString()} credits available`} subtitle={account.subscription ? `${account.subscription.planId} · ${account.subscription.status}${account.subscription.cancelAtPeriodEnd ? " · cancels at period end" : ""}` : "Free plan"} onSelect={() => {}} />
-                    <Row selected={false} glyph={Icon.circle()} title={`${account.creditBreakdown.planCredits.toLocaleString()} plan credits`} subtitle="Monthly subscription balance" onSelect={() => {}} />
-                    <Row selected={false} glyph={Icon.circle()} title={`${account.creditBreakdown.topupCredits.toLocaleString()} top-up credits`} subtitle="Purchased credit packs" onSelect={() => {}} />
-                    {account.creditBreakdown.otherCredits ? <Row selected={false} glyph={Icon.circle()} title={`${account.creditBreakdown.otherCredits.toLocaleString()} other credits`} onSelect={() => {}} /> : null}
+                  <div className="credit-balance">
+                    <div><span className="credit-eyebrow">AVAILABLE TO USE</span><strong>{account.availableCredits.toLocaleString()}</strong><span className="credit-unit">credits</span></div>
+                    <div className="credit-plan">{account.subscription ? <><span className="credit-plan-name">{account.subscription.planId} plan</span><span>{account.subscription.status}{account.subscription.cancelAtPeriodEnd ? " · ends this period" : ""}</span></> : <><span className="credit-plan-name">Free plan</span><span>No active subscription</span></>}</div>
                   </div>
-                  {account.subscription?.currentPeriodEnd ? <div className="card-note">Current period ends {new Date(account.subscription.currentPeriodEnd).toLocaleDateString()}.</div> : null}
+                  <div className="credit-breakdown">
+                    <div className="credit-breakdown-heading"><strong>Where your balance comes from</strong><span>Remaining</span></div>
+                    <div className="credit-source"><span><i className="credit-dot plan" />Subscription credits</span><strong>{account.creditBreakdown.planCredits.toLocaleString()}</strong></div>
+                    <div className="credit-source"><span><i className="credit-dot topup" />Purchased top-ups</span><strong>{account.creditBreakdown.topupCredits.toLocaleString()}</strong></div>
+                    {account.creditBreakdown.otherCredits ? <div className="credit-source"><span><i className="credit-dot other" />Other credits</span><strong>{account.creditBreakdown.otherCredits.toLocaleString()}</strong></div> : null}
+                    <div className="credit-total"><span>Total available</span><strong>{account.creditBreakdown.totalCredits.toLocaleString()}</strong></div>
+                  </div>
+                  <p className="credit-explainer">The source amounts above are included in your available balance. They are not extra credits on top of it.</p>
+                  {account.subscription?.currentPeriodEnd ? <div className="card-note">Your current billing period ends {new Date(account.subscription.currentPeriodEnd).toLocaleDateString()}.</div> : null}
                   <div className="inline"><button className="plain" onClick={() => void openUrl(`${websiteUrl}/pricing/`)}>Explore plans</button><button className="plain" onClick={() => void openUrl(`${websiteUrl}/account/billing/`)}>Billing portal</button></div>
                   {account.plans.map((plan) => <div className="inline" key={plan.id}><span className="card-note">{plan.id === "plus" ? "Plus" : plan.id === "creator" ? "Creator" : plan.id}: {plan.creditsPerPeriod.toLocaleString()} credits per period · {plan.cloneLimit} saved clones</span><button className="plain" disabled={accountBusy} onClick={() => void openCheckout(plan.id)}>Choose plan</button></div>)}
                 </Card>
@@ -2115,18 +2121,28 @@ function MainApp() {
                   <div className="card-note">Top-up credits are separate from monthly plan credits. They remain available according to the credit pack terms.</div>
                   <div className="inline"><button className="plain" disabled={accountBusy} onClick={() => void buyTopup("topup-5")}>$5 · 30,000 credits</button><button className="plain" disabled={accountBusy} onClick={() => void buyTopup("topup-10")}>$10 · 60,000 credits</button><button className="plain" disabled={accountBusy} onClick={() => void buyTopup("topup-20")}>$20 · 120,000 credits</button></div>
                 </Card>
-                {(account.plans.find((plan) => plan.id === account.subscription?.planId)?.cloneLimit ?? 0) > 0 ? <Card title="Your hosted voice clones" icon={Icon.speaker()}>
-                  <div className="row-stack">{hostedClones.map((clone) => <Row key={clone.id} selected={false} glyph={Icon.speaker()} title={clone.name} subtitle={`Status: ${clone.status}`} onSelect={() => {}} trailing={<button className="plain" onClick={() => void deleteHostedClone(clone.id)}>Delete</button>} />)}</div>
-                  <p className="card-note">Name your voice, choose a recording, and confirm permission. Nothing is uploaded until you click “Upload and create clone”.</p>
-                  <div className="field"><label className="field-label" htmlFor="hosted-clone-name">1. Voice name (required)</label><input id="hosted-clone-name" value={cloneName} placeholder="e.g. My narration voice" maxLength={100} required aria-describedby="hosted-clone-name-hint" onChange={(event) => setCloneName(event.target.value)} /><span id="hosted-clone-name-hint" className="field-hint">The name shown in your saved voices. Up to 100 characters.</span></div>
-                  <div className="field"><span className="field-label">2. Voice recording (required)</span><div className="inline"><button className="plain" disabled={accountBusy} onClick={() => void pickCloneAudio()}>{clonePath ? "Choose another file" : "Choose audio…"}</button><span className="field-hint">{clonePath ? `Selected: ${clonePath.split(/[\\/]/).pop()} — not uploaded yet` : "WAV, MP3, M4A, OGG, or FLAC · up to 25 MB"}</span></div></div>
-                  <label className="toggle-row"><input type="checkbox" checked={cloneConsent} onChange={(event) => setCloneConsent(event.target.checked)} /><span>I own this voice or have permission to clone it. I understand this recording is uploaded to Fish Audio and saved to my account.</span></label>
-                  <p className="field-hint" role="status">{!cloneName.trim() ? "Enter a voice name to continue." : !clonePath ? "Choose an audio recording to continue." : !cloneConsent ? "Confirm voice ownership or permission before uploading." : "Ready to upload your recording to Fish Audio."}</p>
-                  <button className="plain" disabled={accountBusy || !cloneName.trim() || !clonePath || !cloneConsent} onClick={() => void uploadClone()}>{accountBusy ? "Uploading and creating…" : "Upload and create clone"}</button>
-                  {cloneUploadError ? <div role="alert"><Note kind="error" icon={Icon.xCircle()}>Clone was not created: {cloneUploadError}</Note></div> : null}
-                  {cloneUploadSuccess ? <div role="status"><Note kind="info" icon={Icon.checkCircle()}>{cloneUploadSuccess}</Note></div> : null}
-                  <div className="card-note">Your plan includes up to {account.plans.find((plan) => plan.id === account.subscription?.planId)?.cloneLimit ?? 0} saved clones when cloning is enabled by the service.</div>
-                </Card> : null}
+                {(account.plans.find((plan) => plan.id === account.subscription?.planId)?.cloneLimit ?? 0) > 0 ? <section className="clone-panel">
+                  <header className="clone-header">
+                    <div className="clone-heading"><span className="clone-heading-icon">{Icon.speaker()}</span><div><h2>Your hosted voices</h2><p>Create a personal voice from a recording you own or have permission to use.</p></div></div>
+                    <span className="clone-count">{hostedClones.length} saved · up to {account.plans.find((plan) => plan.id === account.subscription?.planId)?.cloneLimit ?? 0}</span>
+                  </header>
+                  {hostedClones.length ? <div className="clone-list" aria-label="Saved voices">{hostedClones.map((clone) => <div className="clone-item" key={clone.id}>
+                    <span className="clone-avatar">{clone.name.trim().slice(0, 1).toUpperCase()}</span><div className="clone-item-copy"><strong>{clone.name}</strong><span className={`clone-status clone-status-${clone.status}`}>{clone.status === "trained" ? "Ready to use" : clone.status === "failed" ? "Couldn’t train" : "Training"}</span></div>
+                    <button className="clone-delete" aria-label={`Delete ${clone.name}`} onClick={() => void deleteHostedClone(clone.id)}>Delete</button>
+                  </div>)}</div> : <div className="clone-empty"><span className="clone-empty-mark">{Icon.speaker()}</span><strong>No hosted voices yet</strong><span>Your new voice will appear here when it’s ready.</span></div>}
+                  <div className="clone-create">
+                    <div className="clone-create-title"><span className="clone-step">NEW</span><div><h3>Create a voice</h3><p>Your recording stays on this device until you choose to upload.</p></div></div>
+                    <div className="clone-fields">
+                      <div className="field clone-name-field"><label className="field-label" htmlFor="hosted-clone-name">Voice name <span>Required</span></label><input id="hosted-clone-name" value={cloneName} placeholder="e.g. Warm narration" maxLength={100} required aria-describedby="hosted-clone-name-hint" onChange={(event) => setCloneName(event.target.value)} /><span id="hosted-clone-name-hint" className="field-hint">Up to 100 characters</span></div>
+                      <div className="field"><span className="field-label">Recording <span>Required</span></span><button className={`clone-file-button${clonePath ? " has-file" : ""}`} disabled={accountBusy} onClick={() => void pickCloneAudio()}><span className="clone-file-icon">{Icon.speaker()}</span><span className="clone-file-copy"><strong>{clonePath ? clonePath.split(/[\\/]/).pop() : "Choose an audio file"}</strong><span>{clonePath ? "Selected locally · not uploaded" : "WAV, MP3, M4A, OGG or FLAC · up to 25 MB"}</span></span><span className="clone-file-action">{clonePath ? "Change" : "Browse"}</span></button></div>
+                    </div>
+                    <label className="clone-consent"><input type="checkbox" checked={cloneConsent} onChange={(event) => setCloneConsent(event.target.checked)} /><span>I own this voice or have permission to clone it. I understand the recording will be uploaded to Fish Audio and saved to my account.</span></label>
+                    <div className="clone-submit-row"><div className="clone-feedback" role="status">{!cloneName.trim() ? "Add a name to continue" : !clonePath ? "Choose a recording to continue" : !cloneConsent ? "Confirm permission to continue" : "Everything’s ready to upload"}</div><button className="clone-submit" disabled={accountBusy || !cloneName.trim() || !clonePath || !cloneConsent} onClick={() => void uploadClone()}>{accountBusy ? "Creating voice…" : "Upload and create voice"}<span aria-hidden="true">→</span></button></div>
+                    {cloneUploadError ? <div role="alert"><Note kind="error" icon={Icon.xCircle()}>Clone was not created: {cloneUploadError}</Note></div> : null}
+                    {cloneUploadSuccess ? <div role="status"><Note kind="info" icon={Icon.checkCircle()}>{cloneUploadSuccess}</Note></div> : null}
+                    <div className="clone-privacy">{Icon.checkCircle()}<span>Your recording is only sent when you select “Upload and create voice”.</span></div>
+                  </div>
+                </section> : null}
               </>
             ) : (
               <Card title="Sign in to TextHalo" icon={Icon.gear()}>
