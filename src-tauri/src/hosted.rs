@@ -731,6 +731,7 @@ pub async fn stream_speech(
     model_id: String,
     enhance: bool,
     archive: bool,
+    source: crate::capture::SourceMetadata,
 ) -> Result<(), String> {
     let token = access_token(false).await?;
     let base = origin()?;
@@ -875,7 +876,7 @@ pub async fn stream_speech(
     }
     if app_state.job.lock().unwrap().is_current(job_id) {
         if let (Some(recorder), Some(dir)) = (recorder, history_root.as_deref()) {
-            if let Err(error) = recorder.save(dir, "Fish Audio", &voice_id, &text) {
+            if let Err(error) = recorder.save(dir, "Fish Audio", &voice_id, &text, &source) {
                 eprintln!("[TextHalo] could not save hosted audio history: {error}");
             }
         }

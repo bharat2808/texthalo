@@ -254,6 +254,14 @@ body:has(.update-overlay) {
   gap: 10px;
 }
 
+.history-group > h2 {
+  margin: 18px 0 8px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+.history-group > h2 span { color: var(--text-tertiary); font-weight: 400; }
+
 .history-item {
   display: flex;
   align-items: center;

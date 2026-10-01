@@ -106,6 +106,8 @@ type AudioHistoryEntry = {
   text: string;
   durationSeconds: number | null;
   audioFile: string;
+  appName?: string | null;
+  windowTitle?: string | null;
 };
 
 type Settings = {
@@ -603,6 +605,13 @@ function MainApp() {
   const [historyEntries, setHistoryEntries] = useState<AudioHistoryEntry[]>([]);
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const historyGroups = historyEntries.reduce<Record<string, AudioHistoryEntry[]>>((groups, entry) => {
+    const app = entry.appName?.trim() || "Unknown app";
+    const title = entry.windowTitle?.trim();
+    const key = `${app}\u0000${title || ""}`;
+    (groups[key] ??= []).push(entry);
+    return groups;
+  }, {});
   const [account, setAccount] = useState<HostedAccount | null>(null);
   const [accountEmail, setAccountEmail] = useState("");
   const [accountBusy, setAccountBusy] = useState(false);
@@ -2287,7 +2296,11 @@ function MainApp() {
               </Card>
             ) : historyEntries.length ? (
               <div className="history-list">
-                {historyEntries.map((entry) => (
+                {Object.entries(historyGroups).map(([key, entries]) => {
+                  const [appName, title] = key.split("\u0000");
+                  return <section className="history-group" key={key}>
+                  <h2>{appName}{title ? <span> · {title}</span> : null}</h2>
+                  {entries.map((entry) => (
                   <article className="history-item" key={entry.id}>
                     <div className="history-copy">
                       <div className="history-meta">
@@ -2322,7 +2335,9 @@ function MainApp() {
                       </button>
                     </div>
                   </article>
-                ))}
+                  ))}
+                  </section>;
+                })}
               </div>
             ) : (
               <Card title="No saved audio yet" icon={Icon.history()}>

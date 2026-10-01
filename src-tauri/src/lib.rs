@@ -316,6 +316,7 @@ fn run_speech(
     text: String,
     truncated: bool,
     archive: bool,
+    source: capture::SourceMetadata,
 ) {
     let state = app.state::<AppState>();
     let _synthesis = state.synthesis.for_engine(settings.engine).lock().unwrap();
@@ -345,7 +346,7 @@ fn run_speech(
         let enhance = settings.fish.enhance_text;
         tauri::async_runtime::spawn(async move {
             let result =
-                hosted::stream_speech(app.clone(), id, text.clone(), voice, model_id, enhance, archive)
+                hosted::stream_speech(app.clone(), id, text.clone(), voice, model_id, enhance, archive, source.clone())
                     .await;
             let state = app.state::<AppState>();
             let mut job = state.job.lock().unwrap();
@@ -403,6 +404,7 @@ fn run_speech(
                                 settings.voice.as_deref().unwrap_or("System default"),
                                 &text,
                                 None,
+                                &source,
                             ) {
                                 eprintln!("[TextHalo] could not save Apple audio history: {error}");
                                 let _ = std::fs::remove_file(path);
@@ -488,6 +490,7 @@ fn run_speech(
                         &voice,
                         &text,
                         Some(report.seconds as f64),
+                        &source,
                     ) {
                         eprintln!("[TextHalo] could not save audio history: {error}");
                         let _ = std::fs::remove_file(path);
@@ -547,7 +550,7 @@ fn speak_selection(app: &AppHandle, id: u64) {
         job_status(app, id, Phase::Error, Some(reason), None);
         return;
     }
-    let text = match capture::capture(
+    let (text, source) = match capture::capture_with_source(
         settings.capture_mode,
         COPY_TIMEOUT_MS,
         settings.restore_clipboard,
@@ -560,14 +563,14 @@ fn speak_selection(app: &AppHandle, id: u64) {
     };
     let truncated = text.chars().count() > settings.max_chars;
     let text = text.chars().take(settings.max_chars).collect();
-    run_speech(app, id, settings, text, truncated, true);
+    run_speech(app, id, settings, text, truncated, true, source);
 }
 
 fn speak_given(app: &AppHandle, id: u64, text: String) {
     let settings = app.state::<AppState>().settings.lock().unwrap().clone();
     let truncated = text.chars().count() > settings.max_chars;
     let text = text.chars().take(settings.max_chars).collect();
-    run_speech(app, id, settings, text, truncated, true);
+    run_speech(app, id, settings, text, truncated, true, capture::SourceMetadata::default());
 }
 
 fn show_settings(app: &AppHandle) {
@@ -664,7 +667,7 @@ fn preview_voice(
     }
     let sample =
         text.unwrap_or_else(|| "This is how I sound when reading your selection.".to_string());
-    std::thread::spawn(move || run_speech(&app, id, settings, sample, false, false));
+    std::thread::spawn(move || run_speech(&app, id, settings, sample, false, false, capture::SourceMetadata::default()));
 }
 
 #[tauri::command]
