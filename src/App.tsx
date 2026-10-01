@@ -1518,16 +1518,18 @@ function MainApp() {
               ) : null}
             </Card>
 
-            <Card title="Launch at login" icon={Icon.gear()}>
-              <label className="toggle-row">
+            <Card title="Startup" icon={Icon.gear()}>
+              <label className="startup-option">
+                <span className="startup-option-copy">
+                  <strong>Open TextHalo when you log in</strong>
+                  <span>It starts quietly in the menu bar, ready when you need it.</span>
+                </span>
                 <input
                   type="checkbox"
                   checked={settings.launch_at_login}
                   onChange={(event) => void save({ launch_at_login: event.target.checked })}
                 />
-                <span>Start TextHalo automatically when you log in</span>
               </label>
-              <div className="card-note">TextHalo starts in the menu bar and stays out of your way.</div>
             </Card>
 
             <Card title="Try it" icon={Icon.play()}>

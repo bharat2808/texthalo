@@ -718,6 +718,29 @@ button:focus-visible {
   accent-color: var(--accent);
 }
 
+.startup-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 11px 12px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-row);
+  background: color-mix(in srgb, var(--control-bg) 50%, transparent);
+  cursor: default;
+}
+
+.startup-option-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.startup-option-copy strong { font-size: 11px; font-weight: 600; }
+.startup-option-copy > span { color: var(--label-secondary); font-size: 10px; }
+.startup-option input { flex: 0 0 auto; margin: 0; accent-color: var(--accent); }
+
 /* ─────────────────────────── voice browser ─────────────────────────── */
 
 .voice-list {
