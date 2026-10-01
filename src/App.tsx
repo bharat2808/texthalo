@@ -113,6 +113,7 @@ type AudioHistoryEntry = {
 type Settings = {
   accessibility_prompted: boolean;
   onboarding_completed: boolean;
+  launch_at_login: boolean;
   shortcuts: { speak: string; stop: string };
   engine: EngineId;
   kokoro: KokoroSettings;
@@ -1515,6 +1516,18 @@ function MainApp() {
                   click away.
                 </Note>
               ) : null}
+            </Card>
+
+            <Card title="Launch at login" icon={Icon.gear()}>
+              <label className="toggle-row">
+                <input
+                  type="checkbox"
+                  checked={settings.launch_at_login}
+                  onChange={(event) => void save({ launch_at_login: event.target.checked })}
+                />
+                <span>Start TextHalo automatically when you log in</span>
+              </label>
+              <div className="card-note">TextHalo starts in the menu bar and stays out of your way.</div>
             </Card>
 
             <Card title="Try it" icon={Icon.play()}>

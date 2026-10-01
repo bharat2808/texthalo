@@ -121,8 +121,12 @@ struct UiState {
 }
 
 fn ui_state(app: &AppHandle, refused_shortcuts: Vec<String>) -> UiState {
+    use tauri_plugin_autostart::ManagerExt;
     let state = app.state::<AppState>();
-    let settings = state.settings.lock().unwrap().clone();
+    let mut settings = state.settings.lock().unwrap().clone();
+    if let Ok(enabled) = app.autolaunch().is_enabled() {
+        settings.launch_at_login = enabled;
+    }
     // Built before the struct literal: the literal moves `settings` into its first field,
     // so borrowing it later in the same expression is a borrow of a moved value.
     let engines = engines::catalog(&settings);
@@ -607,6 +611,19 @@ fn get_state(app: AppHandle) -> UiState {
 #[tauri::command]
 fn save_settings(app: AppHandle, settings: Settings) -> Result<UiState, String> {
     shortcuts::bindings(&settings)?; // validate before writing anything
+    use tauri_plugin_autostart::ManagerExt;
+    let manager = app.autolaunch();
+    let launch_changed = manager
+        .is_enabled()
+        .unwrap_or_else(|_| app.state::<AppState>().settings.lock().unwrap().launch_at_login)
+        != settings.launch_at_login;
+    if launch_changed {
+        if settings.launch_at_login {
+            manager.enable().map_err(|e| format!("enable launch at login: {e}"))?;
+        } else {
+            manager.disable().map_err(|e| format!("disable launch at login: {e}"))?;
+        }
+    }
     config::save(&app, &settings)?;
     let changed_engine = {
         let state = app.state::<AppState>();
@@ -1010,6 +1027,10 @@ pub fn run() {
         .plugin(tauri_plugin_secure_storage::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()

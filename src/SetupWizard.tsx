@@ -4,6 +4,7 @@ import "./SetupWizard.css";
 
 type WizardSettings = {
   onboarding_completed: boolean;
+  launch_at_login: boolean;
   accessibility_prompted: boolean;
   engine: "apple" | "kokoro" | "chatterbox" | "fish";
   shortcuts: { speak: string; stop: string };
@@ -192,6 +193,14 @@ export default function SetupWizard({
           </div> : <span className="setup-plan-loading">{plansError ? "Plan details aren’t available right now." : "Loading current plans…"}</span>}
           <button className="plain" onClick={onOpenPlans}>Compare plans ↗</button>
           {!trusted ? <div className="setup-permission-state">You can finish setup now, but grant Accessibility access before trying to read selections.</div> : null}
+          <label className="toggle-row setup-launch-toggle">
+            <input
+              type="checkbox"
+              checked={settings.launch_at_login}
+              onChange={(event) => void onSave({ launch_at_login: event.target.checked })}
+            />
+            <span>Start TextHalo automatically when I log in</span>
+          </label>
         </> : null}
       </section>
 

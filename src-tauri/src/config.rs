@@ -141,6 +141,8 @@ pub struct Settings {
     /// Whether first-run setup has been completed. Pre-wizard settings files are migrated
     /// as complete so an app update does not interrupt existing users.
     pub onboarding_completed: bool,
+    /// Whether TextHalo should register as a macOS login item.
+    pub launch_at_login: bool,
     pub shortcuts: Shortcuts,
     /// Which engine speaks. Apple unless the user opts into a local model.
     pub engine: Engine,
@@ -183,6 +185,7 @@ impl Default for Settings {
         Self {
             accessibility_prompted: false,
             onboarding_completed: false,
+            launch_at_login: false,
             shortcuts: Shortcuts::default(),
             engine: Engine::default(),
             kokoro: KokoroSettings::default(),
