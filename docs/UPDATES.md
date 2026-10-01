@@ -40,12 +40,18 @@ not part of the release workflow. The signed updater manifest contains only
 notarytool Keychain profile. Prerequisites are Xcode Command Line Tools, the
 `aarch64-apple-darwin` Rust target, Node dependencies, and authenticated gh.
 Wrangler authentication is required only for Cloudflare deployment.
+Before any production build/deploy, also set `VITE_TEXTHALO_API_URL` to the
+HTTPS API origin and `VITE_TURNSTILE_SITE_KEY` to the public widget site key.
+The script refuses to make a production build if either is absent; these values
+are embedded in the desktop app and static website, respectively.
 
 For a single local command that builds, signs, notarizes, verifies, and publishes
 the GitHub release:
 
 ```sh
 export NOTARY_KEYCHAIN_PROFILE="your-existing-profile-name"
+export VITE_TEXTHALO_API_URL="https://your-api.example"
+export VITE_TURNSTILE_SITE_KEY="your-public-site-key"
 npm run release:mac -- release
 # Also deploy the updated website to Cloudflare Pages afterward:
 npm run release:mac -- release --deploy-cloudflare
@@ -128,9 +134,9 @@ After signing and notarizing the app and refreshing its updater archive/signatur
 
 ```sh
 node scripts/write-updater-manifest.mjs \
-  0.1.9 latest.json \
+  0.1.10 latest.json \
   --platform darwin-aarch64 \
-  https://github.com/bharat2808/texthalo/releases/download/v0.1.9/TextHalo-aarch64.app.tar.gz \
+  https://github.com/bharat2808/texthalo/releases/download/v0.1.10/TextHalo-aarch64.app.tar.gz \
   release/arm64/TextHalo.app.tar.gz release/arm64/TextHalo.app.tar.gz.sig
 ```
 

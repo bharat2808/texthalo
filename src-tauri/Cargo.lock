@@ -2352,7 +2352,7 @@ dependencies = [
 
 [[package]]
 name = "kiegen"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "accessibility-sys",
  "base64 0.22.1",

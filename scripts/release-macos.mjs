@@ -103,6 +103,21 @@ export function productionBranch(projects) {
   return project.production_branch;
 }
 
+export function validateReleaseBuildEnvironment(env) {
+  for (const name of ["VITE_TEXTHALO_API_URL", "VITE_TURNSTILE_SITE_KEY"]) {
+    if (!env[name]?.trim()) throw new Error(`Set ${name} before building the production app and website.`);
+  }
+  for (const name of ["VITE_TEXTHALO_API_URL", "VITE_NEON_AUTH_URL", "VITE_TEXTHALO_WEBSITE_URL"]) {
+    const value = env[name]?.trim();
+    if (!value) continue;
+    let url;
+    try { url = new URL(value); } catch { throw new Error(`${name} must be an absolute HTTPS URL.`); }
+    if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash) {
+      throw new Error(`${name} must be an absolute HTTPS URL without credentials, query, or fragment.`);
+    }
+  }
+}
+
 async function pagesProject() {
   // Wrangler's formatted project list omits production_branch. Read the project
   // API with the CLI's active credentials, kept in memory and never printed.
@@ -263,6 +278,7 @@ async function main() {
   const { version, config } = await configuration();
   const directory = join(ROOT, "release-artifacts", version);
   if (mode === "plan") return console.log(JSON.stringify(buildPlan({ root: ROOT, output: directory, version, identity: config.bundle.macOS.signingIdentity, profile: process.env.NOTARY_KEYCHAIN_PROFILE ?? "<keychain-profile>" }), null, 2));
+  validateReleaseBuildEnvironment(process.env);
   if (process.platform !== "darwin") throw new Error("Signed macOS releases must run on macOS");
   await runReleaseWorkflow(options, {
     prepare: () => prepare(directory, version, config),
