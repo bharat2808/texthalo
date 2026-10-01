@@ -625,6 +625,7 @@ function MainApp() {
   const [account, setAccount] = useState<HostedAccount | null>(null);
   const [accountPlans, setAccountPlans] = useState<SetupPlansResponse["plans"] | null>(null);
   const [accountPlansError, setAccountPlansError] = useState(false);
+  const [accountPlansLoading, setAccountPlansLoading] = useState(false);
   const [accountEmail, setAccountEmail] = useState("");
   const [accountBusy, setAccountBusy] = useState(false);
   const [accountError, setAccountError] = useState("");
@@ -668,11 +669,22 @@ function MainApp() {
     void getVersion().then(setAppVersion).catch(() => setAppVersion("unknown"));
   }, []);
 
-  useEffect(() => {
-    void invoke<SetupPlansResponse>("desktop_billing_plans")
-      .then((result) => setAccountPlans(result.plans))
-      .catch(() => setAccountPlansError(true));
+  const loadAccountPlans = useCallback(async () => {
+    setAccountPlansLoading(true);
+    setAccountPlansError(false);
+    try {
+      const result = await invoke<SetupPlansResponse>("desktop_billing_plans");
+      setAccountPlans(result.plans);
+    } catch {
+      setAccountPlansError(true);
+    } finally {
+      setAccountPlansLoading(false);
+    }
   }, []);
+
+  useEffect(() => {
+    if (tab === "account" && !accountPlans && !accountPlansLoading && !accountPlansError) void loadAccountPlans();
+  }, [accountPlans, accountPlansError, accountPlansLoading, loadAccountPlans, tab]);
 
   const refreshHostedAccount = useCallback(async () => {
     setAccountError("");
@@ -1403,6 +1415,37 @@ function MainApp() {
   const accountUpgradePlan = currentAccountPlanIndex >= 0
     ? paidAccountPlans[currentAccountPlanIndex + 1] ?? null
     : paidAccountPlans[paidAccountPlans.length - 1] ?? null;
+
+  const planOptionsCard = (
+    <Card title={account ? "Plan" : "Plans"} icon={Icon.gauge()}>
+      {accountPlansLoading ? <span className="setup-plan-loading">Loading plan options…</span> : null}
+      {accountPlansError ? <><div className="card-note">Plan details couldn’t be loaded.</div><div className="inline"><button className="plain" onClick={() => void loadAccountPlans()}>Try again</button><button className="plain" onClick={() => void openUrl(`${websiteUrl}/pricing/`)}>Open pricing page ↗</button></div></> : null}
+      {accountPlans && !account?.subscription ? <>
+        <p className="account-plan-intro">Choose a plan. Local voices are free; hosted speech is optional.</p>
+        <div className="account-plan-grid" aria-label="TextHalo plans">
+          {accountPlans.map((plan) => <article className={`setup-plan-card${plan.id === "creator" ? " featured" : ""}`} key={plan.id}>
+            <strong>{plan.name}</strong><span className="setup-plan-price">{formatPlanPrice(plan.price)}</span><span>{plan.description}</span>
+            {plan.features.filter((feature) => feature !== "Everything in Free").slice(0, 3).map((feature) => <small key={feature}>{feature}</small>)}
+            {plan.id !== "free" ? <button className="plain account-plan-action" disabled={accountBusy || Boolean(account && !account.billingEnabled)} onClick={() => account ? void openCheckout(plan.id) : void beginDesktopSignIn()}>{account ? `Choose ${plan.name}` : `Sign in for ${plan.name}`}</button> : null}
+          </article>)}
+        </div>
+        <div className="inline"><button className="plain" onClick={() => void openUrl(`${websiteUrl}/pricing/`)}>Compare plans ↗</button></div>
+      </> : null}
+      {accountPlans && account?.subscription ? <>
+        <div className="account-current-plan">
+          <div className="account-current-plan-copy"><span className="credit-eyebrow">CURRENT PLAN</span><strong>{currentAccountPlan?.name ?? account.subscription.planId}</strong><span>{account.subscription.status}{account.subscription.cancelAtPeriodEnd ? " · cancels at period end" : ""}{account.subscription.currentPeriodEnd ? ` · renews ${new Date(account.subscription.currentPeriodEnd).toLocaleDateString()}` : ""}</span></div>
+          {paidAccountPlans.length > 0 && currentAccountPlanIndex === paidAccountPlans.length - 1 ? <span className="account-plan-note">You’re on the highest plan</span> : null}
+        </div>
+        {accountUpgradePlan ? <article className="setup-plan-card featured account-upgrade-card">
+          <div><span className="credit-eyebrow">AVAILABLE UPGRADE</span><strong>{accountUpgradePlan.name}</strong></div>
+          <span className="setup-plan-price">{formatPlanPrice(accountUpgradePlan.price)}</span><span>{accountUpgradePlan.description}</span>
+          {accountUpgradePlan.features.filter((feature) => feature !== "Everything in Free").slice(0, 3).map((feature) => <small key={feature}>{feature}</small>)}
+          <button className="plain account-plan-action" disabled={accountBusy || !account.billingEnabled} onClick={() => void openCheckout(accountUpgradePlan.id)}>Upgrade to {accountUpgradePlan.name}</button>
+        </article> : null}
+        <div className="inline"><button className="plain" onClick={() => void openUrl(`${websiteUrl}/account/billing/`)}>Manage billing</button></div>
+      </> : null}
+    </Card>
+  );
 
   const voiceRow = (voice: Voice) => (
     <Row
@@ -2139,34 +2182,7 @@ function MainApp() {
                   </div>
                   <p className="credit-explainer">The source amounts above are included in your available balance. They are not extra credits on top of it.</p>
                 </Card>
-                <Card title="Plan" icon={Icon.gauge()}>
-                  {!accountPlans && !accountPlansError ? <span className="setup-plan-loading">Loading plan options…</span> : null}
-                  {accountPlansError ? <div className="card-note">Plan details aren’t available right now. You can still manage billing online.</div> : null}
-                  {accountPlans && !account.subscription ? <>
-                    <p className="account-plan-intro">Choose a plan. Local voices are free; hosted speech is optional.</p>
-                    <div className="account-plan-grid" aria-label="TextHalo plans">
-                      {accountPlans.map((plan) => <article className={`setup-plan-card${plan.id === "creator" ? " featured" : ""}`} key={plan.id}>
-                        <strong>{plan.name}</strong><span className="setup-plan-price">{formatPlanPrice(plan.price)}</span><span>{plan.description}</span>
-                        {plan.features.filter((feature) => feature !== "Everything in Free").slice(0, 3).map((feature) => <small key={feature}>{feature}</small>)}
-                        {plan.id !== "free" && account.billingEnabled ? <button className="plain account-plan-action" disabled={accountBusy} onClick={() => void openCheckout(plan.id)}>Choose {plan.name}</button> : null}
-                      </article>)}
-                    </div>
-                    <div className="inline"><button className="plain" onClick={() => void openUrl(`${websiteUrl}/pricing/`)}>Compare plans ↗</button></div>
-                  </> : null}
-                  {accountPlans && account.subscription ? <>
-                    <div className="account-current-plan">
-                      <div className="account-current-plan-copy"><span className="credit-eyebrow">CURRENT PLAN</span><strong>{currentAccountPlan?.name ?? account.subscription.planId}</strong><span>{account.subscription.status}{account.subscription.cancelAtPeriodEnd ? " · cancels at period end" : ""}{account.subscription.currentPeriodEnd ? ` · renews ${new Date(account.subscription.currentPeriodEnd).toLocaleDateString()}` : ""}</span></div>
-                      {paidAccountPlans.length > 0 && currentAccountPlanIndex === paidAccountPlans.length - 1 ? <span className="account-plan-note">You’re on the highest plan</span> : null}
-                    </div>
-                    {accountUpgradePlan ? <article className="setup-plan-card featured account-upgrade-card">
-                      <div><span className="credit-eyebrow">AVAILABLE UPGRADE</span><strong>{accountUpgradePlan.name}</strong></div>
-                      <span className="setup-plan-price">{formatPlanPrice(accountUpgradePlan.price)}</span><span>{accountUpgradePlan.description}</span>
-                      {accountUpgradePlan.features.filter((feature) => feature !== "Everything in Free").slice(0, 3).map((feature) => <small key={feature}>{feature}</small>)}
-                      <button className="plain account-plan-action" disabled={accountBusy} onClick={() => void openCheckout(accountUpgradePlan.id)}>Upgrade to {accountUpgradePlan.name}</button>
-                    </article> : null}
-                    <div className="inline"><button className="plain" onClick={() => void openUrl(`${websiteUrl}/account/billing/`)}>Manage billing</button></div>
-                  </> : null}
-                </Card>
+                {planOptionsCard}
                 <Card title="One-time credit packs" icon={Icon.gauge()}>
                   <div className="card-note">Top-up credits are separate from monthly plan credits. They remain available according to the credit pack terms.</div>
                   <div className="inline"><button className="plain" disabled={accountBusy} onClick={() => void buyTopup("topup-5")}>$5 · 30,000 credits</button><button className="plain" disabled={accountBusy} onClick={() => void buyTopup("topup-10")}>$10 · 60,000 credits</button><button className="plain" disabled={accountBusy} onClick={() => void buyTopup("topup-20")}>$20 · 120,000 credits</button></div>
@@ -2195,17 +2211,20 @@ function MainApp() {
                 </section> : null}
               </>
             ) : (
-              <Card title="Sign in to TextHalo" icon={Icon.gear()}>
-                <div className="account-brand">
-                  <img className="account-brand-mark" src={appLogo} alt="" />
-                  <div><strong>TextHalo</strong><div className="card-note">Your account for hosted speech</div></div>
-                  <div className="account-brand-actions">
-                    <button className="plain" disabled={accountBusy} onClick={() => void beginDesktopSignIn()}>{accountBusy ? "Waiting for browser sign-in…" : "Sign in"}</button>
-                    {accountBusy ? <button className="text" onClick={() => void cancelDesktopSignIn()}>Cancel</button> : null}
+              <>
+                <Card title="Sign in to TextHalo" icon={Icon.gear()}>
+                  <div className="account-brand">
+                    <img className="account-brand-mark" src={appLogo} alt="" />
+                    <div><strong>TextHalo</strong><div className="card-note">Your account for hosted speech</div></div>
+                    <div className="account-brand-actions">
+                      <button className="plain" disabled={accountBusy} onClick={() => void beginDesktopSignIn()}>{accountBusy ? "Waiting for browser sign-in…" : "Sign in"}</button>
+                      {accountBusy ? <button className="text" onClick={() => void cancelDesktopSignIn()}>Cancel</button> : null}
+                    </div>
                   </div>
-                </div>
-                <div className="inline"><button className="text" onClick={() => void openUrl(`${websiteUrl}/sign-in/?mode=sign-up`)}>Create an account</button><button className="text" onClick={() => void openUrl(`${websiteUrl}/sign-in/?mode=forgot-password`)}>Forgot password?</button></div>
-              </Card>
+                  <div className="inline"><button className="text" onClick={() => void openUrl(`${websiteUrl}/sign-in/?mode=sign-up`)}>Create an account</button><button className="text" onClick={() => void openUrl(`${websiteUrl}/sign-in/?mode=forgot-password`)}>Forgot password?</button></div>
+                </Card>
+                {planOptionsCard}
+              </>
             )}
           </div>
         ) : null}
