@@ -13,7 +13,8 @@
     "website:dev": "vite --config vite.website.config.ts",
     "website:build": "tsc --noEmit -p website/tsconfig.json && vite build --config vite.website.config.ts && node scripts/prerender-website.mjs",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "@neondatabase/auth": "^0.5.0-beta",

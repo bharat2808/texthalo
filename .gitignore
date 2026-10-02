@@ -31,3 +31,7 @@ spikes/*/target/
 *.sln
 *.sw?
 website/.env
+
+# Browser regression artifacts
+playwright-report/
+test-results/

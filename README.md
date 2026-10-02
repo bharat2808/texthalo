@@ -134,6 +134,15 @@ KIEGEN_MODELS_DIR="$(mktemp -d)" cargo test --manifest-path src-tauri/Cargo.toml
 ./scripts/check-licenses.sh
 ```
 
+Browser regressions run the desktop React UI in Chromium with Tauri's official IPC mock. They verify that trial expiry refreshes clone access, clears an unavailable selected voice, and prevents mouse or keyboard selection even if the clone-list refresh fails.
+
+```bash
+npx playwright install chromium
+npm run test:e2e
+```
+
+Playwright starts its own Vite server on port 1420. Failure traces are saved under `test-results/`.
+
 Real-model and download tests require additional assets and are not all run by the standard suite. To exercise Kokoro streaming with the models installed in their default location:
 
 ```bash
