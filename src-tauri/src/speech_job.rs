@@ -6,6 +6,7 @@ pub struct SpeechJob {
     pub streaming: bool,
     pub status: StatusEvent,
     pub changed: Instant,
+    generation: tokio::sync::watch::Sender<u64>,
 }
 
 impl Default for SpeechJob {
@@ -19,6 +20,7 @@ impl Default for SpeechJob {
                 chars: None,
             },
             changed: Instant::now(),
+            generation: tokio::sync::watch::channel(0).0,
         }
     }
 }
@@ -26,6 +28,7 @@ impl Default for SpeechJob {
 impl SpeechJob {
     pub fn begin(&mut self, phase: Phase) -> u64 {
         self.id += 1;
+        self.generation.send_replace(self.id);
         self.streaming = false;
         self.set(phase, None, None);
         self.id
@@ -33,8 +36,21 @@ impl SpeechJob {
     pub fn is_current(&self, id: u64) -> bool {
         self.id == id
     }
+    /// Subscribe while holding the job lock, but wait without retaining that lock.
+    /// The stored generation also catches cancellation before the future is polled.
+    pub fn cancellation(&self, id: u64) -> impl std::future::Future<Output = ()> + Send + 'static {
+        let mut receiver = self.generation.subscribe();
+        async move {
+            while *receiver.borrow_and_update() == id {
+                if receiver.changed().await.is_err() {
+                    break;
+                }
+            }
+        }
+    }
     pub fn cancel(&mut self) {
         self.id += 1;
+        self.generation.send_replace(self.id);
         self.streaming = false;
         self.set(Phase::Idle, None, None);
     }
@@ -78,6 +94,39 @@ impl SpeechJob {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn stop_wakes_a_waiting_hosted_request() {
+        let mut job = SpeechJob::default();
+        let id = job.begin(Phase::Preparing);
+        let cancelled = job.cancellation(id);
+        tokio::pin!(cancelled);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(10), &mut cancelled)
+                .await
+                .is_err()
+        );
+        job.cancel();
+        tokio::time::timeout(std::time::Duration::from_millis(100), cancelled)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn replacement_cancels_only_the_previous_hosted_request() {
+        let mut job = SpeechJob::default();
+        let old = job.begin(Phase::Preparing);
+        let cancelled = job.cancellation(old);
+        let current = job.begin(Phase::Preparing);
+        tokio::time::timeout(std::time::Duration::from_millis(100), cancelled)
+            .await
+            .unwrap();
+        assert!(tokio::time::timeout(
+            std::time::Duration::from_millis(10),
+            job.cancellation(current)
+        )
+        .await
+        .is_err());
+    }
     #[test]
     fn source_termination_cancels_pending_audio() {
         let mut job = SpeechJob::default();

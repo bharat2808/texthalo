@@ -260,7 +260,13 @@ body:has(.update-overlay) {
   font-size: 12px;
   font-weight: 600;
 }
-.history-group > h2 span { color: var(--text-tertiary); font-weight: 400; }
+.history-subgroup > h3 {
+  margin: 12px 0 8px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-tertiary);
+  overflow-wrap: anywhere;
+}
 
 .history-item {
   display: flex;

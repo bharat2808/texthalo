@@ -1,4 +1,4 @@
-//! Local archive of completed speech. Audio and metadata live in app support only.
+//! Local speech archive. Audio and metadata live in app support only.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -23,6 +23,76 @@ pub struct Entry {
     pub app_name: Option<String>,
     #[serde(default)]
     pub window_title: Option<String>,
+    #[serde(default)]
+    pub partial: bool,
+}
+
+/// Hosted recordings survive cancellation when the async stream future is dropped.
+/// Ordinary PCM recordings retain their existing discard-on-drop behavior.
+pub struct ArchivedRecording {
+    recorder: Option<PcmRecorder>,
+    dir: PathBuf,
+    engine: String,
+    voice: String,
+    text: String,
+    source: crate::capture::SourceMetadata,
+    partial: bool,
+}
+
+impl ArchivedRecording {
+    pub fn new(
+        dir: &Path,
+        engine: &str,
+        voice: &str,
+        text: &str,
+        source: &crate::capture::SourceMetadata,
+    ) -> Result<Self, String> {
+        Ok(Self {
+            recorder: Some(PcmRecorder::new(dir)?),
+            dir: dir.to_owned(),
+            engine: engine.into(),
+            voice: voice.into(),
+            text: text.into(),
+            source: source.clone(),
+            partial: true,
+        })
+    }
+    pub fn write(&mut self, samples: &[f32]) {
+        if let Some(recorder) = self.recorder.as_mut() {
+            recorder.write(samples);
+        }
+    }
+    pub fn complete(mut self) {
+        self.partial = false;
+    }
+}
+
+impl Drop for ArchivedRecording {
+    fn drop(&mut self) {
+        if let Some(recorder) = self.recorder.take() {
+            let result = if self.partial {
+                recorder.save_with_partial(
+                    &self.dir,
+                    &self.engine,
+                    &self.voice,
+                    &self.text,
+                    &self.source,
+                    self.partial,
+                )
+            } else {
+                recorder.save(
+                    &self.dir,
+                    &self.engine,
+                    &self.voice,
+                    &self.text,
+                    &self.source,
+                )
+            };
+            if let Err(error) = result {
+                eprintln!("[TextHalo] could not save hosted audio history: {error}");
+            }
+        }
+    }
 }
 
 /// Incremental WAV writer. It only touches the producer thread, never CoreAudio's callback.
@@ -86,6 +156,18 @@ impl PcmRecorder {
         text: &str,
         source: &crate::capture::SourceMetadata,
     ) -> Result<(), String> {
+        self.save_with_partial(dir, engine, voice, text, source, false)
+    }
+
+    fn save_with_partial(
+        self,
+        dir: &Path,
+        engine: &str,
+        voice: &str,
+        text: &str,
+        source: &crate::capture::SourceMetadata,
+        partial: bool,
+    ) -> Result<(), String> {
         if self.samples_written == 0 {
             return Ok(());
         }
@@ -93,7 +175,16 @@ impl PcmRecorder {
         let path = self
             .finish()
             .ok_or("Could not finish audio history recording")?;
-        if let Err(error) = save_entry(dir, &path, engine, voice, text, Some(seconds), source) {
+        if let Err(error) = save_entry_with_partial(
+            dir,
+            &path,
+            engine,
+            voice,
+            text,
+            Some(seconds),
+            source,
+            partial,
+        ) {
             let _ = std::fs::remove_file(path);
             return Err(error);
         }
@@ -129,6 +220,28 @@ pub fn save_entry(
     duration_seconds: Option<f64>,
     source: &crate::capture::SourceMetadata,
 ) -> Result<(), String> {
+    save_entry_with_partial(
+        dir,
+        audio_path,
+        engine,
+        voice,
+        text,
+        duration_seconds,
+        source,
+        false,
+    )
+}
+
+fn save_entry_with_partial(
+    dir: &Path,
+    audio_path: &Path,
+    engine: &str,
+    voice: &str,
+    text: &str,
+    duration_seconds: Option<f64>,
+    source: &crate::capture::SourceMetadata,
+    partial: bool,
+) -> Result<(), String> {
     std::fs::create_dir_all(dir).map_err(|e| format!("create audio history: {e}"))?;
     let id = audio_path
         .file_stem()
@@ -157,6 +270,7 @@ pub fn save_entry(
         audio_file,
         app_name: source.app_name.clone(),
         window_title: source.window_title.clone(),
+        partial,
     };
     let encoded = serde_json::to_vec(&entry).map_err(|e| format!("encode audio history: {e}"))?;
     let tmp = dir.join(format!("{id}.json.part"));
@@ -268,6 +382,47 @@ fn now_ms() -> u64 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn interrupted_archive_preserves_received_audio_as_partial() {
+        let dir = std::env::temp_dir().join(format!("partial-history-{}", uuid::Uuid::new_v4()));
+        {
+            let mut recording = super::ArchivedRecording::new(
+                &dir,
+                "Fish Audio",
+                "voice",
+                "Original request",
+                &Default::default(),
+            )
+            .unwrap();
+            recording.write(&vec![0.25; 12_000]);
+        }
+        let entries = super::list(&dir).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].partial);
+        assert_eq!(entries[0].duration_seconds, Some(0.5));
+        let path = super::audio_path(&dir, &entries[0].id).unwrap();
+        assert_eq!(hound::WavReader::open(path).unwrap().duration(), 12_000);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn completed_archive_is_not_partial_and_empty_archive_is_skipped() {
+        let dir = std::env::temp_dir().join(format!("complete-history-{}", uuid::Uuid::new_v4()));
+        drop(
+            super::ArchivedRecording::new(&dir, "Fish Audio", "voice", "Text", &Default::default())
+                .unwrap(),
+        );
+        assert!(super::list(&dir).unwrap().is_empty());
+        let mut recording =
+            super::ArchivedRecording::new(&dir, "Fish Audio", "voice", "Text", &Default::default())
+                .unwrap();
+        recording.write(&[0.25; 24]);
+        recording.complete();
+        let entries = super::list(&dir).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert!(!entries[0].partial);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
     use super::*;
 
     #[test]

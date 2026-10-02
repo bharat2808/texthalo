@@ -120,6 +120,7 @@ type AudioHistoryEntry = {
   audioFile: string;
   appName?: string | null;
   windowTitle?: string | null;
+  partial?: boolean;
 };
 
 type Settings = {
@@ -618,13 +619,16 @@ function MainApp() {
   const [historyEntries, setHistoryEntries] = useState<AudioHistoryEntry[]>([]);
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [historyLoading, setHistoryLoading] = useState(false);
-  const historyGroups = historyEntries.reduce<Record<string, AudioHistoryEntry[]>>((groups, entry) => {
+  const historyGroups = historyEntries.reduce((groups, entry) => {
     const app = entry.appName?.trim() || "Unknown app";
-    const title = entry.windowTitle?.trim();
-    const key = `${app}\u0000${title || ""}`;
-    (groups[key] ??= []).push(entry);
+    const title = entry.windowTitle?.trim() || "";
+    const titles = groups.get(app) ?? new Map<string, AudioHistoryEntry[]>();
+    const entries = titles.get(title) ?? [];
+    entries.push(entry);
+    titles.set(title, entries);
+    groups.set(app, titles);
     return groups;
-  }, {});
+  }, new Map<string, Map<string, AudioHistoryEntry[]>>());
   const [account, setAccount] = useState<HostedAccount | null>(null);
   const [accountPlans, setAccountPlans] = useState<SetupPlansResponse["plans"] | null>(null);
   const [accountPlansError, setAccountPlansError] = useState(false);
@@ -2429,15 +2433,18 @@ function MainApp() {
               </Card>
             ) : historyEntries.length ? (
               <div className="history-list">
-                {Object.entries(historyGroups).map(([key, entries]) => {
-                  const [appName, title] = key.split("\u0000");
-                  return <section className="history-group" key={key}>
-                  <h2>{appName}{title ? <span> · {title}</span> : null}</h2>
+                {Array.from(historyGroups, ([appName, titles]) => (
+                  <section className="history-group" key={appName}>
+                  <h2>{appName}</h2>
+                  {Array.from(titles, ([title, entries]) => (
+                  <div className="history-subgroup" key={title}>
+                  {title ? <h3>{title}</h3> : null}
                   {entries.map((entry) => (
                   <article className="history-item" key={entry.id}>
                     <div className="history-copy">
                       <div className="history-meta">
                         <strong>{entry.engine}</strong>
+                        {entry.partial ? <span title="Only received audio was saved; the text shows the original request">Partial</span> : null}
                         <span>{entry.voice}</span>
                         <time dateTime={new Date(entry.createdAt).toISOString()}>
                           {new Intl.DateTimeFormat(undefined, {
@@ -2469,13 +2476,15 @@ function MainApp() {
                     </div>
                   </article>
                   ))}
-                  </section>;
-                })}
+                  </div>
+                  ))}
+                  </section>
+                ))}
               </div>
             ) : (
               <Card title="No saved audio yet" icon={Icon.history()}>
                 <div className="card-note">
-                  TextHalo will save completed speech here. Voice preview samples are not saved.
+                  TextHalo will save completed and partial hosted recordings here. Voice preview samples are not saved.
                 </div>
               </Card>
             )}
