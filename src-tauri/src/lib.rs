@@ -27,6 +27,7 @@ mod speech;
 mod speech_job;
 pub mod spoken;
 mod streaming;
+mod transcription_history;
 mod update_safety;
 pub mod voices;
 
@@ -1230,6 +1231,7 @@ pub fn run() {
             update_safety::finish_update_installation,
             update_safety::record_update_failure,
             assistant::assistant_state,
+            assistant::transcription_history,
             assistant::assistant_control,
             get_state,
             get_speech_status,

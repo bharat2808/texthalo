@@ -1,4 +1,5 @@
-import AssistantSettings, { defaultAssistantPreferences, type AssistantPreferences } from "./AssistantSettings";
+import TranscriptionHistory from "./TranscriptionHistory";
+import AssistantSettings, { PermissionsSettings, TranscriptionSettings, defaultAssistantPreferences, type AssistantPreferences } from "./AssistantSettings";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
@@ -156,7 +157,7 @@ type UiState = {
 type Phase = "idle" | "capturing" | "preparing" | "speaking" | "error";
 type Status = { phase: Phase; message?: string | null; chars?: number | null };
 
-type Tab = "general" | "voice" | "account" | "shortcuts" | "capture" | "history";
+type Tab = "general" | "voice" | "account" | "shortcuts" | "capture" | "history" | "permissions" | "transcription" | "assistant";
 
 /* ── icons (16×16, currentColor) ───────────────────────────────────── */
 
@@ -971,14 +972,6 @@ function MainApp() {
     };
   }, [refresh]);
 
-  useEffect(() => {
-    if (
-      !state || state.trusted ||
-      state.settings.accessibility_prompted || accessibilityPromptStarted.current
-    ) return;
-    void requestAccessibility();
-  }, [state, requestAccessibility]);
-
   const save = useCallback(
     async (patch: Partial<Settings>) => {
       const current = latestState.current;
@@ -1441,6 +1434,9 @@ function MainApp() {
     { id: "shortcuts", title: "Shortcuts", icon: Icon.command() },
     { id: "capture", title: "Capture", icon: Icon.textCursor() },
     { id: "history", title: "History", icon: Icon.history() },
+    { id: "transcription", title: "Transcription", icon: Icon.textCursor() },
+    { id: "assistant", title: "Assistant", icon: Icon.textCursor() },
+    { id: "permissions", title: "Permissions", icon: Icon.gear() },
   ];
 
   const paidAccountPlans = accountPlans?.filter((plan) => plan.id !== "free") ?? [];
@@ -1542,84 +1538,6 @@ function MainApp() {
               Select text anywhere, press <span className="mono">{settings.shortcuts.speak}</span>{" "}
               and it is read aloud. {settings.engine === "fish" ? "Selected text is sent to TextHalo and Fish Audio for hosted speech." : "Local engines process text on this Mac."}
             </p>
-
-            <Card title="Permission" icon={Icon.textCursor()}>
-              {state.trusted ? (
-                <>
-                  <Note kind="secondary" icon={Icon.checkCircle()}>
-                    Accessibility access granted. TextHalo uses it when you press your Speak
-                    shortcut to capture the selected text.
-                  </Note>
-                  <div className="card-note">
-                    The default method simulates ⌘C and reads the copied selection. macOS
-                    requires Accessibility access to send that keystroke. The clipboard is
-                    temporarily used; its previous text is restored when the restore option is
-                    enabled. Accessibility-based capture methods use this access to read the
-                    selection directly.
-                  </div>
-                </>
-              ) : (
-                <>
-                  <Note kind="warning" icon={Icon.warn()}>
-                    TextHalo needs Accessibility access to capture selected text when you press
-                    your Speak shortcut. macOS requires this permission for the default
-                    simulated ⌘C method.
-                  </Note>
-                  <div className="card-note">
-                    TextHalo does not capture text continuously. The default method briefly uses
-                    the clipboard to read what the focused app copies; its previous text is
-                    restored when the restore option is enabled. You can also choose an
-                    Accessibility-based method that reads the selection directly.
-                  </div>
-                  <div className="inline">
-                    {state.settings.accessibility_prompted ? (
-                      <button
-                        className="plain"
-                        onClick={() => void invoke("open_accessibility_settings")}
-                      >
-                        Open Accessibility Settings…
-                      </button>
-                    ) : (
-                      <button
-                        className="plain"
-                        onClick={() =>
-                          void invoke<UiState>("request_accessibility")
-                            .then((next) => {
-                              latestState.current = next;
-                              setState(next);
-                            })
-                            .catch((cause) => setError(String(cause)))
-                        }
-                      >
-                        Continue to macOS permission prompt…
-                      </button>
-                    )}
-                  </div>
-                  {state.settings.accessibility_prompted ? (
-                    <div className="card-note">
-                      In System Settings, switch <strong>TextHalo</strong> on under Privacy
-                      &amp; Security → Accessibility. This panel notices by itself once you do.
-                    </div>
-                  ) : (
-                    <div className="card-note">
-                      macOS will show its standard permission prompt. Afterward, enable
-                      <strong> TextHalo</strong> under Privacy &amp; Security → Accessibility.
-                    </div>
-                  )}
-                  <div className="card-note">
-                    Rebuilding from source invalidates the grant, and the stale entry keeps
-                    failing. Clear it with:
-                  </div>
-                  <div className="mono-block">tccutil reset Accessibility com.kiegen.app</div>
-                </>
-              )}
-              {state.secure_input ? (
-                <Note kind="warning" icon={Icon.warn()}>
-                  Secure input is on — a password field has focus. Capture refuses until you
-                  click away.
-                </Note>
-              ) : null}
-            </Card>
 
             <Card title="Startup" icon={Icon.gear()}>
               <label className="startup-option">
@@ -2267,6 +2185,97 @@ function MainApp() {
           </div>
         ) : null}
 
+        {tab === "permissions" ? <div className="pane-inner">
+          <h1 className="pane-title">Permissions</h1>
+          <p className="pane-subtitle">Manage access for speaking selections, transcription, and Assistant context.</p>
+            <Card title="Accessibility" icon={Icon.textCursor()}>
+              {state.trusted ? (
+                <>
+                  <Note kind="secondary" icon={Icon.checkCircle()}>
+                    Accessibility access granted. TextHalo uses it for selection capture, direct text insertion, and Undo.
+                  </Note>
+                  <div className="card-note">
+                    The default method simulates ⌘C and reads the copied selection. macOS
+                    requires Accessibility access to send that keystroke. The clipboard is
+                    temporarily used; its previous text is restored when the restore option is
+                    enabled. Accessibility-based capture methods use this access to read the
+                    selection directly.
+                  </div>
+                </>
+              ) : (
+                <>
+                  <Note kind="warning" icon={Icon.warn()}>
+                    TextHalo needs Accessibility access to capture selected text when you press
+                    your Speak shortcut. macOS requires this permission for the default
+                    simulated ⌘C method.
+                  </Note>
+                  <div className="card-note">
+                    TextHalo does not capture text continuously. The default method briefly uses
+                    the clipboard to read what the focused app copies; its previous text is
+                    restored when the restore option is enabled. You can also choose an
+                    Accessibility-based method that reads the selection directly.
+                  </div>
+                  <div className="inline">
+                    {state.settings.accessibility_prompted ? (
+                      <button
+                        className="plain"
+                        onClick={() => void invoke("open_accessibility_settings")}
+                      >
+                        Open Accessibility Settings…
+                      </button>
+                    ) : (
+                      <button
+                        className="plain"
+                        onClick={() =>
+                          void invoke<UiState>("request_accessibility")
+                            .then((next) => {
+                              latestState.current = next;
+                              setState(next);
+                            })
+                            .catch((cause) => setError(String(cause)))
+                        }
+                      >
+                        Continue to macOS permission prompt…
+                      </button>
+                    )}
+                  </div>
+                  {state.settings.accessibility_prompted ? (
+                    <div className="card-note">
+                      In System Settings, switch <strong>TextHalo</strong> on under Privacy
+                      &amp; Security → Accessibility. This panel notices by itself once you do.
+                    </div>
+                  ) : (
+                    <div className="card-note">
+                      macOS will show its standard permission prompt. Afterward, enable
+                      <strong> TextHalo</strong> under Privacy &amp; Security → Accessibility.
+                    </div>
+                  )}
+
+                </>
+              )}
+              {state.secure_input ? (
+                <Note kind="warning" icon={Icon.warn()}>
+                  Secure input is on — a password field has focus. Capture refuses until you
+                  click away.
+                </Note>
+              ) : null}
+            </Card>
+
+          <Card title="Voice and screen access" icon={Icon.gear()}><PermissionsSettings /></Card>
+        </div> : null}
+        {tab === "transcription" ? <div className="pane-inner">
+          <h1 className="pane-title">Transcription</h1>
+          <p className="pane-subtitle">Hold to speak. Release to insert your words at the original cursor, with Undo.</p>
+          <Card title="Transcription settings" icon={Icon.textCursor()}><TranscriptionSettings value={settings.assistant ?? defaultAssistantPreferences} onChange={assistant => void save({ assistant })} /></Card>
+          <Card title="Recent transcriptions" icon={Icon.history()}><TranscriptionHistory /></Card>
+        </div> : null}
+        {tab === "assistant" ? <div className="pane-inner">
+          <h1 className="pane-title">Assistant</h1>
+          <p className="pane-subtitle">Hold to ask. Release to write, edit, or generate a voiceover using your instructions and context.</p>
+          <Card title="Instructions and context" icon={Icon.textCursor()}><AssistantSettings value={settings.assistant ?? defaultAssistantPreferences} onChange={assistant => void save({ assistant })} /></Card>
+          <p className="card-note">{settings.engine === "fish" ? "Generation stays on this Mac. Narration sends the resulting text to TextHalo and Fish Audio." : "Generation and your selected voice run on this Mac."}</p>
+        </div> : null}
+
         {tab === "shortcuts" ? (
           <div className="pane-inner">
             <h1 className="pane-title">Shortcuts</h1>
@@ -2274,8 +2283,11 @@ function MainApp() {
               Hold Transcribe or Assistant while you speak, then release. Speak reads your selection.
             </p>
 
-            <Card title="Global shortcuts" icon={Icon.command()}>
-              {(["speak", "transcribe", "assistant", "stop"] as const).map((role) => {
+            {([
+              {title:"Speech",role:"speak"}, {title:"Transcription",role:"transcribe"},
+              {title:"Assistant",role:"assistant"}, {title:"Stop / cancel",role:"stop"},
+            ] as const).map(({title,role}) => <Card key={role} title={title} icon={Icon.command()}>
+              {(() => {
                 const isRecording = recording === role;
                 return (
                   <div className="field" key={role}>
@@ -2308,8 +2320,9 @@ function MainApp() {
                     {(role === "transcribe" || role === "assistant") && settings.shortcuts[role] && <button className="plain" onClick={() => void save({ shortcuts: { ...settings.shortcuts, [role]: "" } })}>Clear shortcut</button>}
                   </div>
                 );
-              })}
-
+              })()}
+            </Card>)}
+            <Card title="Shortcut availability" icon={Icon.keyboard()}>
               {state.refused_shortcuts.length > 0 ? (
                 <Note kind="error" icon={Icon.xCircle()}>
                   macOS refused {state.refused_shortcuts.join(", ")} — another app already
@@ -2320,9 +2333,6 @@ function MainApp() {
                 A combination needs at least one modifier (⌘ ⌃ ⌥ ⇧); function keys may be
                 used on their own.
               </div>
-            </Card>
-            <Card title="Transcription and assistant" icon={Icon.textCursor()}>
-              <AssistantSettings value={settings.assistant ?? defaultAssistantPreferences} onChange={assistant => void save({ assistant })} />
             </Card>
           </div>
         ) : null}

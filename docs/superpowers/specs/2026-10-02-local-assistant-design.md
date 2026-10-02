@@ -1,3 +1,5 @@
+> Updated interaction and settings design: [Direct output with Undo](2026-10-02-assistant-direct-output.md). The accepted revision below supersedes preview/accept and chat-panel behavior in this original design.
+
 # Local assistant modes
 
 Status: implemented on `codex/local-assistant-modes`; see the implementation verification report for SDK and live-device test limits.

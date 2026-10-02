@@ -17,6 +17,19 @@ import Foundation
         assert(hold.release() == nil)
         assert(hold.recognized("late final") == "late final")
         assert(hold.recognized("duplicate") == nil)
-        print("Native target and hold contracts: 12 assertions passed")
+        let edit = TextEditReceipt(original: saved, replacement: "world")!
+        assert(edit.updatedValue == "hello world")
+        assert(edit.originalText == "🌍")
+        let after = TargetSnapshot(value: "hello world", location: 11, length: 0)
+        assert(edit.permitsUndo(current: after, committed: after, sameElement: true, editable: true))
+        assert(!edit.permitsUndo(current: .init(value: "hello world!", location: 12, length: 0), committed: after, sameElement: true, editable: true))
+        assert(!edit.permitsUndo(current: after, committed: after, sameElement: false, editable: true))
+        assert(!edit.permitsUndo(current: after, committed: after, sameElement: true, editable: false))
+        assert(!edit.permitsUndo(current: .init(value: "hello world", location: 0, length: 0), committed: after, sameElement: true, editable: true))
+        assert(!edit.permitsUndo(current: saved, committed: saved, sameElement: true, editable: true), "Failed insertion must not create an undo receipt")
+        let insertion = TextEditReceipt(original: .init(value: "ab", location: 1, length: 0), replacement: "🌍")!
+        assert(insertion.updatedValue == "a🌍b" && insertion.originalText.isEmpty && insertion.replacementLength == 2)
+        assert(TextEditReceipt(original: invalid, replacement: "x") == nil)
+        print("Native target, hold, and Undo contracts passed")
     }
 }

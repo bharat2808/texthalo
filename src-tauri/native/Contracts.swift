@@ -42,3 +42,22 @@ struct TranscriptGate {
         return nil
     }
 }
+
+// Records the exact mutation, never a generic Cmd-Z operation in another application.
+struct TextEditReceipt {
+    let original: TargetSnapshot
+    let originalText: String
+    let updatedValue: String
+    let replacementLength: Int
+    init?(original: TargetSnapshot, replacement: String) {
+        guard original.permitsInsertion(current: original, sameElement: true, editable: true) else { return nil }
+        let range = NSRange(location: original.location, length: original.length)
+        self.original = original
+        originalText = (original.value as NSString).substring(with: range)
+        updatedValue = (original.value as NSString).replacingCharacters(in: range, with: replacement)
+        replacementLength = replacement.utf16.count
+    }
+    func permitsUndo(current: TargetSnapshot, committed: TargetSnapshot, sameElement: Bool, editable: Bool) -> Bool {
+        committed.value == updatedValue && committed.permitsInsertion(current: current, sameElement: sameElement, editable: editable)
+    }
+}

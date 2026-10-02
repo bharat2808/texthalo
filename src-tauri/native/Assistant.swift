@@ -41,6 +41,8 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
     let windowID: CGWindowID?
     let bounds: CGRect?
     let caretBounds: CGRect?
+    var receipt: TextEditReceipt?
+    var committed: TargetSnapshot?
     init() {
         application = NSWorkspace.shared.frontmostApplication
         let current = AXIsProcessTrusted() ? focusedElement() : nil
@@ -77,8 +79,31 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
               NSWorkspace.shared.frontmostApplication == application,
               let element, let focused = focusedElement(), let original, let current = snapshot(element),
               original.permitsInsertion(current: current, sameElement: CFEqual(element, focused), editable: editable) else { return false }
-        return AXUIElementSetAttributeValue(element, kAXSelectedTextAttribute as CFString, text as CFString) == .success
+        guard let edit = TextEditReceipt(original: original, replacement: text),
+              AXUIElementSetAttributeValue(element, kAXSelectedTextAttribute as CFString, text as CFString) == .success else { return false }
+        if let after = snapshot(element), after.value == edit.updatedValue {
+            receipt = edit; committed = after
+        }
+        return true
     }
+    var canUndo: Bool { receipt != nil && committed != nil }
+    func undo() -> Bool {
+        guard let application, !application.isTerminated, NSWorkspace.shared.frontmostApplication == application,
+              let element, let focused = focusedElement(), let current = snapshot(element),
+              let receipt, let committed,
+              receipt.permitsUndo(current: current, committed: committed, sameElement: CFEqual(element, focused), editable: editable) else { return false }
+        var range = CFRange(location: receipt.original.location, length: receipt.replacementLength)
+        guard let rangeValue = AXValueCreate(.cfRange, &range),
+              AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, rangeValue) == .success else { return false }
+        guard AXUIElementSetAttributeValue(element, kAXSelectedTextAttribute as CFString, receipt.originalText as CFString) == .success else {
+            var restore = CFRange(location: committed.location, length: committed.length)
+            if let value = AXValueCreate(.cfRange, &restore) { AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, value) }
+            return false
+        }
+        self.receipt = nil; self.committed = nil
+        return true
+    }
+
 }
 
 @available(macOS 26.0, *)
@@ -118,7 +143,8 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
 
     func event(_ phase: String, _ message: String = "", text: String = "", action: String = "preview") {
         var event: [String: Any] = ["id": id, "phase": phase, "message": message, "text": text,
-            "action": action, "canInsert": target?.editable ?? false,
+            "action": action, "canInsert": target?.editable ?? false, "canUndo": target?.canUndo ?? false,
+            "mode": request?.mode ?? "assistant",
             "source": target?.application?.localizedName ?? "", "context": context]
         if let bounds = target?.caretBounds ?? target?.bounds {
             event["bounds"] = ["x": bounds.origin.x, "y": bounds.origin.y, "width": bounds.width, "height": bounds.height]
@@ -189,6 +215,15 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
         switch command.command {
         case "status": availability()
         case "permissions": Task { await permissions() }
+        case "permission_microphone": Task { _ = await AVCaptureDevice.requestAccess(for: .audio); availability() }
+        case "permission_speech": Task {
+            _ = await withCheckedContinuation { continuation in SFSpeechRecognizer.requestAuthorization { continuation.resume(returning: $0) } }
+            availability()
+        }
+        case "permission_screen": _ = CGRequestScreenCaptureAccess(); availability()
+        case "settings_microphone", "settings_speech", "settings_screen":
+            let pane = command.command == "settings_microphone" ? "Privacy_Microphone" : command.command == "settings_speech" ? "Privacy_SpeechRecognition" : "Privacy_ScreenCapture"
+            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?" + pane) { NSWorkspace.shared.open(url) }
         case "diagnose": Task { await diagnose() }
         case "cancel":
             if command.restore == true { restoreSourceIfAssistantFocused(explicit: true) }
@@ -207,14 +242,16 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
             }
             cancel(); id = command.id; request = command
             generate(text)
-        case "insert":
-            guard command.id == id, !result.isEmpty, let target else { return }
-            if command.restore == true {
-                guard let app = target.application, !app.isTerminated else { event("result", "The original app closed. Use Copy.", text: result); return }
-                app.activate(options: [])
-                let currentID = id
-                Task { try? await Task.sleep(for: .milliseconds(180)); guard self.id == currentID else { return }; self.insertResult() }
-            } else { insertResult() }
+        case "undo":
+            guard command.id == id, target?.canUndo == true else { return }
+            let currentID = id
+            if command.restore == true { restoreSourceIfAssistantFocused(explicit: true) }
+            Task {
+                if command.restore == true { try? await Task.sleep(for: .milliseconds(180)) }
+                guard self.id == currentID else { return }
+                if self.target?.undo() == true { self.event("result", "Change undone", action: "undone") }
+                else { self.target?.receipt = nil; self.target?.committed = nil; self.event("result", "The field changed. Undo is no longer available.", text: self.result, action: "undo_unavailable") }
+            }
         case "copy":
             guard command.id == id, !result.isEmpty else { return }
             NSPasteboard.general.clearContents(); NSPasteboard.general.setString(result, forType: .string)
@@ -230,7 +267,7 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
         if command.mode == "assistant", command.context != "none" { context = target?.selection ?? "" }
         guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized,
               SFSpeechRecognizer.authorizationStatus() == .authorized else {
-            event("error", "Enable Microphone and Speech Recognition in TextHalo’s shortcut settings, then hold the shortcut again."); return
+            event("error", "Enable Microphone and Speech Recognition in TextHalo’s Permissions section, then hold the shortcut again."); return
         }
         let recognizer: SFSpeechRecognizer
         do { recognizer = try localRecognizer(language: command.language ?? "en-US") }
@@ -296,17 +333,21 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
         let mode = request?.mode
         cancel()
         guard !text.isEmpty else { event("error", "No speech detected. Hold the shortcut and try again."); return }
-        if mode == "assistant" { generate(text) }
+        if mode == "assistant" {
+            if request?.context == "screen" { captureScreen(region: false, prompt: text) }
+            else { generate(text) }
+        }
         else {
+            event("transcript", text: text)
             result = text
             if request?.output == "copy" {
                 NSPasteboard.general.clearContents(); NSPasteboard.general.setString(text, forType: .string)
-                event("result", "Transcript copied.", text: text)
+                event("result", "Transcript copied.", action: "copied")
             } else { insertResult() }
         }
     }
     func insertResult() {
-        if target?.insert(result) == true { target = nil; event("result", "Inserted into the original text field.", text: result) }
+        if target?.insert(result) == true { event("result", target?.original?.length == 0 ? "Text inserted" : "Text replaced", action: "applied") }
         else { event("result", "The original field is unavailable or changed. Use Copy.", text: result) }
     }
     func generate(_ prompt: String) {
@@ -343,30 +384,30 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
                 guard !Task.isCancelled, self.id == currentID else { return }
                 let reply = response.content
                 let readOriginal = reply.action == .readSelection
-                let text = readOriginal ? source : reply.text
+                let text = readOriginal ? (self.request?.context == "none" ? "" : self.target?.selection ?? "") : reply.text
                 guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { self.event("error", "No text is available. Select text or add context first."); return }
                 self.result = text
-                self.event("result", reply.action == .clarify ? "More information needed" : "Ready", text: text,
-                           action: reply.action == .speak || readOriginal ? "speak" : "preview")
+                if reply.action == .speak || readOriginal { self.event("result", "Preparing narration…", text: text, action: "speak") }
+                else if reply.action == .clarify { self.event("result", "Hold Assistant again with more detail", text: text, action: "clarify") }
+                else { self.insertResult() }
             } catch {
                 guard !Task.isCancelled, self.id == currentID else { return }
                 self.event("error", "Assistant could not complete this request: \(error.localizedDescription)")
             }
         }
     }
-    func captureScreen(region: Bool) {
+    func captureScreen(region: Bool, prompt: String? = nil) {
         guard CGPreflightScreenCaptureAccess() else {
-            _ = CGRequestScreenCaptureAccess()
-            event("error", "Allow Screen Recording in macOS settings, then capture again. Screen context uses local OCR."); return
+            event("error", "Enable Screen Recording in TextHalo’s Permissions section, then hold Assistant again."); return
         }
         let currentID = id
         let window = target?.windowID
-        guard region || window != nil else { event("error", "No original window is available. Choose a region instead."); return }
+        guard region || window != nil else { event("error", "No original window is available. Use selected-text context in Assistant settings."); return }
         event("capturing_screen", "Extracting screen text locally…")
         let process = Process()
         screenProcess = process
         generation = Task {
-            defer { if self.id == currentID { self.screenProcess = nil; self.generation = nil } }
+            defer { if self.id == currentID { self.screenProcess = nil } }
             do {
                 try await Task.sleep(for: .milliseconds(250))
                 let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -386,8 +427,9 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
                 }.value
                 guard !Task.isCancelled, self.id == currentID else { return }
                 guard !text.isEmpty else { self.event("error", "No readable text found. This build extracts text, not visual descriptions."); return }
-                self.context = text
-                self.event("result", "Screen text attached (local OCR). Enter a request below.", text: self.result)
+                self.context = String((self.context + "\nVISIBLE WINDOW TEXT:\n" + text).prefix(10000))
+                if let prompt { self.generate(prompt) }
+                else { self.event("result", "Screen text captured", text: self.result) }
             } catch { guard !Task.isCancelled, self.id == currentID else { return }; self.event("error", "Screen capture canceled or unavailable.") }
         }
     }

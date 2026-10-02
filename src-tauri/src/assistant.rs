@@ -39,10 +39,9 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
         WebviewUrl::App("index.html?assistant".into()),
     )
     .title("TextHalo Assistant")
-    .inner_size(460.0, 490.0)
-    .min_inner_size(360.0, 300.0)
-    .decorations(true)
-    .resizable(true)
+    .inner_size(380.0, 130.0)
+    .decorations(false)
+    .resizable(false)
     .focused(false)
     .always_on_top(true)
     .skip_taskbar(true)
@@ -116,15 +115,17 @@ fn publish(app: &AppHandle, status: &Value) {
     let show = !matches!(
         status["phase"].as_str(),
         Some("idle" | "canceled" | "capturing_screen")
-    );
+    ) && status["action"] != "speak";
+    let expanded =
+        status["text"].as_str().is_some_and(|s| !s.is_empty()) && status["action"] != "applied";
+    let height = if expanded { 360.0 } else { 140.0 };
     let anchor = status.get("bounds").cloned();
     let app = app.clone();
     let _ = app.clone().run_on_main_thread(move || {
         if let Some(window) = app.get_webview_window("assistant") {
             if show {
-                if !window.is_visible().unwrap_or(false) {
-                    position_panel(&window, anchor.as_ref());
-                }
+                let _ = window.set_size(tauri::LogicalSize::new(380.0, height));
+                position_panel(&window, anchor.as_ref(), height);
                 #[cfg(target_os = "macos")]
                 if let Ok(raw) = window.ns_window() {
                     // Tauri show() makes a window key. Order it forward without activation instead.
@@ -139,7 +140,7 @@ fn publish(app: &AppHandle, status: &Value) {
         }
     });
 }
-fn position_panel(window: &tauri::WebviewWindow, anchor: Option<&Value>) {
+fn position_panel(window: &tauri::WebviewWindow, anchor: Option<&Value>, height: f64) {
     let Some(anchor) = anchor else {
         let _ = window.center();
         return;
@@ -158,10 +159,10 @@ fn position_panel(window: &tauri::WebviewWindow, anchor: Option<&Value>) {
             {
                 let panel_x = (x + 12.0)
                     .max(origin.x + 12.0)
-                    .min(origin.x + (size.width - 472.0).max(12.0));
+                    .min(origin.x + (size.width - 392.0).max(12.0));
                 let panel_y = (y + anchor["height"].as_f64().unwrap_or(0.0) + 8.0)
                     .max(origin.y + 32.0)
-                    .min(origin.y + (size.height - 510.0).max(32.0));
+                    .min(origin.y + (size.height - height - 12.0).max(32.0));
                 let _ = window.set_position(tauri::LogicalPosition::new(panel_x, panel_y));
                 return;
             }
@@ -182,6 +183,30 @@ fn receive(app: &AppHandle, mut event: Value) {
         return;
     };
     if !inner.job.current(id) {
+        return;
+    }
+    if event["phase"] == "transcript" {
+        if let Some(text) = event["text"].as_str().filter(|t| !t.trim().is_empty()) {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64;
+            let saved = history_path(app).and_then(|path| {
+                crate::transcription_history::append(
+                    &path,
+                    crate::transcription_history::Entry {
+                        id: format!("{now}-{id}"),
+                        created_at: now,
+                        text: text.to_string(),
+                        source: event["source"].as_str().unwrap_or("").to_string(),
+                    },
+                )
+            });
+            let _ = app.emit(
+                "texthalo:transcription-history",
+                json!({"error":saved.err()}),
+            );
+        }
         return;
     }
     if event["phase"] == "canceled" {
@@ -284,8 +309,11 @@ pub fn cancel(app: &AppHandle) {
         return;
     };
     let mut inner = state.inner.lock().unwrap();
+    cancel_locked(app, &mut inner);
+}
+fn cancel_locked(app: &AppHandle, inner: &mut Inner) {
     inner.job.cancel();
-    stop_assistant_speech(app, &mut inner);
+    stop_assistant_speech(app, inner);
     inner.status = json!({"phase":"idle","text":""});
     if inner.native.is_some() {
         let restore = app
@@ -294,7 +322,7 @@ pub fn cancel(app: &AppHandle) {
             .unwrap_or(false);
         let _ = send(
             app,
-            &mut inner,
+            inner,
             json!({"command":"cancel","id":0,"restore":restore}),
         );
     }
@@ -312,20 +340,47 @@ pub fn assistant_state(app: AppHandle) -> Value {
     let inner = state.inner.lock().unwrap();
     json!({"status":inner.status,"availability":inner.availability})
 }
+fn result_id(status: &Value, request_id: Option<u64>) -> Result<u64, String> {
+    let id = status["id"]
+        .as_u64()
+        .ok_or("No assistant result available")?;
+    if request_id != Some(id) {
+        return Err("This result is no longer current".into());
+    }
+    if status["phase"] != "result" {
+        return Err("Wait for the current request or cancel it first.".into());
+    }
+    Ok(id)
+}
 #[tauri::command]
 pub fn assistant_control(
     app: AppHandle,
     command: String,
     text: Option<String>,
     context: Option<String>,
+    request_id: Option<u64>,
 ) -> Result<(), String> {
-    if command == "cancel" {
-        cancel(&app);
-        return Ok(());
-    }
     let state = app.state::<AssistantState>();
     let mut inner = state.inner.lock().unwrap();
-    if matches!(command.as_str(), "status" | "permissions" | "diagnose") {
+    if command == "cancel" {
+        if request_id.is_some_and(|id| !inner.job.current(id)) {
+            return Err("This result is no longer current".into());
+        }
+        cancel_locked(&app, &mut inner);
+        return Ok(());
+    }
+    if matches!(
+        command.as_str(),
+        "status"
+            | "permissions"
+            | "diagnose"
+            | "permission_microphone"
+            | "permission_speech"
+            | "permission_screen"
+            | "settings_microphone"
+            | "settings_speech"
+            | "settings_screen"
+    ) {
         return send(&app, &mut inner, json!({"command":command,"id":0}));
     }
     if command == "ask" || command == "open" {
@@ -349,15 +404,7 @@ pub fn assistant_control(
         publish(&app, &inner.status);
         return send(&app, &mut inner, value);
     }
-    let id = inner.status["id"]
-        .as_u64()
-        .ok_or("No assistant result available")?;
-    if matches!(
-        inner.status["phase"].as_str(),
-        Some("recording" | "processing" | "capturing_screen")
-    ) {
-        return Err("Wait for the current request or cancel it first.".into());
-    }
+    let id = result_id(&inner.status, request_id)?;
     match command.as_str() {
         "speak" => {
             let text = inner.status["text"]
@@ -368,7 +415,7 @@ pub fn assistant_control(
             inner.speech_id = Some(speak_generated(&app, text));
             Ok(())
         }
-        "copy" | "insert" | "screen" => {
+        "copy" | "undo" | "screen" => {
             if command == "screen" {
                 if !matches!(context.as_deref(), Some("window" | "region")) {
                     return Err("Choose window or region capture".into());
@@ -377,10 +424,14 @@ pub fn assistant_control(
                     let _ = window.hide();
                 }
             }
+            let restore = command == "undo"
+                && app
+                    .get_webview_window("assistant")
+                    .is_some_and(|w| w.is_focused().unwrap_or(false));
             send(
                 &app,
                 &mut inner,
-                json!({"command":command,"id":id,"restore":command == "insert","context":context}),
+                json!({"command":command,"id":id,"restore":restore,"context":context}),
             )
         }
         _ => Err("Unknown assistant action".into()),
@@ -390,6 +441,15 @@ pub fn assistant_control(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn stale_or_busy_results_cannot_be_undone_or_copied() {
+        let ready = json!({"id":7,"phase":"result"});
+        assert_eq!(result_id(&ready, Some(7)).unwrap(), 7);
+        assert!(result_id(&ready, Some(6)).is_err());
+        assert!(result_id(&ready, None).is_err());
+        assert!(result_id(&json!({"id":7,"phase":"processing"}), Some(7)).is_err());
+        assert!(result_id(&json!({"id":7,"phase":"idle"}), Some(7)).is_err());
+    }
     // Losing narration ownership would allow a canceled assistant result to play later.
     #[test]
     fn cancel_invalidates_owned_speech_but_not_newer_selection_speech() {
@@ -405,4 +465,31 @@ mod tests {
         assert!(!cancel_speech_lease(&mut ownership, &mut speech));
         assert!(speech.is_current(newer));
     }
+}
+
+fn history_path(app: &AppHandle) -> Result<std::path::PathBuf, String> {
+    app.path()
+        .app_data_dir()
+        .map(|p| p.join("transcription-history.json"))
+        .map_err(|e| e.to_string())
+}
+#[tauri::command]
+pub fn transcription_history(
+    app: AppHandle,
+    command: String,
+    id: Option<String>,
+) -> Result<Vec<crate::transcription_history::Entry>, String> {
+    let state = app.state::<AssistantState>();
+    let _guard = state.inner.lock().unwrap();
+    let path = history_path(&app)?;
+    match command.as_str() {
+        "list" => (),
+        "delete" => crate::transcription_history::delete(
+            &path,
+            Some(id.as_deref().ok_or("Missing transcript ID")?),
+        )?,
+        "clear" => crate::transcription_history::delete(&path, None)?,
+        _ => return Err("Unknown history action".into()),
+    }
+    crate::transcription_history::list(&path)
 }
