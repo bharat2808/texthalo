@@ -105,28 +105,26 @@ fn tick(app: &AppHandle) {
     let mut job = state.job.lock().unwrap();
     let playing = state.spoken.is_speaking();
     let changed = job.observe_playback(playing);
-    let expired_error =
-        matches!(job.status.phase, Phase::Error) && job.changed.elapsed() > Duration::from_secs(5);
-    if expired_error {
-        job.set(Phase::Idle, None, None);
-    }
-    if changed || expired_error {
+    if changed {
         let _ = app.emit("kiegen:status", &job.status);
     }
+    let error = matches!(job.status.phase, Phase::Error);
     let visible = !matches!(job.status.phase, Phase::Idle);
     drop(job);
     let Some(window) = app.get_webview_window("speech-overlay") else {
         return;
     };
-    if visible && !window.is_visible().unwrap_or(false) {
-        position(&window);
+    if visible {
+        position(&window, error);
         let _ = window.show();
     } else if !visible && window.is_visible().unwrap_or(false) {
         let _ = window.hide();
     }
 }
 
-fn position(window: &tauri::WebviewWindow) {
+fn position(window: &tauri::WebviewWindow, error: bool) {
+    let width = if error { 430.0 } else { 270.0 };
+    let height = if error { 190.0 } else { 44.0 };
     // AppKit coordinates are logical points with the origin at the bottom left.
     // Stay below the menu bar/notch so the label and Stop remain visible on every Mac.
     #[cfg(target_os = "macos")]
@@ -152,10 +150,10 @@ fn position(window: &tauri::WebviewWindow) {
             native.setFrame_display(
                 NSRect::new(
                     NSPoint::new(
-                        frame.origin.x + (frame.size.width - 270.0) / 2.0,
-                        frame.origin.y + frame.size.height - 50.0,
+                        frame.origin.x + (frame.size.width - width) / 2.0,
+                        frame.origin.y + frame.size.height - height - 6.0,
                     ),
-                    NSSize::new(270.0, 44.0),
+                    NSSize::new(width, height),
                 ),
                 true,
             );

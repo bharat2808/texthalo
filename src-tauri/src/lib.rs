@@ -905,6 +905,36 @@ fn install_espeak_ng(app: AppHandle) {
 }
 
 #[tauri::command]
+fn speech_error_recovery(app: AppHandle, action: String) -> Result<(), String> {
+    match action.as_str() {
+        "local" => {
+            let state = app.state::<AppState>();
+            let mut current = state.settings.lock().unwrap();
+            let mut next = current.clone();
+            next.engine = config::Engine::Apple;
+            config::save(&app, &next)?;
+            *current = next;
+            drop(current);
+            stop_speaking(app.clone());
+            show_settings(&app);
+            let _ = app.emit("texthalo:speech-recovery", "voice");
+        }
+        "account" | "billing" | "voice" => {
+            show_settings(&app);
+            let tab = if action == "billing" {
+                "account"
+            } else {
+                action.as_str()
+            };
+            let _ = app.emit("texthalo:speech-recovery", tab);
+            stop_speaking(app.clone());
+        }
+        _ => return Err("Unknown speech recovery action.".into()),
+    }
+    Ok(())
+}
+
+#[tauri::command]
 fn open_settings_window(app: AppHandle) {
     show_settings(&app);
 }
@@ -1156,6 +1186,7 @@ pub fn run() {
             add_chatterbox_voice,
             delete_chatterbox_voice,
             open_settings_window,
+            speech_error_recovery,
             open_accessibility_settings,
             request_accessibility,
             permission_status,

@@ -944,6 +944,10 @@ function MainApp() {
       setEspeakInstalling(installing);
       if (!installing) void refresh();
     });
+    const recovery = listen<"account" | "voice">("texthalo:speech-recovery", (event) => {
+      setTab(event.payload);
+      void refresh();
+    });
     const setupWizard = listen("texthalo:open-setup", () => {
       setSetupOpen(true);
       setSetupRevision((revision) => revision + 1);
@@ -956,6 +960,7 @@ function MainApp() {
       void uninstall.then((off) => off());
       void unespeak.then((off) => off());
       void setupWizard.then((off) => off());
+      void recovery.then((off) => off());
       window.clearInterval(poll);
     };
   }, [refresh]);

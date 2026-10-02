@@ -12,3 +12,16 @@ html:has(.overlay-root), body:has(.overlay-root), #root:has(.overlay-root) { mar
 @keyframes bars { from { transform: scaleY(.3); } to { transform: scaleY(1); } }
 @keyframes appear { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: translateY(0); } }
 @media (prefers-reduced-motion: reduce) { .speech-overlay, .activity i { animation: none; } }
+
+.error-panel { height: 190px; flex-direction: column; align-items: stretch; gap: 10px; padding: 14px 16px; }
+.error-heading { display: flex; align-items: center; gap: 8px; }
+.error-heading strong { flex: 1; font-size: 13px; }
+.error-panel .dismiss { background: #ffffff18; color: white; font-size: 20px; }
+.error-reason { margin: 0; line-height: 1.5; overflow: auto; flex: 1; user-select: text; }
+.recovery-error { margin: 0; color: #ff9690; max-height: 36px; overflow: auto; }
+.recovery-actions { display: flex; gap: 8px; }
+.recovery-actions button { display: block; width: auto; height: 30px; padding: 0 12px; border-radius: 7px; background: white; color: #111; font: inherit; font-weight: 600; }
+.recovery-actions button:hover { background: #dedede; }
+.recovery-actions .secondary { background: #ffffff18; color: white; }
+.recovery-actions .secondary:hover { background: #ffffff30; }
+.recovery-actions button:disabled { opacity: .5; cursor: wait; }
