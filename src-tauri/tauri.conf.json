@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "TextHalo settings",
+        "title": "TextHalo",
         "width": 780,
         "height": 640,
         "minWidth": 680,

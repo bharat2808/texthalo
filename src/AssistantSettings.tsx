@@ -31,9 +31,9 @@ export function PermissionsSettings() {
   const label = (status?: number) => status === 3 ? "Allowed" : status === 2 ? "Denied" : status === 1 ? "Restricted" : status === 0 ? "Not requested" : "Checking…";
   return <div>
     {([
-      {name:"Microphone",key:"microphone",status:a.microphone,description:"Records while you hold Transcription or Assistant."},
+      {name:"Microphone",key:"microphone",status:a.microphone,description:"Records while you hold Dictate or Assistant."},
       {name:"Speech Recognition",key:"speech",status:a.recognition === 1 ? 2 : a.recognition === 2 ? 1 : a.recognition,description:"Converts your voice into text on this Mac."},
-      {name:"Screen Recording",key:"screen",status:a.screen === undefined ? undefined : a.screen ? 3 : 0,description:"Reads visible text from the original window when Assistant screen context is enabled. Uses local OCR."},
+      {name:"Screen Recording",key:"screen",status:a.screen === undefined ? undefined : a.screen ? 3 : 0,description:"Lets Assistant use text from your screen when you choose window context."},
     ]).map(p => <section className="permission-row" key={p.key}>
       <strong>{p.name}</strong><div className="card-note">{p.description}</div><p>{label(p.status)}</p>
       <div className="inline">
@@ -53,32 +53,47 @@ export default function AssistantSettings({ value, onChange }: Props) {
   return <div className="assistant-settings">
     <div className="field"><label className="field-label" htmlFor="assistant-instruction">Assistant instructions</label>
       <textarea id="assistant-instruction" rows={7} maxLength={2000} value={instruction} onChange={event => { draft.current = event.target.value; setInstruction(event.target.value); }} onBlur={() => { if (draft.current !== value.instruction) onChange({ ...value, instruction: draft.current }); }} placeholder="Use a warm tone. Keep writing concise. When I ask for a voiceover, write a script ready to read aloud." />
-      <p className="card-note">Applied with each spoken request. Written output inserts or replaces directly, with Undo. Requests to read aloud use your selected voice.</p>
+      <p className="card-note">Your preferences for every request. You can undo text edits.</p>
     </div>
     <div className="field"><label className="field-label" htmlFor="assistant-context">Assistant context</label>
       <select id="assistant-context" value={value.context} onChange={event => onChange({ ...value, instruction: draft.current, context: event.target.value })}>
         <option value="selection">Selected text</option><option value="screen">Selected text and original window</option><option value="none">Only my spoken request</option>
-      </select><p className="card-note">Window context extracts visible text locally when you invoke Assistant. It does not interpret images or diagrams.</p>
+      </select><p className="card-note">Window context reads visible text on your Mac, not images.</p>
     </div>
-    <p className="card-note" role="status">Apple model: {availability.model ?? "Checking…"}</p>
+    <p className="card-note" role="status">Apple Intelligence: {availability.model ?? "Checking…"}</p>
     {error && <p role="alert">{error}</p>}
   </div>;
 }
 export function TranscriptionSettings({value,onChange}: Props) {
   const {availability,error,command} = useAvailability();
   return <div className="assistant-settings">
-    <div className="field"><label className="field-label" htmlFor="recognition-language">Transcription language</label>
+    <div className="field"><label className="field-label" htmlFor="recognition-language">Language</label>
       <select id="recognition-language" value={value.language} onChange={event => onChange({...value,language:event.target.value})}>
         {[["en-US","English (US)"],["en-CA","English (Canada)"],["en-GB","English (UK)"],["fr-FR","French"],["de-DE","German"],["es-ES","Spanish"],["it-IT","Italian"],["pt-BR","Portuguese"],["ja-JP","Japanese"],["zh-CN","Chinese"],["hi-IN","Hindi"]].map(([code,label]) => <option key={code} value={code}>{label}</option>)}
-      </select><p className="card-note">Also used for spoken Assistant requests. Requires an available on-device recognizer for the chosen language.</p>
+      </select><p className="card-note">Also used by Assistant. Availability depends on your Mac.</p>
     </div>
-    <div className="field"><label className="field-label" htmlFor="dictation-output">Transcription result</label>
+    <div className="field"><label className="field-label" htmlFor="dictation-output">When I finish speaking</label>
       <select id="dictation-output" value={value.dictation_output} onChange={event => onChange({...value,dictation_output:event.target.value})}>
-        <option value="insert">Insert or replace directly, with Undo</option><option value="copy">Copy to clipboard</option>
+        <option value="insert">Insert into the current app</option><option value="copy">Copy to clipboard</option>
       </select>
     </div>
-    <button className="plain" onClick={() => void command("diagnose")}>Test local transcription</button>
-    <p className="card-note">Uses generated test audio; does not record your microphone.</p>
+    <button className="plain" onClick={() => void command("diagnose")}>Check dictation</button>
+    <p className="card-note">Checks speech recognition without recording you.</p>
     {availability.diagnostic && <p role="status">{availability.diagnostic}</p>}{error && <p role="alert">{error}</p>}
+  </div>;
+}
+
+export function TaskReadiness({ mode, needsScreen = false, onPermissions }: {
+  mode: "dictate" | "assistant" | "overview";
+  needsScreen?: boolean;
+  onPermissions: () => void;
+}) {
+  const { availability, error } = useAvailability();
+  const checking = availability.microphone === undefined || availability.recognition === undefined;
+  const needsAccess = !checking && (availability.microphone !== 3 || availability.recognition !== 3 || availability.accessibility === false || (needsScreen && availability.screen !== true));
+  const modelUnavailable = mode !== "dictate" && availability.model !== undefined && availability.model !== "available";
+  return <div className="readiness" role="status">
+    {error ? <p>{error}</p> : checking ? <p>Checking voice access…</p> : needsAccess ? <div className="home-notice"><span>Enable access to use {mode === "dictate" ? "dictation" : mode === "assistant" ? "Assistant" : "dictation and Assistant"}.</span><button className="plain" onClick={onPermissions}>Enable access</button></div> : mode !== "overview" ? <p>Voice access is ready.</p> : null}
+    {modelUnavailable ? <div>Assistant needs Apple Intelligence enabled on a supported Mac.<details><summary>Details</summary>{availability.model}</details></div> : null}
   </div>;
 }

@@ -34,7 +34,7 @@
 
 .setup-wizard-progress {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(3, 1fr);
   gap: 12px;
   margin: 16px auto 0;
   width: min(100%, 540px);
@@ -73,6 +73,8 @@
 .setup-wizard-content {
   width: min(100%, 540px);
   flex: 1;
+  min-height: 0;
+  overflow-y: auto;
   align-self: center;
   display: flex;
   flex-direction: column;

@@ -1,5 +1,5 @@
 import TranscriptionHistory from "./TranscriptionHistory";
-import AssistantSettings, { PermissionsSettings, TranscriptionSettings, defaultAssistantPreferences, type AssistantPreferences } from "./AssistantSettings";
+import AssistantSettings, { PermissionsSettings, TranscriptionSettings, TaskReadiness, defaultAssistantPreferences, type AssistantPreferences } from "./AssistantSettings";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
@@ -157,7 +157,7 @@ type UiState = {
 type Phase = "idle" | "capturing" | "preparing" | "speaking" | "error";
 type Status = { phase: Phase; message?: string | null; chars?: number | null };
 
-type Tab = "general" | "voice" | "account" | "shortcuts" | "capture" | "history" | "permissions" | "transcription" | "assistant";
+type Tab = "home" | "general" | "voice" | "account" | "shortcuts" | "capture" | "history" | "permissions" | "transcription" | "assistant";
 
 /* ── icons (16×16, currentColor) ───────────────────────────────────── */
 
@@ -597,6 +597,7 @@ function Note({
 function MainApp() {
   const [state, setState] = useState<UiState | null>(null);
   const [appVersion, setAppVersion] = useState<string | null>(null);
+  const [historyView, setHistoryView] = useState<"audio" | "transcripts">("audio");
   const [setupOpen, setSetupOpen] = useState(false);
   const [setupRevision, setSetupRevision] = useState(0);
   const accessibilityPromptStarted = useRef(false);
@@ -604,7 +605,7 @@ function MainApp() {
   // than timed out, because the message is the only answer the user gets.
   const [espeakMessage, setEspeakMessage] = useState<string | null>(null);
   const [espeakInstalling, setEspeakInstalling] = useState(false);
-  const [tab, setTab] = useState<Tab>("general");
+  const [tab, setTab] = useState<Tab>("home");
   const [status, setStatus] = useState<Status>({ phase: "idle" });
   const [error, setError] = useState<string | null>(null);
   const [updateAvailable, setUpdateAvailable] = useState<Update | null>(null);
@@ -975,10 +976,11 @@ function MainApp() {
   const save = useCallback(
     async (patch: Partial<Settings>) => {
       const current = latestState.current;
-      if (!current) return;
+      if (!current) return false;
       const next: Settings = { ...current.settings, ...patch };
       latestState.current = { ...current, settings: next };
-      setState({ ...current, settings: next }); // optimistic: a click must not lag
+      // Finishing setup waits for persistence before replacing the wizard.
+      if (!patch.onboarding_completed) setState({ ...current, settings: next });
       const revision = ++saveRevision.current;
       pendingSaves.current++;
       const request = saveTail.current.then(() => invoke<UiState>("save_settings", { settings: next }));
@@ -990,8 +992,11 @@ function MainApp() {
           setState(updated);
           setError(null);
         }
+        return true;
       } catch (e) {
         setError(String(e));
+        if (revision === saveRevision.current) latestState.current = current;
+        return false;
       } finally {
         pendingSaves.current--;
         if (pendingSaves.current === 0) void refresh();
@@ -1038,7 +1043,7 @@ function MainApp() {
       }).catch((cause) => setAccountError(cause instanceof Error ? cause.message : String(cause)));
     }
     let current = true;
-    const shouldLoadClones = account && (tab === "account" || (tab === "voice" && state?.settings.engine === "fish"));
+    const shouldLoadClones = account && tab === "voice";
     if (shouldLoadClones) void invoke<{items: HostedClone[]}>("desktop_clones").then((v) => {
       if (!current) return;
       setHostedClones(v.items);
@@ -1228,29 +1233,19 @@ function MainApp() {
   );
 
   if (setupOpen || !settings.onboarding_completed) {
-    const kokoroEngine = engines.find((engine) => engine.id === "kokoro");
     return <SetupWizard
       key={setupRevision}
       settings={settings}
       voices={voices}
       trusted={state.trusted}
       recordingShortcut={recording === "speak"}
-      kokoroReady={kokoroEngine?.can_speak ?? false}
-      kokoroDownloadBytes={kokoroEngine?.download_bytes ?? 346_258_435}
-      kokoroInstall={install?.engine === "kokoro" ? install : null}
-      onSave={save}
+      onSave={async (patch) => { if (!await save(patch)) throw new Error("Could not save your preferences. Please try again."); }}
+      externalError={error}
       onRequestAccessibility={() => { void requestAccessibility(); }}
-      onOpenAccessibilitySettings={() => { void invoke("open_accessibility_settings"); }}
-      onPreviewVoice={(voice) => preview(voice)}
-      onChooseEngine={(engine) => { void save({ engine }); }}
-      onInstallKokoro={() => {
-        setInstall(null);
-        void invoke("install_engine", { engine: "kokoro" }).catch((cause) => setError(String(cause)));
-      }}
+      onOpenAccessibilitySettings={() => { void invoke("open_accessibility_settings").catch(cause => setError(String(cause))); }}
+      onPreviewVoice={(voice) => invoke("preview_voice", { engine: "apple", voice, rate: settings.rate, text: null })}
       onRecordShortcut={() => setRecording("speak")}
-      onFinish={() => setSetupOpen(false)}
-      onLoadPlans={() => invoke<SetupPlansResponse>("desktop_billing_plans")}
-      onOpenPlans={() => { void openUrl(`${websiteUrl}/pricing/`); }}
+      onFinish={() => { setSetupOpen(false); setTab("home"); }}
     />;
   }
 
@@ -1425,18 +1420,21 @@ function MainApp() {
               kind: "info" as const,
               text: status.chars ? `Speaking ${status.chars} characters` : "Speaking…",
             }
-          : { kind: "secondary" as const, text: "Idle" };
+          : { kind: "secondary" as const, text: "Ready" };
 
+  const settingsTabs: { id: Tab; title: string }[] = [
+    { id: "general", title: "General" },
+    { id: "shortcuts", title: "Shortcuts" },
+    { id: "permissions", title: "Permissions" },
+    { id: "capture", title: "Text capture" },
+  ];
+  const inSettings = settingsTabs.some((entry) => entry.id === tab);
   const tabs: { id: Tab; title: string; icon: React.ReactNode }[] = [
-    { id: "general", title: "General", icon: Icon.gear() },
-    { id: "voice", title: "Voice", icon: Icon.speaker() },
-    { id: "account", title: "Account", icon: Icon.gear() },
-    { id: "shortcuts", title: "Shortcuts", icon: Icon.command() },
-    { id: "capture", title: "Capture", icon: Icon.textCursor() },
-    { id: "history", title: "History", icon: Icon.history() },
-    { id: "transcription", title: "Transcription", icon: Icon.textCursor() },
+    { id: "home", title: "Home", icon: Icon.box() },
+    { id: "voice", title: "Voices", icon: Icon.speaker() },
+    { id: "transcription", title: "Dictate", icon: Icon.textCursor() },
     { id: "assistant", title: "Assistant", icon: Icon.textCursor() },
-    { id: "permissions", title: "Permissions", icon: Icon.gear() },
+    { id: "history", title: "History", icon: Icon.history() },
   ];
 
   const paidAccountPlans = accountPlans?.filter((plan) => plan.id !== "free") ?? [];
@@ -1505,11 +1503,13 @@ function MainApp() {
 
   return (
     <div className="settings">
-      <div className="sidebar">
+      <nav className="sidebar" aria-label="Main">
+        <div className="sidebar-brand"><img src={appLogo} alt="" /><strong>TextHalo</strong></div>
         {tabs.map((entry) => (
           <button
             key={entry.id}
             className={tab === entry.id ? "sidebar-row active" : "sidebar-row"}
+            aria-current={tab === entry.id ? "page" : undefined}
             onClick={() => setTab(entry.id)}
           >
             {entry.icon}
@@ -1517,6 +1517,8 @@ function MainApp() {
           </button>
         ))}
         <div className="sidebar-spacer" />
+        <button className={`sidebar-row${tab === "account" ? " active" : ""}`} aria-current={tab === "account" ? "page" : undefined} onClick={() => setTab("account")}>{Icon.gear()} Account</button>
+        <button className={`sidebar-row${inSettings ? " active" : ""}`} aria-current={inSettings ? "page" : undefined} onClick={() => setTab("general")}>{Icon.gear()} Settings</button>
         {error ? (
           <Note kind="error" icon={Icon.xCircle()}>
             <span className="truncate" title={error}>
@@ -1527,18 +1529,35 @@ function MainApp() {
         <Note kind={statusLine.kind} icon={Icon.info()}>
           <span className="truncate">{statusLine.text}</span>
         </Note>
-      </div>
+      </nav>
       <div className="vertical-rule" />
 
-      <div className="pane">
+      <main className="pane">
+        {inSettings ? <nav className="section-nav" aria-label="Settings">{settingsTabs.map((entry) => <button key={entry.id} className={tab === entry.id ? "active" : ""} aria-current={tab === entry.id ? "page" : undefined} onClick={() => setTab(entry.id)}>{entry.title}</button>)}</nav> : null}
+        {tab === "home" ? <div className="pane-inner home-pane">
+          <header><h1 className="pane-title">Home</h1><p className="home-intro">Listen. Dictate. Get a little help.</p></header>
+          <section className="listen-hero" aria-labelledby="listen-title">
+            <div className="home-eyebrow">LISTEN</div>
+            <h2 id="listen-title">Turn text into speech.</h2>
+            <p>Select text in any app, then press <kbd>{settings.shortcuts.speak || "Set a shortcut"}</kbd>.</p>
+            <div className="home-voice"><span>{activeEngine?.label ?? "Apple voices"}</span><span>{settings.engine === "fish" ? "Hosted" : "On this Mac"}</span></div>
+            {!state.trusted ? <div className="home-notice"><span>Allow Accessibility to read selected text.</span><button className="plain" onClick={() => setTab("permissions")}>Enable access</button></div>
+              : activeEngine && !activeEngine.can_speak ? <div className="home-notice"><span>{activeEngine.status}</span><button className="plain" onClick={() => setTab("voice")}>Set up voice</button></div>
+              : !settings.shortcuts.speak || state.refused_shortcuts.includes(settings.shortcuts.speak) ? <div className="home-notice"><span>Choose an available listening shortcut.</span><button className="plain" onClick={() => setTab("shortcuts")}>Set shortcut</button></div>
+              : <p className="ready-label">{state.secure_input ? "Leave the password field to start listening." : "Ready when you are"}</p>}
+            <div className="inline"><button className="primary-button" onClick={() => setTab("voice")}>Choose a voice</button><button className="plain" disabled={!activeEngine?.can_speak || state.speaking} onClick={() => preview(settings.engine === "apple" ? settings.voice : activeEngine?.selected_voice ?? null)}>Preview voice</button>{state.speaking ? <button className="plain" onClick={() => void invoke("stop_speaking").catch(cause => setError(String(cause)))}>Stop</button> : null}</div>
+          </section>
+          <div className="home-tasks">
+            <section className="task-card"><h2>Dictate</h2><p>Speak and put your words into any text field.</p><kbd>{settings.shortcuts.transcribe || "Set up a shortcut"}</kbd><button className="plain" onClick={() => setTab("transcription")}>Set up dictation</button></section>
+            <section className="task-card"><h2>Assistant</h2><p>Ask to write, edit, or read something aloud.</p><kbd>{settings.shortcuts.assistant || "Set up a shortcut"}</kbd><button className="plain" onClick={() => setTab("assistant")}>Set up Assistant</button></section>
+          </div>
+          <TaskReadiness mode="overview" onPermissions={() => setTab("permissions")} />
+          <button className="text home-history" onClick={() => setTab("history")}>Open your history</button>
+        </div> : null}
+
         {tab === "general" ? (
           <div className="pane-inner">
             <h1 className="pane-title">General</h1>
-            <p className="pane-subtitle">
-              Select text anywhere, press <span className="mono">{settings.shortcuts.speak}</span>{" "}
-              and it is read aloud. {settings.engine === "fish" ? "Selected text is sent to TextHalo and Fish Audio for hosted speech." : "Local engines process text on this Mac."}
-            </p>
-
             <Card title="Startup" icon={Icon.gear()}>
               <label className="startup-option">
                 <span className="startup-option-copy">
@@ -1553,21 +1572,46 @@ function MainApp() {
               </label>
             </Card>
 
-            <Card title="Try it" icon={Icon.play()}>
-              <div className="inline">
-                <button className="plain" onClick={() => void invoke("speak_selection_now")}>
-                  Speak the current selection
-                </button>
-                <button className="plain" onClick={() => void invoke("stop_speaking")}>
-                  Stop
-                </button>
-              </div>
-              <div className="card-note">
-                Select text in another app first, then press the button — same path the
-                global shortcut takes.
-              </div>
-            </Card>
-
+            <details className="disclosure"><summary>Advanced voice settings</summary>
+              <p className="card-note">Keeping a voice ready uses more memory.</p>
+                <div className="field">
+                  <span className="field-label">Kokoro model size</span>
+                  <select
+                    value={settings.kokoro.quant}
+                    onChange={(event) =>
+                      void save({ kokoro: { ...settings.kokoro, quant: event.target.value } })
+                    }
+                  >
+                    <option value="fp32">fp32 — 325 MB</option>
+                    <option value="fp16">fp16 — 163 MB</option>
+                    <option value="q8f16">q8f16 — 86 MB, about half the speed</option>
+                  </select>
+                </div>
+                <label className="toggle-row">
+                  <input
+                    type="checkbox"
+                    checked={settings.kokoro.keep_warm}
+                    onChange={(event) =>
+                      void save({
+                        kokoro: { ...settings.kokoro, keep_warm: event.target.checked },
+                      })
+                    }
+                  />
+                  <span>Keep Kokoro ready in memory</span>
+                </label>
+                <label className="toggle-row">
+                  <input
+                    type="checkbox"
+                    checked={settings.chatterbox.keep_warm}
+                    onChange={(event) =>
+                      void save({
+                        chatterbox: { ...settings.chatterbox, keep_warm: event.target.checked },
+                      })
+                    }
+                  />
+                  <span>Keep Chatterbox ready in memory</span>
+                </label>
+            </details>
             <Card title="About" icon={Icon.box()}>
               <div className="card-note">Version {appVersion ?? "…"} · Apache-2.0</div>
               <div className="inline">
@@ -1581,10 +1625,11 @@ function MainApp() {
                 ) : null}
               </div>
               {updateMessage ? <div className="card-note" role="status">{updateMessage}</div> : null}
+              <details className="disclosure"><summary>Advanced</summary>
               <div className="field">
                 <span className="field-label">Settings file</span>
                 <div className="mono-block">{state.config_path}</div>
-              </div>
+              </div></details>
             </Card>
           </div>
         ) : null}
@@ -1593,9 +1638,9 @@ function MainApp() {
           <div className="pane-inner">
             <div className="history-heading">
               <div>
-                <h1 className="pane-title">Voice</h1>
+                <h1 className="pane-title">Voices</h1>
                 <p className="pane-subtitle">
-                  Which engine speaks, and which of its voices it uses.
+                  Find a voice you enjoy listening to.
                 </p>
               </div>
               {!account ? (
@@ -1604,7 +1649,7 @@ function MainApp() {
                 </button>
               ) : null}
             </div>
-            <Card title="Engine" icon={Icon.speaker()}>
+            <Card title="Voice source" icon={Icon.speaker()}>
               <div className="row-stack">
                 {engines.map((engine) => (
                   <Row
@@ -1612,7 +1657,7 @@ function MainApp() {
                     selected={settings.engine === engine.id}
                     glyph={settings.engine === engine.id ? Icon.checkCircle() : Icon.circle()}
                     title={engine.label}
-                    subtitle={engine.summary}
+                    subtitle={engine.id === "fish" ? "Hosted · uses credits" : engine.id === "apple" ? "On this Mac · no download" : "On this Mac · free"}
                     badge={
                       engine.can_speak
                         ? "Ready"
@@ -1633,7 +1678,7 @@ function MainApp() {
 
               {activeEngine?.needs_download ? (
                 <div className="field">
-                  <span className="field-label">Weights</span>
+                  <span className="field-label">Voice download</span>
                   {installing && installForEngine ? (
                     <>
                       <div className="progress">
@@ -1714,7 +1759,7 @@ function MainApp() {
                 <Card title="Custom voice cloning" icon={Icon.speaker()}>
                   <p className="card-note">Plus includes two saved clones, Creator includes up to five, and a first top-up starts a seven-day trial with two clones.</p>
                   {!account ? <Note kind="info" icon={Icon.info()}>Sign in to see your clone access and create a custom voice.</Note> : (account.cloneEntitlement?.limit ?? 0) > 0 ? <Note kind="info" icon={Icon.info()}>{account.cloneEntitlement?.source === "topup_trial" && account.cloneEntitlement.expiresAt ? `Your top-up trial includes ${account.cloneEntitlement.limit} voice clones through ${new Date(account.cloneEntitlement.expiresAt).toLocaleDateString()}.` : `Your current plan includes up to ${account.cloneEntitlement?.limit ?? 0} voice clones.`}</Note> : <Note kind="secondary" icon={Icon.info()}>Voice cloning is available with Plus, Creator, or the seven-day trial after your first top-up. Visit Account to review plans.</Note>}
-                  <button className="plain" onClick={() => setTab("account")}>{!account ? "Sign in to create a clone" : (account.cloneEntitlement?.limit ?? 0) > 0 ? "Manage voice clones" : "View plans"}</button>
+                  <button className="plain" onClick={() => { if (account && (account.cloneEntitlement?.limit ?? 0) > 0) { const panel = document.getElementById("your-voices") as HTMLDetailsElement | null; if (panel) { panel.open = true; panel.scrollIntoView({ behavior: "smooth", block: "start" }); } } else setTab("account"); }}>{!account ? "Sign in to create a voice" : (account.cloneEntitlement?.limit ?? 0) > 0 ? "Manage voice clones" : "View plans"}</button>
                 </Card>
                 <Card title="Privacy for hosted speech" icon={Icon.info()}>
                   <p className="card-note">When you use hosted speech, selected text is sent to TextHalo’s service and the speech provider to generate audio. Optional text enhancement processes the text through an additional service. Local Apple, Kokoro, and Chatterbox engines process speech on your Mac.</p>
@@ -2027,20 +2072,8 @@ function MainApp() {
             ) : null}
 
             {settings.engine === "kokoro" ? (
-              <Card title="Kokoro settings" icon={Icon.gauge()}>
-                <div className="field">
-                  <span className="field-label">Model precision</span>
-                  <select
-                    value={settings.kokoro.quant}
-                    onChange={(event) =>
-                      void save({ kokoro: { ...settings.kokoro, quant: event.target.value } })
-                    }
-                  >
-                    <option value="fp32">fp32 — 325 MB</option>
-                    <option value="fp16">fp16 — 163 MB</option>
-                    <option value="q8f16">q8f16 — 86 MB, about half the speed</option>
-                  </select>
-                </div>
+              <Card title="Speed" icon={Icon.gauge()}>
+
 
                 <div className="field">
                   <span className="field-label">Speed</span>
@@ -2061,23 +2094,12 @@ function MainApp() {
                   </div>
                 </div>
 
-                <label className="toggle-row">
-                  <input
-                    type="checkbox"
-                    checked={settings.kokoro.keep_warm}
-                    onChange={(event) =>
-                      void save({
-                        kokoro: { ...settings.kokoro, keep_warm: event.target.checked },
-                      })
-                    }
-                  />
-                  <span>Keep the model loaded</span>
-                </label>
+
               </Card>
             ) : null}
 
             {settings.engine === "chatterbox" ? (
-              <Card title="Chatterbox settings" icon={Icon.gauge()}>
+              <Card title="Language" icon={Icon.gauge()}>
                 <div className="field">
                   <span className="field-label">Language</span>
                   <select
@@ -2096,27 +2118,47 @@ function MainApp() {
                   </select>
                 </div>
 
-                <label className="toggle-row">
-                  <input
-                    type="checkbox"
-                    checked={settings.chatterbox.keep_warm}
-                    onChange={(event) =>
-                      void save({
-                        chatterbox: { ...settings.chatterbox, keep_warm: event.target.checked },
-                      })
-                    }
-                  />
-                  <span>Keep the model loaded</span>
-                </label>
+
               </Card>
             ) : null}
+            <details className="disclosure" id="your-voices">
+              <summary>Your voices</summary>
+              {accountError ? <Note kind="error" icon={Icon.xCircle()}>{accountError}</Note> : null}
+                {account && ((account.cloneEntitlement?.limit ?? 0) > 0 || hostedClones.length > 0) ? <section className="clone-panel">
+                  <header className="clone-header">
+                    <div className="clone-heading"><span className="clone-heading-icon">{Icon.speaker()}</span><div><h2>Your voices</h2><p>Create a personal voice from a recording you own or have permission to use.</p></div></div>
+                    <span className="clone-count">{hostedClones.length} saved{(account.cloneEntitlement?.limit ?? 0) > 0 ? ` · ${hostedClones.filter((clone) => clone.access !== "disabled" && clone.status !== "failed").length} of ${account.cloneEntitlement?.limit ?? 0} active` : " · access ended"}{account.cloneEntitlement?.source === "topup_trial" && account.cloneEntitlement.expiresAt ? ` · trial ends ${new Date(account.cloneEntitlement.expiresAt).toLocaleDateString()}` : ""}</span>
+                  </header>
+                  {hostedClones.length ? <div className="clone-list" aria-label="Saved voices">{hostedClones.map((clone) => <div className="clone-item" key={clone.id}>
+                    <span className="clone-avatar">{clone.name.trim().slice(0, 1).toUpperCase()}</span><div className="clone-item-copy"><strong>{clone.name}</strong><span className={`clone-status clone-status-${clone.status}`}>{clone.access === "disabled" ? "Stored · inactive slot" : clone.status === "trained" ? "Ready to use" : clone.status === "failed" ? "Couldn’t train" : "Training"}</span></div>
+                    {clone.status !== "failed" && (account.cloneEntitlement?.limit ?? 0) > 0 ? <button className="clone-delete" onClick={() => void setHostedCloneActive(clone.id, clone.access === "disabled")}>{clone.access === "disabled" ? "Activate" : "Deactivate"}</button> : null}
+                    <button className="clone-delete" aria-label={`Delete ${clone.name}`} onClick={() => void deleteHostedClone(clone.id)}>Delete</button>
+                  </div>)}</div> : <div className="clone-empty"><span className="clone-empty-mark">{Icon.speaker()}</span><strong>No hosted voices yet</strong><span>Your new voice will appear here when it’s ready.</span></div>}
+                  {(account.cloneEntitlement?.limit ?? 0) > 0 ? <div className="clone-create">
+                    <div className="clone-create-title"><span className="clone-step">NEW</span><div><h3>Create a voice</h3><p>Your recording stays on this device until you choose to upload.</p></div></div>
+                    <div className="clone-fields">
+                      <div className="field clone-name-field"><label className="field-label" htmlFor="hosted-clone-name">Voice name <span>Required</span></label><input id="hosted-clone-name" value={cloneName} placeholder="e.g. Warm narration" maxLength={100} required aria-describedby="hosted-clone-name-hint" onChange={(event) => setCloneName(event.target.value)} /><span id="hosted-clone-name-hint" className="field-hint">Up to 100 characters</span></div>
+                      <div className="field"><span className="field-label">Recording <span>Required</span></span><button className={`clone-file-button${clonePath ? " has-file" : ""}`} disabled={accountBusy} onClick={() => void pickCloneAudio()}><span className="clone-file-icon">{Icon.speaker()}</span><span className="clone-file-copy"><strong>{clonePath ? clonePath.split(/[\\/]/).pop() : "Choose an audio file"}</strong><span>{clonePath ? "Selected locally · not uploaded" : "WAV, MP3, M4A, OGG or FLAC · up to 25 MB"}</span></span><span className="clone-file-action">{clonePath ? "Change" : "Browse"}</span></button></div>
+                    </div>
+                    <label className="clone-consent"><input type="checkbox" checked={cloneConsent} onChange={(event) => setCloneConsent(event.target.checked)} /><span>I own this voice or have permission to clone it. I understand the recording will be uploaded to Fish Audio and saved to my account.</span></label>
+                    <div className="clone-submit-row"><div className="clone-feedback" role="status">{!cloneName.trim() ? "Add a name to continue" : !clonePath ? "Choose a recording to continue" : !cloneConsent ? "Confirm permission to continue" : "Everything’s ready to upload"}</div><button className="clone-submit" disabled={accountBusy || !cloneName.trim() || !clonePath || !cloneConsent} onClick={() => void uploadClone()}>{accountBusy ? "Creating voice…" : "Upload and create voice"}<span aria-hidden="true">→</span></button></div>
+                    {cloneUploadError ? <div role="alert"><Note kind="error" icon={Icon.xCircle()}>Clone was not created: {cloneUploadError}</Note></div> : null}
+                    {cloneUploadSuccess ? <div role="status"><Note kind="info" icon={Icon.checkCircle()}>{cloneUploadSuccess}</Note></div> : null}
+                    <div className="clone-privacy">{Icon.checkCircle()}<span>Your recording is only sent when you select “Upload and create voice”.</span></div>
+                  </div> : <div className="clone-create"><Note kind="secondary" icon={Icon.info()}>Your clone access has ended. You can still delete saved voices here; choose Plus or Creator to create and use them again.</Note></div>}
+                </section> : null}
+              {!account || ((account.cloneEntitlement?.limit ?? 0) <= 0 && hostedClones.length === 0) ? <div className="empty-state">
+                <p>Create a voice from your own recording.</p>
+                <button className="plain" onClick={() => setTab("account")}>{account ? "View voice cloning plans" : "Sign in to create a voice"}</button>
+              </div> : null}
+            </details>
           </div>
         ) : null}
 
         {tab === "account" ? (
           <div className="pane-inner">
             <h1 className="pane-title">Account</h1>
-            <p className="pane-subtitle">Sign in to sync hosted speech with your TextHalo account.</p>
+            <p className="pane-subtitle">Manage your account, credits, and plan.</p>
             {accountError ? <Note kind="error" icon={Icon.xCircle()}>{accountError}</Note> : null}
             {account ? (
               <>
@@ -2142,29 +2184,7 @@ function MainApp() {
                   <div className="card-note">Top-up credits are separate from monthly plan credits. Your first top-up includes seven days of voice cloning with two active slots; the trial waits while Plus or Creator already covers cloning.</div>
                   <div className="inline"><button className="plain" disabled={accountBusy} onClick={() => void buyTopup("topup-5")}>$5 · 30,000 credits</button><button className="plain" disabled={accountBusy} onClick={() => void buyTopup("topup-10")}>$10 · 60,000 credits</button><button className="plain" disabled={accountBusy} onClick={() => void buyTopup("topup-20")}>$20 · 120,000 credits</button></div>
                 </Card>
-                {(account.cloneEntitlement?.limit ?? 0) > 0 || hostedClones.length > 0 ? <section className="clone-panel">
-                  <header className="clone-header">
-                    <div className="clone-heading"><span className="clone-heading-icon">{Icon.speaker()}</span><div><h2>Your hosted voices</h2><p>Create a personal voice from a recording you own or have permission to use.</p></div></div>
-                    <span className="clone-count">{hostedClones.length} saved{(account.cloneEntitlement?.limit ?? 0) > 0 ? ` · ${hostedClones.filter((clone) => clone.access !== "disabled" && clone.status !== "failed").length} of ${account.cloneEntitlement?.limit ?? 0} active` : " · access ended"}{account.cloneEntitlement?.source === "topup_trial" && account.cloneEntitlement.expiresAt ? ` · trial ends ${new Date(account.cloneEntitlement.expiresAt).toLocaleDateString()}` : ""}</span>
-                  </header>
-                  {hostedClones.length ? <div className="clone-list" aria-label="Saved voices">{hostedClones.map((clone) => <div className="clone-item" key={clone.id}>
-                    <span className="clone-avatar">{clone.name.trim().slice(0, 1).toUpperCase()}</span><div className="clone-item-copy"><strong>{clone.name}</strong><span className={`clone-status clone-status-${clone.status}`}>{clone.access === "disabled" ? "Stored · inactive slot" : clone.status === "trained" ? "Ready to use" : clone.status === "failed" ? "Couldn’t train" : "Training"}</span></div>
-                    {clone.status !== "failed" && (account.cloneEntitlement?.limit ?? 0) > 0 ? <button className="clone-delete" onClick={() => void setHostedCloneActive(clone.id, clone.access === "disabled")}>{clone.access === "disabled" ? "Activate" : "Deactivate"}</button> : null}
-                    <button className="clone-delete" aria-label={`Delete ${clone.name}`} onClick={() => void deleteHostedClone(clone.id)}>Delete</button>
-                  </div>)}</div> : <div className="clone-empty"><span className="clone-empty-mark">{Icon.speaker()}</span><strong>No hosted voices yet</strong><span>Your new voice will appear here when it’s ready.</span></div>}
-                  {(account.cloneEntitlement?.limit ?? 0) > 0 ? <div className="clone-create">
-                    <div className="clone-create-title"><span className="clone-step">NEW</span><div><h3>Create a voice</h3><p>Your recording stays on this device until you choose to upload.</p></div></div>
-                    <div className="clone-fields">
-                      <div className="field clone-name-field"><label className="field-label" htmlFor="hosted-clone-name">Voice name <span>Required</span></label><input id="hosted-clone-name" value={cloneName} placeholder="e.g. Warm narration" maxLength={100} required aria-describedby="hosted-clone-name-hint" onChange={(event) => setCloneName(event.target.value)} /><span id="hosted-clone-name-hint" className="field-hint">Up to 100 characters</span></div>
-                      <div className="field"><span className="field-label">Recording <span>Required</span></span><button className={`clone-file-button${clonePath ? " has-file" : ""}`} disabled={accountBusy} onClick={() => void pickCloneAudio()}><span className="clone-file-icon">{Icon.speaker()}</span><span className="clone-file-copy"><strong>{clonePath ? clonePath.split(/[\\/]/).pop() : "Choose an audio file"}</strong><span>{clonePath ? "Selected locally · not uploaded" : "WAV, MP3, M4A, OGG or FLAC · up to 25 MB"}</span></span><span className="clone-file-action">{clonePath ? "Change" : "Browse"}</span></button></div>
-                    </div>
-                    <label className="clone-consent"><input type="checkbox" checked={cloneConsent} onChange={(event) => setCloneConsent(event.target.checked)} /><span>I own this voice or have permission to clone it. I understand the recording will be uploaded to Fish Audio and saved to my account.</span></label>
-                    <div className="clone-submit-row"><div className="clone-feedback" role="status">{!cloneName.trim() ? "Add a name to continue" : !clonePath ? "Choose a recording to continue" : !cloneConsent ? "Confirm permission to continue" : "Everything’s ready to upload"}</div><button className="clone-submit" disabled={accountBusy || !cloneName.trim() || !clonePath || !cloneConsent} onClick={() => void uploadClone()}>{accountBusy ? "Creating voice…" : "Upload and create voice"}<span aria-hidden="true">→</span></button></div>
-                    {cloneUploadError ? <div role="alert"><Note kind="error" icon={Icon.xCircle()}>Clone was not created: {cloneUploadError}</Note></div> : null}
-                    {cloneUploadSuccess ? <div role="status"><Note kind="info" icon={Icon.checkCircle()}>{cloneUploadSuccess}</Note></div> : null}
-                    <div className="clone-privacy">{Icon.checkCircle()}<span>Your recording is only sent when you select “Upload and create voice”.</span></div>
-                  </div> : <div className="clone-create"><Note kind="secondary" icon={Icon.info()}>Your clone access has ended. You can still delete saved voices here; choose Plus or Creator to create and use them again.</Note></div>}
-                </section> : null}
+
               </>
             ) : (
               <>
@@ -2187,34 +2207,21 @@ function MainApp() {
 
         {tab === "permissions" ? <div className="pane-inner">
           <h1 className="pane-title">Permissions</h1>
-          <p className="pane-subtitle">Manage access for speaking selections, transcription, and Assistant context.</p>
+          <p className="pane-subtitle">You control what TextHalo can access.</p>
             <Card title="Accessibility" icon={Icon.textCursor()}>
               {state.trusted ? (
                 <>
                   <Note kind="secondary" icon={Icon.checkCircle()}>
-                    Accessibility access granted. TextHalo uses it for selection capture, direct text insertion, and Undo.
+                    Accessibility access granted. You can read and edit text in other apps.
                   </Note>
-                  <div className="card-note">
-                    The default method simulates ⌘C and reads the copied selection. macOS
-                    requires Accessibility access to send that keystroke. The clipboard is
-                    temporarily used; its previous text is restored when the restore option is
-                    enabled. Accessibility-based capture methods use this access to read the
-                    selection directly.
-                  </div>
+
                 </>
               ) : (
                 <>
                   <Note kind="warning" icon={Icon.warn()}>
-                    TextHalo needs Accessibility access to capture selected text when you press
-                    your Speak shortcut. macOS requires this permission for the default
-                    simulated ⌘C method.
+                    Allow TextHalo to read selected text and insert your words in other apps.
                   </Note>
-                  <div className="card-note">
-                    TextHalo does not capture text continuously. The default method briefly uses
-                    the clipboard to read what the focused app copies; its previous text is
-                    restored when the restore option is enabled. You can also choose an
-                    Accessibility-based method that reads the selection directly.
-                  </div>
+                  <div className="card-note">Text is captured only when you use a shortcut. Clipboard preferences are in Text capture.</div>
                   <div className="inline">
                     {state.settings.accessibility_prompted ? (
                       <button
@@ -2235,7 +2242,7 @@ function MainApp() {
                             .catch((cause) => setError(String(cause)))
                         }
                       >
-                        Continue to macOS permission prompt…
+                        Enable Accessibility
                       </button>
                     )}
                   </div>
@@ -2255,8 +2262,7 @@ function MainApp() {
               )}
               {state.secure_input ? (
                 <Note kind="warning" icon={Icon.warn()}>
-                  Secure input is on — a password field has focus. Capture refuses until you
-                  click away.
+                  Leave the password field to use TextHalo.
                 </Note>
               ) : null}
             </Card>
@@ -2264,15 +2270,19 @@ function MainApp() {
           <Card title="Voice and screen access" icon={Icon.gear()}><PermissionsSettings /></Card>
         </div> : null}
         {tab === "transcription" ? <div className="pane-inner">
-          <h1 className="pane-title">Transcription</h1>
-          <p className="pane-subtitle">Hold to speak. Release to insert your words at the original cursor, with Undo.</p>
-          <Card title="Transcription settings" icon={Icon.textCursor()}><TranscriptionSettings value={settings.assistant ?? defaultAssistantPreferences} onChange={assistant => void save({ assistant })} /></Card>
-          <Card title="Recent transcriptions" icon={Icon.history()}><TranscriptionHistory /></Card>
+          <h1 className="pane-title">Dictate</h1>
+          <p className="pane-subtitle">Hold your shortcut, speak, then release.</p>
+          <div className="task-shortcut"><kbd>{settings.shortcuts.transcribe || "No shortcut yet"}</kbd><button className="plain" onClick={() => setTab("shortcuts")}>Change shortcut</button></div>
+          <TaskReadiness mode="dictate" onPermissions={() => setTab("permissions")} />
+          <Card title="Preferences" icon={Icon.textCursor()}><TranscriptionSettings value={settings.assistant ?? defaultAssistantPreferences} onChange={assistant => void save({ assistant })} /></Card>
+          <button className="text" onClick={() => { setHistoryView("transcripts"); setTab("history"); }}>View transcripts</button>
         </div> : null}
         {tab === "assistant" ? <div className="pane-inner">
           <h1 className="pane-title">Assistant</h1>
-          <p className="pane-subtitle">Hold to ask. Release to write, edit, or generate a voiceover using your instructions and context.</p>
-          <Card title="Instructions and context" icon={Icon.textCursor()}><AssistantSettings value={settings.assistant ?? defaultAssistantPreferences} onChange={assistant => void save({ assistant })} /></Card>
+          <p className="pane-subtitle">Hold your shortcut and ask to write, edit, or read aloud.</p>
+          <div className="task-shortcut"><kbd>{settings.shortcuts.assistant || "No shortcut yet"}</kbd><button className="plain" onClick={() => setTab("shortcuts")}>Change shortcut</button></div>
+          <TaskReadiness mode="assistant" needsScreen={settings.assistant?.context === "screen"} onPermissions={() => setTab("permissions")} />
+          <Card title="Make it yours" icon={Icon.textCursor()}><AssistantSettings value={settings.assistant ?? defaultAssistantPreferences} onChange={assistant => void save({ assistant })} /></Card>
           <p className="card-note">{settings.engine === "fish" ? "Generation stays on this Mac. Narration sends the resulting text to TextHalo and Fish Audio." : "Generation and your selected voice run on this Mac."}</p>
         </div> : null}
 
@@ -2280,11 +2290,11 @@ function MainApp() {
           <div className="pane-inner">
             <h1 className="pane-title">Shortcuts</h1>
             <p className="pane-subtitle">
-              Hold Transcribe or Assistant while you speak, then release. Speak reads your selection.
+              Hold Dictate or Assistant to speak. Press Listen to read selected text.
             </p>
 
             {([
-              {title:"Speech",role:"speak"}, {title:"Transcription",role:"transcribe"},
+              {title:"Listen",role:"speak"}, {title:"Dictate",role:"transcribe"},
               {title:"Assistant",role:"assistant"}, {title:"Stop / cancel",role:"stop"},
             ] as const).map(({title,role}) => <Card key={role} title={title} icon={Icon.command()}>
               {(() => {
@@ -2326,7 +2336,7 @@ function MainApp() {
               {state.refused_shortcuts.length > 0 ? (
                 <Note kind="error" icon={Icon.xCircle()}>
                   macOS refused {state.refused_shortcuts.join(", ")} — another app already
-                  owns it. Pick a different chord.
+                  owns it. Choose another shortcut.
                 </Note>
               ) : null}
               <div className="card-note">
@@ -2339,8 +2349,8 @@ function MainApp() {
 
         {tab === "capture" ? (
           <div className="pane-inner">
-            <h1 className="pane-title">Capture</h1>
-            <p className="pane-subtitle">How TextHalo gets hold of the text you selected.</p>
+            <h1 className="pane-title">Text capture</h1>
+            <p className="pane-subtitle">Choose how selected text is read.</p>
 
             <Card title="Capture method" icon={Icon.textCursor()}>
               <div className="row-stack">
@@ -2348,19 +2358,19 @@ function MainApp() {
                   [
                     {
                       mode: "copy_only" as CaptureMode,
-                      title: "Simulated ⌘C only (recommended)",
+                      title: "Copy selected text (recommended)",
                       subtitle:
-                        "Avoids inconsistent Accessibility text by simulating ⌘C; requires macOS Accessibility permission and temporarily uses the clipboard",
+                        "Uses the clipboard. Requires Accessibility access.",
                     },
                     {
                       mode: "ax_then_copy" as CaptureMode,
-                      title: "Accessibility, then copy",
+                      title: "Read directly, then copy",
                       subtitle:
-                        "Reads the selection directly, falling back to a simulated ⌘C when an app won't answer",
+                        "Uses the clipboard only when direct reading is unavailable.",
                     },
                     {
                       mode: "ax_only" as CaptureMode,
-                      title: "Accessibility only",
+                      title: "Read directly",
                       subtitle: "Never touches the clipboard",
                     },
                   ] as const
@@ -2423,9 +2433,14 @@ function MainApp() {
 
         {tab === "history" ? (
           <div className="pane-inner">
+            <div className="section-nav history-tabs" role="group" aria-label="History type">
+              <button aria-pressed={historyView === "audio"} className={historyView === "audio" ? "active" : ""} onClick={() => setHistoryView("audio")}>Audio</button>
+              <button aria-pressed={historyView === "transcripts"} className={historyView === "transcripts" ? "active" : ""} onClick={() => setHistoryView("transcripts")}>Transcripts</button>
+            </div>
+            {historyView === "transcripts" ? <><h1 className="pane-title">History</h1><TranscriptionHistory /></> : <>
             <div className="history-heading">
               <div>
-                <h1 className="pane-title">Audio History</h1>
+                <h1 className="pane-title">History</h1>
                 <p className="pane-subtitle">Saved privately on this Mac · keeps the latest 50.</p>
               </div>
               <div className="inline">
@@ -2499,9 +2514,10 @@ function MainApp() {
                 </div>
               </Card>
             )}
+            </> }
           </div>
         ) : null}
-      </div>
+      </main>
     </div>
   );
 }
