@@ -80,11 +80,23 @@ type ChatterboxSettings = {
 type FishSettings = { voice_id: string; model_id: string; enhance_text: boolean; privacy_accepted: boolean };
 type HostedVoice = { id: string; name: string; description: string; languageCodes: string[]; tags: string[]; previewAvailable: boolean; samples: { id: string; title: string; text: string }[] };
 type HostedVoiceLanguage = { code: string; voiceCount: number };
-type HostedAccount = { availableCredits: number; accountEmail?: string | null; creditBreakdown: { totalCredits: number; planCredits: number; topupCredits: number; otherCredits: number }; billingEnabled: boolean; subscription: { planId: string; status: string; currentPeriodEnd: string; cancelAtPeriodEnd: boolean } | null; plans: { id: string; creditsPerPeriod: number; cloneLimit: number }[] };
+type HostedAccount = { availableCredits: number; accountEmail?: string | null; creditBreakdown: { totalCredits: number; planCredits: number; topupCredits: number; otherCredits: number; debtCredits?: number }; billingEnabled: boolean; subscription: { planId: string; status: string; currentPeriodEnd: string; cancelAtPeriodEnd: boolean } | null; plans: { id: string; creditsPerPeriod: number; cloneLimit: number }[]; cloneEntitlement?: { limit: number; source: "subscription" | "topup_trial" | "service" | null; expiresAt: string | null } };
 type HostedCloneStatus = "created" | "training" | "trained" | "failed";
-type HostedClone = { id: string; name: string; status: HostedCloneStatus; createdAt: string };
+type HostedClone = { id: string; name: string; status: HostedCloneStatus; createdAt: string; access?: "active" | "disabled" };
 
 const cloneIsPending = (status: HostedCloneStatus) => status === "created" || status === "training";
+const subscriptionIsActive = (subscription: HostedAccount["subscription"]): boolean => Boolean(
+  subscription && ["active", "trialing"].includes(subscription.status) && new Date(subscription.currentPeriodEnd).getTime() > Date.now(),
+);
+
+function formatPlanPrice(price: SetupPlansResponse["plans"][number]["price"]): string {
+  if (!price) return "Pricing unavailable";
+  const formatter = new Intl.NumberFormat(undefined, { style: "currency", currency: price.currency });
+  const amount = formatter.format(price.unitAmount / (10 ** (formatter.resolvedOptions().maximumFractionDigits ?? 2)));
+  if (!price.interval) return amount;
+  const count = price.intervalCount ?? 1;
+  return `${amount} / ${count > 1 ? `${count} ` : ""}${price.interval}${count > 1 ? "s" : ""}`;
+}
 
 const websiteUrl = (import.meta.env.VITE_TEXTHALO_WEBSITE_URL || "https://texthalo.app").replace(/\/$/, "");
 
@@ -106,11 +118,14 @@ type AudioHistoryEntry = {
   text: string;
   durationSeconds: number | null;
   audioFile: string;
+  appName?: string | null;
+  windowTitle?: string | null;
 };
 
 type Settings = {
   accessibility_prompted: boolean;
   onboarding_completed: boolean;
+  launch_at_login: boolean;
   shortcuts: { speak: string; stop: string };
   engine: EngineId;
   kokoro: KokoroSettings;
@@ -603,7 +618,17 @@ function MainApp() {
   const [historyEntries, setHistoryEntries] = useState<AudioHistoryEntry[]>([]);
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const historyGroups = historyEntries.reduce<Record<string, AudioHistoryEntry[]>>((groups, entry) => {
+    const app = entry.appName?.trim() || "Unknown app";
+    const title = entry.windowTitle?.trim();
+    const key = `${app}\u0000${title || ""}`;
+    (groups[key] ??= []).push(entry);
+    return groups;
+  }, {});
   const [account, setAccount] = useState<HostedAccount | null>(null);
+  const [accountPlans, setAccountPlans] = useState<SetupPlansResponse["plans"] | null>(null);
+  const [accountPlansError, setAccountPlansError] = useState(false);
+  const [accountPlansLoading, setAccountPlansLoading] = useState(false);
   const [accountEmail, setAccountEmail] = useState("");
   const [accountBusy, setAccountBusy] = useState(false);
   const [accountError, setAccountError] = useState("");
@@ -647,6 +672,23 @@ function MainApp() {
     void getVersion().then(setAppVersion).catch(() => setAppVersion("unknown"));
   }, []);
 
+  const loadAccountPlans = useCallback(async () => {
+    setAccountPlansLoading(true);
+    setAccountPlansError(false);
+    try {
+      const result = await invoke<SetupPlansResponse>("desktop_billing_plans");
+      setAccountPlans(result.plans);
+    } catch {
+      setAccountPlansError(true);
+    } finally {
+      setAccountPlansLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (tab === "account" && !accountPlans && !accountPlansLoading && !accountPlansError) void loadAccountPlans();
+  }, [accountPlans, accountPlansError, accountPlansLoading, loadAccountPlans, tab]);
+
   const refreshHostedAccount = useCallback(async () => {
     setAccountError("");
     try {
@@ -669,7 +711,11 @@ function MainApp() {
   useEffect(() => {
     if (!account) return;
     const refreshTimer = window.setInterval(() => void refreshHostedAccount(), 3 * 60 * 1000);
-    return () => window.clearInterval(refreshTimer);
+    const expiry = account.cloneEntitlement?.expiresAt ? new Date(account.cloneEntitlement.expiresAt).getTime() : 0;
+    const expiryTimer = expiry > Date.now()
+      ? window.setTimeout(() => void refreshHostedAccount(), Math.min(2_147_483_647, expiry - Date.now() + 250))
+      : undefined;
+    return () => { window.clearInterval(refreshTimer); if (expiryTimer !== undefined) window.clearTimeout(expiryTimer); };
   }, [account, refreshHostedAccount]);
 
   useEffect(() => {
@@ -987,9 +1033,19 @@ function MainApp() {
         void loadHostedVoices(hostedQueryRef.current, selected);
       }).catch((cause) => setAccountError(cause instanceof Error ? cause.message : String(cause)));
     }
-    const canClone = (account?.plans.find((plan) => plan.id === account.subscription?.planId)?.cloneLimit ?? 0) > 0;
-    if ((tab === "account" || (tab === "voice" && state?.settings.engine === "fish")) && account && canClone) void invoke<{items: HostedClone[]}>("desktop_clones").then((v) => setHostedClones(v.items)).catch((cause) => setAccountError(cause instanceof Error ? cause.message : String(cause)));
-  }, [tab, state?.settings.engine, state?.system_language, account, loadHostedVoices]);
+    let current = true;
+    const shouldLoadClones = account && (tab === "account" || (tab === "voice" && state?.settings.engine === "fish"));
+    if (shouldLoadClones) void invoke<{items: HostedClone[]}>("desktop_clones").then((v) => {
+      if (!current) return;
+      setHostedClones(v.items);
+      const settings = latestState.current?.settings;
+      const selectedClone = v.items.find((clone) => clone.id === settings?.fish.voice_id);
+      if (settings && selectedClone && (selectedClone.access === "disabled" || (account.cloneEntitlement?.limit ?? 0) <= 0)) {
+        void save({ fish: { ...settings.fish, voice_id: "" } });
+      }
+    }).catch((cause) => { if (current) setAccountError(cause instanceof Error ? cause.message : String(cause)); });
+    return () => { current = false; };
+  }, [tab, state?.settings.engine, state?.system_language, account, loadHostedVoices, save]);
 
   useEffect(() => {
     if (!pendingCloneKey) return;
@@ -1333,6 +1389,15 @@ function MainApp() {
     catch (cause) { setAccountError(cause instanceof Error ? cause.message : String(cause)); }
   };
 
+  const setHostedCloneActive = async (voiceId: string, active: boolean) => {
+    setAccountError("");
+    try {
+      const updated = await invoke<HostedClone>("desktop_set_clone_active", { voiceId, active });
+      setHostedClones((items) => items.map((item) => item.id === voiceId ? { ...item, access: updated.access } : item));
+      if (!active && latestState.current?.settings.fish.voice_id === voiceId) void save({ fish: { ...latestState.current.settings.fish, voice_id: "" } });
+    } catch (cause) { setAccountError(cause instanceof Error ? cause.message : String(cause)); }
+  };
+
   const openCheckout = async (planId: string) => {
     setAccountBusy(true); setAccountError("");
     try { const url = await invoke<string>("desktop_checkout", { planId }); await openUrl(url); }
@@ -1369,6 +1434,46 @@ function MainApp() {
     { id: "capture", title: "Capture", icon: Icon.textCursor() },
     { id: "history", title: "History", icon: Icon.history() },
   ];
+
+  const paidAccountPlans = accountPlans?.filter((plan) => plan.id !== "free") ?? [];
+  const activeAccountSubscription = subscriptionIsActive(account?.subscription ?? null) ? account?.subscription ?? null : null;
+  const currentAccountPlanIndex = paidAccountPlans.findIndex((plan) => plan.id === activeAccountSubscription?.planId);
+  const currentAccountPlan = currentAccountPlanIndex >= 0 ? paidAccountPlans[currentAccountPlanIndex] : null;
+  const accountUpgradePlan = currentAccountPlanIndex >= 0
+    ? paidAccountPlans[currentAccountPlanIndex + 1] ?? null
+    : paidAccountPlans[paidAccountPlans.length - 1] ?? null;
+
+  const planOptionsCard = (
+    <Card title={account ? "Plan" : "Plans"} icon={Icon.gauge()}>
+      {accountPlansLoading ? <span className="setup-plan-loading">Loading plan options…</span> : null}
+      {accountPlansError ? <><div className="card-note">Plan details couldn’t be loaded.</div><div className="inline"><button className="plain" onClick={() => void loadAccountPlans()}>Try again</button><button className="plain" onClick={() => void openUrl(`${websiteUrl}/pricing/`)}>Open pricing page ↗</button></div></> : null}
+      {accountPlans && !activeAccountSubscription ? <>
+        {account?.subscription ? <Note kind="secondary" icon={Icon.info()}>Your {currentAccountPlan?.name ?? account.subscription.planId} subscription is {account.subscription.status.replace(/_/g, " ")}. Open billing to resolve it; hosted clone access is paused.</Note> : null}
+        <p className="account-plan-intro">Choose a plan. Local voices are free; hosted speech is optional.</p>
+        <div className="account-plan-grid" aria-label="TextHalo plans">
+          {accountPlans.map((plan) => <article className={`setup-plan-card${plan.id === "creator" ? " featured" : ""}`} key={plan.id}>
+            <strong>{plan.name}</strong><span className="setup-plan-price">{formatPlanPrice(plan.price)}</span><span>{plan.description}</span>
+            {plan.features.filter((feature) => feature !== "Everything in Free").slice(0, 3).map((feature) => <small key={feature}>{feature}</small>)}
+            {plan.id !== "free" ? <button className="plain account-plan-action" disabled={accountBusy || Boolean(account && !account.billingEnabled)} onClick={() => account ? void openCheckout(plan.id) : void beginDesktopSignIn()}>{account ? `Choose ${plan.name}` : `Sign in for ${plan.name}`}</button> : null}
+          </article>)}
+        </div>
+        <div className="inline"><button className="plain" onClick={() => void openUrl(`${websiteUrl}/pricing/`)}>Compare plans ↗</button></div>
+      </> : null}
+      {accountPlans && activeAccountSubscription ? <>
+        <div className="account-current-plan">
+          <div className="account-current-plan-copy"><span className="credit-eyebrow">CURRENT PLAN</span><strong>{currentAccountPlan?.name ?? activeAccountSubscription.planId}</strong><span>{activeAccountSubscription.status}{activeAccountSubscription.cancelAtPeriodEnd ? " · cancels at period end" : ""}{activeAccountSubscription.currentPeriodEnd ? ` · renews ${new Date(activeAccountSubscription.currentPeriodEnd).toLocaleDateString()}` : ""}</span></div>
+          {paidAccountPlans.length > 0 && currentAccountPlanIndex === paidAccountPlans.length - 1 ? <span className="account-plan-note">You’re on the highest plan</span> : null}
+        </div>
+        {accountUpgradePlan ? <article className="setup-plan-card featured account-upgrade-card">
+          <div><span className="credit-eyebrow">AVAILABLE UPGRADE</span><strong>{accountUpgradePlan.name}</strong></div>
+          <span className="setup-plan-price">{formatPlanPrice(accountUpgradePlan.price)}</span><span>{accountUpgradePlan.description}</span>
+          {accountUpgradePlan.features.filter((feature) => feature !== "Everything in Free").slice(0, 3).map((feature) => <small key={feature}>{feature}</small>)}
+          <button className="plain account-plan-action" disabled={accountBusy || !account?.billingEnabled} onClick={() => void openCheckout(accountUpgradePlan.id)}>Upgrade to {accountUpgradePlan.name}</button>
+        </article> : null}
+        <div className="inline"><button className="plain" onClick={() => void openUrl(`${websiteUrl}/account/billing/`)}>Manage billing</button></div>
+      </> : null}
+    </Card>
+  );
 
   const voiceRow = (voice: Voice) => (
     <Row
@@ -1506,6 +1611,20 @@ function MainApp() {
                   click away.
                 </Note>
               ) : null}
+            </Card>
+
+            <Card title="Startup" icon={Icon.gear()}>
+              <label className="startup-option">
+                <span className="startup-option-copy">
+                  <strong>Open TextHalo when you log in</strong>
+                  <span>It starts quietly in the menu bar, ready when you need it.</span>
+                </span>
+                <input
+                  type="checkbox"
+                  checked={settings.launch_at_login}
+                  onChange={(event) => void save({ launch_at_login: event.target.checked })}
+                />
+              </label>
             </Card>
 
             <Card title="Try it" icon={Icon.play()}>
@@ -1662,14 +1781,14 @@ function MainApp() {
                       </div>
                     ))}
                   </div>
-                  {hostedClones.length > 0 ? <div className="field"><span className="field-label">My hosted clones</span><div className="row-stack">{hostedClones.map((clone) => { const ready = clone.status === "trained"; const selected = settings.fish.voice_id === clone.id; const status = clone.status === "trained" ? "Ready" : clone.status === "failed" ? "Training failed" : clone.status === "created" ? "Queued" : "Training"; return <Row key={clone.id} selected={selected} disabled={!ready} glyph={selected && ready ? Icon.checkCircle() : Icon.circle()} title={clone.name} subtitle={ready ? "Clone · Ready to use" : `Clone · ${status} · unavailable until training completes`} badge={selected ? "Selected" : status} onSelect={() => void save({ fish: { ...settings.fish, voice_id: clone.id } })} />; })}</div></div> : null}
+                  {hostedClones.length > 0 ? <div className="field"><span className="field-label">My hosted clones</span><div className="row-stack">{hostedClones.map((clone) => { const inactive = (account?.cloneEntitlement?.limit ?? 0) <= 0 || clone.access === "disabled"; const ready = clone.status === "trained" && !inactive; const selected = settings.fish.voice_id === clone.id; const status = inactive ? "Inactive slot" : clone.status === "trained" ? "Ready" : clone.status === "failed" ? "Training failed" : clone.status === "created" ? "Queued" : "Training"; return <Row key={clone.id} selected={selected} disabled={!ready} glyph={selected && ready ? Icon.checkCircle() : Icon.circle()} title={clone.name} subtitle={ready ? "Clone · Ready to use" : inactive ? "Clone · Stored but inactive for your current plan" : `Clone · ${status} · unavailable until training completes`} badge={selected ? "Selected" : status} onSelect={() => void save({ fish: { ...settings.fish, voice_id: clone.id } })} />; })}</div></div> : null}
                   {hostedVoices.length === 0 && !accountError && !hostedLoading ? <span className="card-note">No voices loaded. Search or refresh to browse.</span> : null}
                   <label className="toggle-row"><input type="checkbox" checked={settings.fish.enhance_text} onChange={(event) => void save({ fish: { ...settings.fish, enhance_text: event.target.checked } })} /><span>Enhance text with semantic delivery cues</span></label>
                 </Card>
                 <Card title="Custom voice cloning" icon={Icon.speaker()}>
-                  <p className="card-note">Fish Audio supports personal voice clones. You can browse this feature while signed out; signing in and an eligible Creator plan are required to upload recordings and manage clones.</p>
-                  {!account ? <Note kind="info" icon={Icon.info()}>Sign in to see your plan and create a custom voice clone.</Note> : (account.plans.find((plan) => plan.id === account.subscription?.planId)?.cloneLimit ?? 0) > 0 ? <Note kind="info" icon={Icon.info()}>Your current plan includes voice cloning. Upload and manage your clones from Account.</Note> : <Note kind="secondary" icon={Icon.info()}>Voice cloning is available with the Creator plan. Visit Account to review plans.</Note>}
-                  <button className="plain" onClick={() => setTab("account")}>{!account ? "Sign in to create a clone" : (account.plans.find((plan) => plan.id === account.subscription?.planId)?.cloneLimit ?? 0) > 0 ? "Manage voice clones" : "View plans"}</button>
+                  <p className="card-note">Plus includes two saved clones, Creator includes up to five, and a first top-up starts a seven-day trial with two clones.</p>
+                  {!account ? <Note kind="info" icon={Icon.info()}>Sign in to see your clone access and create a custom voice.</Note> : (account.cloneEntitlement?.limit ?? 0) > 0 ? <Note kind="info" icon={Icon.info()}>{account.cloneEntitlement?.source === "topup_trial" && account.cloneEntitlement.expiresAt ? `Your top-up trial includes ${account.cloneEntitlement.limit} voice clones through ${new Date(account.cloneEntitlement.expiresAt).toLocaleDateString()}.` : `Your current plan includes up to ${account.cloneEntitlement?.limit ?? 0} voice clones.`}</Note> : <Note kind="secondary" icon={Icon.info()}>Voice cloning is available with Plus, Creator, or the seven-day trial after your first top-up. Visit Account to review plans.</Note>}
+                  <button className="plain" onClick={() => setTab("account")}>{!account ? "Sign in to create a clone" : (account.cloneEntitlement?.limit ?? 0) > 0 ? "Manage voice clones" : "View plans"}</button>
                 </Card>
                 <Card title="Privacy for hosted speech" icon={Icon.info()}>
                   <p className="card-note">When you use hosted speech, selected text is sent to TextHalo’s service and the speech provider to generate audio. Optional text enhancement processes the text through an additional service. Local Apple, Kokoro, and Chatterbox engines process speech on your Mac.</p>
@@ -2078,46 +2197,64 @@ function MainApp() {
                 <Card title="Signed in" icon={Icon.checkCircle()}>
                   <div className="inline"><strong>{accountEmail || "TextHalo account"}</strong><button className="plain" disabled={accountBusy} onClick={() => void refreshHostedAccount()}>Refresh</button><button className="plain" disabled={accountBusy} onClick={() => void signOut()}>Sign out</button></div>
                 </Card>
-                <Card title="Credits and plan" icon={Icon.gauge()}>
-                  <div className="row-stack">
-                    <Row selected={false} glyph={Icon.checkCircle()} title={`${account.availableCredits.toLocaleString()} credits available`} subtitle={account.subscription ? `${account.subscription.planId} · ${account.subscription.status}${account.subscription.cancelAtPeriodEnd ? " · cancels at period end" : ""}` : "Free plan"} onSelect={() => {}} />
-                    <Row selected={false} glyph={Icon.circle()} title={`${account.creditBreakdown.planCredits.toLocaleString()} plan credits`} subtitle="Monthly subscription balance" onSelect={() => {}} />
-                    <Row selected={false} glyph={Icon.circle()} title={`${account.creditBreakdown.topupCredits.toLocaleString()} top-up credits`} subtitle="Purchased credit packs" onSelect={() => {}} />
-                    {account.creditBreakdown.otherCredits ? <Row selected={false} glyph={Icon.circle()} title={`${account.creditBreakdown.otherCredits.toLocaleString()} other credits`} onSelect={() => {}} /> : null}
+                <Card title="Credits" icon={Icon.gauge()}>
+                  <div className="credit-balance">
+                    <div><span className="credit-eyebrow">AVAILABLE TO USE</span><strong>{account.availableCredits.toLocaleString()}</strong><span className="credit-unit">credits</span></div>
                   </div>
-                  {account.subscription?.currentPeriodEnd ? <div className="card-note">Current period ends {new Date(account.subscription.currentPeriodEnd).toLocaleDateString()}.</div> : null}
-                  <div className="inline"><button className="plain" onClick={() => void openUrl(`${websiteUrl}/pricing/`)}>Explore plans</button><button className="plain" onClick={() => void openUrl(`${websiteUrl}/account/billing/`)}>Billing portal</button></div>
-                  {account.plans.map((plan) => <div className="inline" key={plan.id}><span className="card-note">{plan.id === "plus" ? "Plus" : plan.id === "creator" ? "Creator" : plan.id}: {plan.creditsPerPeriod.toLocaleString()} credits per period · {plan.cloneLimit} saved clones</span><button className="plain" disabled={accountBusy} onClick={() => void openCheckout(plan.id)}>Choose plan</button></div>)}
+                  <div className="credit-breakdown">
+                    <div className="credit-breakdown-heading"><strong>Where your balance comes from</strong><span>Remaining</span></div>
+                    <div className="credit-source"><span><i className="credit-dot plan" />Subscription credits</span><strong>{account.creditBreakdown.planCredits.toLocaleString()}</strong></div>
+                    <div className="credit-source"><span><i className="credit-dot topup" />Purchased top-ups</span><strong>{account.creditBreakdown.topupCredits.toLocaleString()}</strong></div>
+                    {account.creditBreakdown.otherCredits ? <div className="credit-source"><span><i className="credit-dot other" />Other credits</span><strong>{account.creditBreakdown.otherCredits.toLocaleString()}</strong></div> : null}
+                    {(account.creditBreakdown.debtCredits ?? 0) > 0 ? <div className="credit-source"><span><i className="credit-dot other" />Refund balance due</span><strong>{account.creditBreakdown.debtCredits!.toLocaleString()}</strong></div> : null}
+                    <div className="credit-total"><span>Total available</span><strong>{account.creditBreakdown.totalCredits.toLocaleString()}</strong></div>
+                  </div>
+                  <p className="credit-explainer">The source amounts above are included in your available balance. They are not extra credits on top of it.</p>
                 </Card>
+                {planOptionsCard}
                 <Card title="One-time credit packs" icon={Icon.gauge()}>
-                  <div className="card-note">Top-up credits are separate from monthly plan credits. They remain available according to the credit pack terms.</div>
+                  <div className="card-note">Top-up credits are separate from monthly plan credits. Your first top-up includes seven days of voice cloning with two active slots; the trial waits while Plus or Creator already covers cloning.</div>
                   <div className="inline"><button className="plain" disabled={accountBusy} onClick={() => void buyTopup("topup-5")}>$5 · 30,000 credits</button><button className="plain" disabled={accountBusy} onClick={() => void buyTopup("topup-10")}>$10 · 60,000 credits</button><button className="plain" disabled={accountBusy} onClick={() => void buyTopup("topup-20")}>$20 · 120,000 credits</button></div>
                 </Card>
-                {(account.plans.find((plan) => plan.id === account.subscription?.planId)?.cloneLimit ?? 0) > 0 ? <Card title="Your hosted voice clones" icon={Icon.speaker()}>
-                  <div className="row-stack">{hostedClones.map((clone) => <Row key={clone.id} selected={false} glyph={Icon.speaker()} title={clone.name} subtitle={`Status: ${clone.status}`} onSelect={() => {}} trailing={<button className="plain" onClick={() => void deleteHostedClone(clone.id)}>Delete</button>} />)}</div>
-                  <p className="card-note">Name your voice, choose a recording, and confirm permission. Nothing is uploaded until you click “Upload and create clone”.</p>
-                  <div className="field"><label className="field-label" htmlFor="hosted-clone-name">1. Voice name (required)</label><input id="hosted-clone-name" value={cloneName} placeholder="e.g. My narration voice" maxLength={100} required aria-describedby="hosted-clone-name-hint" onChange={(event) => setCloneName(event.target.value)} /><span id="hosted-clone-name-hint" className="field-hint">The name shown in your saved voices. Up to 100 characters.</span></div>
-                  <div className="field"><span className="field-label">2. Voice recording (required)</span><div className="inline"><button className="plain" disabled={accountBusy} onClick={() => void pickCloneAudio()}>{clonePath ? "Choose another file" : "Choose audio…"}</button><span className="field-hint">{clonePath ? `Selected: ${clonePath.split(/[\\/]/).pop()} — not uploaded yet` : "WAV, MP3, M4A, OGG, or FLAC · up to 25 MB"}</span></div></div>
-                  <label className="toggle-row"><input type="checkbox" checked={cloneConsent} onChange={(event) => setCloneConsent(event.target.checked)} /><span>I own this voice or have permission to clone it. I understand this recording is uploaded to Fish Audio and saved to my account.</span></label>
-                  <p className="field-hint" role="status">{!cloneName.trim() ? "Enter a voice name to continue." : !clonePath ? "Choose an audio recording to continue." : !cloneConsent ? "Confirm voice ownership or permission before uploading." : "Ready to upload your recording to Fish Audio."}</p>
-                  <button className="plain" disabled={accountBusy || !cloneName.trim() || !clonePath || !cloneConsent} onClick={() => void uploadClone()}>{accountBusy ? "Uploading and creating…" : "Upload and create clone"}</button>
-                  {cloneUploadError ? <div role="alert"><Note kind="error" icon={Icon.xCircle()}>Clone was not created: {cloneUploadError}</Note></div> : null}
-                  {cloneUploadSuccess ? <div role="status"><Note kind="info" icon={Icon.checkCircle()}>{cloneUploadSuccess}</Note></div> : null}
-                  <div className="card-note">Your plan includes up to {account.plans.find((plan) => plan.id === account.subscription?.planId)?.cloneLimit ?? 0} saved clones when cloning is enabled by the service.</div>
-                </Card> : null}
+                {(account.cloneEntitlement?.limit ?? 0) > 0 || hostedClones.length > 0 ? <section className="clone-panel">
+                  <header className="clone-header">
+                    <div className="clone-heading"><span className="clone-heading-icon">{Icon.speaker()}</span><div><h2>Your hosted voices</h2><p>Create a personal voice from a recording you own or have permission to use.</p></div></div>
+                    <span className="clone-count">{hostedClones.length} saved{(account.cloneEntitlement?.limit ?? 0) > 0 ? ` · ${hostedClones.filter((clone) => clone.access !== "disabled" && clone.status !== "failed").length} of ${account.cloneEntitlement?.limit ?? 0} active` : " · access ended"}{account.cloneEntitlement?.source === "topup_trial" && account.cloneEntitlement.expiresAt ? ` · trial ends ${new Date(account.cloneEntitlement.expiresAt).toLocaleDateString()}` : ""}</span>
+                  </header>
+                  {hostedClones.length ? <div className="clone-list" aria-label="Saved voices">{hostedClones.map((clone) => <div className="clone-item" key={clone.id}>
+                    <span className="clone-avatar">{clone.name.trim().slice(0, 1).toUpperCase()}</span><div className="clone-item-copy"><strong>{clone.name}</strong><span className={`clone-status clone-status-${clone.status}`}>{clone.access === "disabled" ? "Stored · inactive slot" : clone.status === "trained" ? "Ready to use" : clone.status === "failed" ? "Couldn’t train" : "Training"}</span></div>
+                    {clone.status !== "failed" && (account.cloneEntitlement?.limit ?? 0) > 0 ? <button className="clone-delete" onClick={() => void setHostedCloneActive(clone.id, clone.access === "disabled")}>{clone.access === "disabled" ? "Activate" : "Deactivate"}</button> : null}
+                    <button className="clone-delete" aria-label={`Delete ${clone.name}`} onClick={() => void deleteHostedClone(clone.id)}>Delete</button>
+                  </div>)}</div> : <div className="clone-empty"><span className="clone-empty-mark">{Icon.speaker()}</span><strong>No hosted voices yet</strong><span>Your new voice will appear here when it’s ready.</span></div>}
+                  {(account.cloneEntitlement?.limit ?? 0) > 0 ? <div className="clone-create">
+                    <div className="clone-create-title"><span className="clone-step">NEW</span><div><h3>Create a voice</h3><p>Your recording stays on this device until you choose to upload.</p></div></div>
+                    <div className="clone-fields">
+                      <div className="field clone-name-field"><label className="field-label" htmlFor="hosted-clone-name">Voice name <span>Required</span></label><input id="hosted-clone-name" value={cloneName} placeholder="e.g. Warm narration" maxLength={100} required aria-describedby="hosted-clone-name-hint" onChange={(event) => setCloneName(event.target.value)} /><span id="hosted-clone-name-hint" className="field-hint">Up to 100 characters</span></div>
+                      <div className="field"><span className="field-label">Recording <span>Required</span></span><button className={`clone-file-button${clonePath ? " has-file" : ""}`} disabled={accountBusy} onClick={() => void pickCloneAudio()}><span className="clone-file-icon">{Icon.speaker()}</span><span className="clone-file-copy"><strong>{clonePath ? clonePath.split(/[\\/]/).pop() : "Choose an audio file"}</strong><span>{clonePath ? "Selected locally · not uploaded" : "WAV, MP3, M4A, OGG or FLAC · up to 25 MB"}</span></span><span className="clone-file-action">{clonePath ? "Change" : "Browse"}</span></button></div>
+                    </div>
+                    <label className="clone-consent"><input type="checkbox" checked={cloneConsent} onChange={(event) => setCloneConsent(event.target.checked)} /><span>I own this voice or have permission to clone it. I understand the recording will be uploaded to Fish Audio and saved to my account.</span></label>
+                    <div className="clone-submit-row"><div className="clone-feedback" role="status">{!cloneName.trim() ? "Add a name to continue" : !clonePath ? "Choose a recording to continue" : !cloneConsent ? "Confirm permission to continue" : "Everything’s ready to upload"}</div><button className="clone-submit" disabled={accountBusy || !cloneName.trim() || !clonePath || !cloneConsent} onClick={() => void uploadClone()}>{accountBusy ? "Creating voice…" : "Upload and create voice"}<span aria-hidden="true">→</span></button></div>
+                    {cloneUploadError ? <div role="alert"><Note kind="error" icon={Icon.xCircle()}>Clone was not created: {cloneUploadError}</Note></div> : null}
+                    {cloneUploadSuccess ? <div role="status"><Note kind="info" icon={Icon.checkCircle()}>{cloneUploadSuccess}</Note></div> : null}
+                    <div className="clone-privacy">{Icon.checkCircle()}<span>Your recording is only sent when you select “Upload and create voice”.</span></div>
+                  </div> : <div className="clone-create"><Note kind="secondary" icon={Icon.info()}>Your clone access has ended. You can still delete saved voices here; choose Plus or Creator to create and use them again.</Note></div>}
+                </section> : null}
               </>
             ) : (
-              <Card title="Sign in to TextHalo" icon={Icon.gear()}>
-                <div className="account-brand">
-                  <img className="account-brand-mark" src={appLogo} alt="" />
-                  <div><strong>TextHalo</strong><div className="card-note">Your account for hosted speech</div></div>
-                  <div className="account-brand-actions">
-                    <button className="plain" disabled={accountBusy} onClick={() => void beginDesktopSignIn()}>{accountBusy ? "Waiting for browser sign-in…" : "Sign in"}</button>
-                    {accountBusy ? <button className="text" onClick={() => void cancelDesktopSignIn()}>Cancel</button> : null}
+              <>
+                <Card title="Sign in to TextHalo" icon={Icon.gear()}>
+                  <div className="account-brand">
+                    <img className="account-brand-mark" src={appLogo} alt="" />
+                    <div><strong>TextHalo</strong><div className="card-note">Your account for hosted speech</div></div>
+                    <div className="account-brand-actions">
+                      <button className="plain" disabled={accountBusy} onClick={() => void beginDesktopSignIn()}>{accountBusy ? "Waiting for browser sign-in…" : "Sign in"}</button>
+                      {accountBusy ? <button className="text" onClick={() => void cancelDesktopSignIn()}>Cancel</button> : null}
+                    </div>
                   </div>
-                </div>
-                <div className="inline"><button className="text" onClick={() => void openUrl(`${websiteUrl}/sign-in/?mode=sign-up`)}>Create an account</button><button className="text" onClick={() => void openUrl(`${websiteUrl}/sign-in/?mode=forgot-password`)}>Forgot password?</button></div>
-              </Card>
+                  <div className="inline"><button className="text" onClick={() => void openUrl(`${websiteUrl}/sign-in/?mode=sign-up`)}>Create an account</button><button className="text" onClick={() => void openUrl(`${websiteUrl}/sign-in/?mode=forgot-password`)}>Forgot password?</button></div>
+                </Card>
+                {planOptionsCard}
+              </>
             )}
           </div>
         ) : null}
@@ -2287,7 +2424,11 @@ function MainApp() {
               </Card>
             ) : historyEntries.length ? (
               <div className="history-list">
-                {historyEntries.map((entry) => (
+                {Object.entries(historyGroups).map(([key, entries]) => {
+                  const [appName, title] = key.split("\u0000");
+                  return <section className="history-group" key={key}>
+                  <h2>{appName}{title ? <span> · {title}</span> : null}</h2>
+                  {entries.map((entry) => (
                   <article className="history-item" key={entry.id}>
                     <div className="history-copy">
                       <div className="history-meta">
@@ -2322,7 +2463,9 @@ function MainApp() {
                       </button>
                     </div>
                   </article>
-                ))}
+                  ))}
+                  </section>;
+                })}
               </div>
             ) : (
               <Card title="No saved audio yet" icon={Icon.history()}>

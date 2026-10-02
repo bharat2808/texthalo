@@ -36,6 +36,7 @@ uuid = { version = "1", features = ["v4"] }
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 tauri-plugin-secure-storage = "1.5.0"
+tauri-plugin-autostart = "2"
 
 # Selection capture + synthetic key events.
 # Invariant: dependencies are compatible with distributing kiegen under Apache-2.0. No GPL.

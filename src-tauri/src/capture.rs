@@ -9,6 +9,13 @@
 
 use serde::Serialize;
 
+#[derive(Debug, Clone, Default, Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceMetadata {
+    pub app_name: Option<String>,
+    pub window_title: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CaptureError {
@@ -50,6 +57,16 @@ pub fn capture(
     platform::capture(mode, timeout_ms, restore)
 }
 
+/// Capture source labels on a best-effort basis alongside the selected text.
+pub fn capture_with_source(
+    mode: crate::config::CaptureMode,
+    timeout_ms: u64,
+    restore: bool,
+) -> Result<(String, SourceMetadata), CaptureError> {
+    let source = platform::source_metadata();
+    capture(mode, timeout_ms, restore).map(|text| (text, source))
+}
+
 /// Is the Accessibility grant in place right now? Re-checked per invocation, never cached:
 /// users revoke it, and every rebuild of an unsigned dev build invalidates it.
 pub fn is_trusted() -> bool {
@@ -70,7 +87,7 @@ pub fn secure_input_active() -> bool {
 // ─────────────────────────────── macOS ───────────────────────────────
 #[cfg(target_os = "macos")]
 mod platform {
-    use super::CaptureError;
+    use super::{CaptureError, SourceMetadata};
     use accessibility_sys::{
         kAXErrorSuccess, kAXFocusedUIElementAttribute, kAXSelectedTextAttribute,
         kAXTrustedCheckOptionPrompt, AXIsProcessTrusted, AXIsProcessTrustedWithOptions,
@@ -96,6 +113,41 @@ mod platform {
         let options: CFDictionary<CFString, CFBoolean> =
             CFDictionary::from_CFType_pairs(&[(prompt_key, CFBoolean::true_value())]);
         unsafe { AXIsProcessTrustedWithOptions(options.as_concrete_TypeRef()) }
+    }
+
+    pub fn source_metadata() -> SourceMetadata {
+        unsafe {
+            let system_wide = AXUIElementCreateSystemWide();
+            if system_wide.is_null() { return SourceMetadata::default(); }
+            let focused = copy_attribute(system_wide, kAXFocusedUIElementAttribute);
+            CFRelease(system_wide as CFTypeRef);
+            let Some(focused) = focused else { return SourceMetadata::default(); };
+            let mut pid: libc::pid_t = 0;
+            let got_pid = accessibility_sys::AXUIElementGetPid(focused as AXUIElementRef, &mut pid)
+                == kAXErrorSuccess;
+            CFRelease(focused);
+            if !got_pid || pid <= 0 { return SourceMetadata::default(); }
+
+            let app = accessibility_sys::AXUIElementCreateApplication(pid);
+            if app.is_null() { return SourceMetadata::default(); }
+            let window = copy_attribute(app, "AXFocusedWindow");
+            CFRelease(app as CFTypeRef);
+            let window_title = window.and_then(|window| {
+                let title = copy_attribute(window as AXUIElementRef, "AXTitle");
+                CFRelease(window);
+                title.and_then(|title| {
+                    if CFGetTypeID(title) != CFString::type_id() { CFRelease(title); return None; }
+                    let value = CFString::wrap_under_create_rule(title as CFStringRef).to_string();
+                    let value = value.trim().to_string();
+                    (!value.is_empty()).then_some(value)
+                })
+            });
+            let mut name = [0i8; 256];
+            let app_name = (libc::proc_name(pid, name.as_mut_ptr().cast(), name.len() as u32) > 0)
+                .then(|| std::ffi::CStr::from_ptr(name.as_ptr()).to_string_lossy().trim().to_string())
+                .filter(|name| !name.is_empty());
+            SourceMetadata { app_name, window_title }
+        }
     }
 
     /// `IsSecureEventInputEnabled()` lives in HIToolbox. Resolve it at runtime rather than
@@ -285,7 +337,9 @@ mod tests {
 // ─────────────────────────── other platforms ───────────────────────────
 #[cfg(not(target_os = "macos"))]
 mod platform {
-    use super::CaptureError;
+    use super::{CaptureError, SourceMetadata};
+
+    pub fn source_metadata() -> SourceMetadata { SourceMetadata::default() }
 
     pub fn is_trusted() -> bool {
         false

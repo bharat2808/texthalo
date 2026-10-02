@@ -121,8 +121,12 @@ struct UiState {
 }
 
 fn ui_state(app: &AppHandle, refused_shortcuts: Vec<String>) -> UiState {
+    use tauri_plugin_autostart::ManagerExt;
     let state = app.state::<AppState>();
-    let settings = state.settings.lock().unwrap().clone();
+    let mut settings = state.settings.lock().unwrap().clone();
+    if let Ok(enabled) = app.autolaunch().is_enabled() {
+        settings.launch_at_login = enabled;
+    }
     // Built before the struct literal: the literal moves `settings` into its first field,
     // so borrowing it later in the same expression is a borrow of a moved value.
     let engines = engines::catalog(&settings);
@@ -316,6 +320,7 @@ fn run_speech(
     text: String,
     truncated: bool,
     archive: bool,
+    source: capture::SourceMetadata,
 ) {
     let state = app.state::<AppState>();
     let _synthesis = state.synthesis.for_engine(settings.engine).lock().unwrap();
@@ -345,7 +350,7 @@ fn run_speech(
         let enhance = settings.fish.enhance_text;
         tauri::async_runtime::spawn(async move {
             let result =
-                hosted::stream_speech(app.clone(), id, text.clone(), voice, model_id, enhance, archive)
+                hosted::stream_speech(app.clone(), id, text.clone(), voice, model_id, enhance, archive, source.clone())
                     .await;
             let state = app.state::<AppState>();
             let mut job = state.job.lock().unwrap();
@@ -403,6 +408,7 @@ fn run_speech(
                                 settings.voice.as_deref().unwrap_or("System default"),
                                 &text,
                                 None,
+                                &source,
                             ) {
                                 eprintln!("[TextHalo] could not save Apple audio history: {error}");
                                 let _ = std::fs::remove_file(path);
@@ -488,6 +494,7 @@ fn run_speech(
                         &voice,
                         &text,
                         Some(report.seconds as f64),
+                        &source,
                     ) {
                         eprintln!("[TextHalo] could not save audio history: {error}");
                         let _ = std::fs::remove_file(path);
@@ -547,7 +554,7 @@ fn speak_selection(app: &AppHandle, id: u64) {
         job_status(app, id, Phase::Error, Some(reason), None);
         return;
     }
-    let text = match capture::capture(
+    let (text, source) = match capture::capture_with_source(
         settings.capture_mode,
         COPY_TIMEOUT_MS,
         settings.restore_clipboard,
@@ -560,14 +567,14 @@ fn speak_selection(app: &AppHandle, id: u64) {
     };
     let truncated = text.chars().count() > settings.max_chars;
     let text = text.chars().take(settings.max_chars).collect();
-    run_speech(app, id, settings, text, truncated, true);
+    run_speech(app, id, settings, text, truncated, true, source);
 }
 
 fn speak_given(app: &AppHandle, id: u64, text: String) {
     let settings = app.state::<AppState>().settings.lock().unwrap().clone();
     let truncated = text.chars().count() > settings.max_chars;
     let text = text.chars().take(settings.max_chars).collect();
-    run_speech(app, id, settings, text, truncated, true);
+    run_speech(app, id, settings, text, truncated, true, capture::SourceMetadata::default());
 }
 
 fn show_settings(app: &AppHandle) {
@@ -604,6 +611,19 @@ fn get_state(app: AppHandle) -> UiState {
 #[tauri::command]
 fn save_settings(app: AppHandle, settings: Settings) -> Result<UiState, String> {
     shortcuts::bindings(&settings)?; // validate before writing anything
+    use tauri_plugin_autostart::ManagerExt;
+    let manager = app.autolaunch();
+    let launch_changed = manager
+        .is_enabled()
+        .unwrap_or_else(|_| app.state::<AppState>().settings.lock().unwrap().launch_at_login)
+        != settings.launch_at_login;
+    if launch_changed {
+        if settings.launch_at_login {
+            manager.enable().map_err(|e| format!("enable launch at login: {e}"))?;
+        } else {
+            manager.disable().map_err(|e| format!("disable launch at login: {e}"))?;
+        }
+    }
     config::save(&app, &settings)?;
     let changed_engine = {
         let state = app.state::<AppState>();
@@ -664,7 +684,7 @@ fn preview_voice(
     }
     let sample =
         text.unwrap_or_else(|| "This is how I sound when reading your selection.".to_string());
-    std::thread::spawn(move || run_speech(&app, id, settings, sample, false, false));
+    std::thread::spawn(move || run_speech(&app, id, settings, sample, false, false, capture::SourceMetadata::default()));
 }
 
 #[tauri::command]
@@ -1007,6 +1027,10 @@ pub fn run() {
         .plugin(tauri_plugin_secure_storage::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
@@ -1112,6 +1136,7 @@ pub fn run() {
             hosted::desktop_voice_preview,
             hosted::desktop_clones,
             hosted::desktop_clone_status,
+            hosted::desktop_set_clone_active,
             hosted::desktop_delete_clone,
             hosted::desktop_upload_clone,
             hosted::desktop_checkout,

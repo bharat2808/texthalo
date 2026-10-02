@@ -15,7 +15,7 @@ type PlanCard = {
   action?: string;
 };
 type CreditTopupPack = { id: string; priceCents: number; credits: number };
-type CreditBalanceBreakdown = { totalCredits: number; planCredits: number; topupCredits: number; otherCredits: number };
+type CreditBalanceBreakdown = { totalCredits: number; planCredits: number; topupCredits: number; otherCredits: number; debtCredits?: number };
 type BillingStatus = { billingEnabled: boolean; plans: PlanCard[]; topups?: CreditTopupPack[] };
 type BillingAccount = {
   availableCredits?: number;
@@ -60,6 +60,7 @@ const FALLBACK_PLANS: PlanCard[] = [
       "Everything in Free",
       "Fish Audio hosted voices",
       "80,000 hosted credits each month",
+      "Saved Fish Audio clones (live limit shown at checkout)",
     ],
     action: "Choose Plus",
   },
@@ -68,14 +69,14 @@ const FALLBACK_PLANS: PlanCard[] = [
     name: "Creator",
     price: { unitAmount: 1999, currency: "usd", interval: "month", intervalCount: 1 },
     creditsPerPeriod: 150_000,
-    cloneLimit: 5,
+    cloneLimit: 0,
     displayOrder: 2,
     description: "More hosted audio, with saved Fish clones.",
     features: [
       "Everything in Free",
       "Fish Audio hosted voices",
       "150,000 hosted credits each month",
-      "Up to five saved Fish Audio clones",
+      "More saved Fish Audio clones (live limit shown at checkout)",
     ],
     action: "Choose Creator",
   },
@@ -350,7 +351,7 @@ function PricingContent() {
         if (!response.ok) return;
         const account = await response.json() as BillingAccount;
         const subscription = account.subscription;
-        const isSubscribed = Boolean(subscription && ["active", "trialing", "past_due", "unpaid", "incomplete"].includes(subscription.status));
+        const isSubscribed = Boolean(subscription && ["active", "trialing"].includes(subscription.status) && new Date(subscription.currentPeriodEnd).getTime() > Date.now());
         if (!cancelled) setCurrentPlan(isSubscribed && (subscription?.planId === "plus" || subscription?.planId === "creator") ? subscription.planId : null);
       } catch {
         // Pricing remains explorable when subscription details cannot be loaded.
@@ -427,7 +428,7 @@ function PricingContent() {
     <section className="credit-topup-panel pricing-topup-panel" aria-labelledby="pricing-topup-heading">
       <div className="eyebrow"><span className="eyebrow-line" /> ONE-TIME HOSTED AUDIO</div>
       <h2 id="pricing-topup-heading">Need a few more minutes?</h2>
-      <p>Buy a credit pack without starting a monthly plan. Available to Free, Plus, and Creator accounts.</p>
+      <p>Buy a credit pack without starting a monthly plan. Your first top-up includes seven days with two active voice-clone slots; the trial waits while a plan already covers cloning.</p>
       <div className="credit-topup-grid">{topupPacks.map((pack) => {
         const price = new Intl.NumberFormat(undefined, { style: "currency", currency: "USD", maximumFractionDigits: 2 }).format(pack.priceCents / 100);
         const estimatedMinutes = Math.round((pack.credits * 1000) / (450 * 900));
@@ -783,13 +784,14 @@ function BillingSuccessContent() {
           <span>Monthly plan remaining<strong>{creditBreakdown.planCredits.toLocaleString()}</strong></span>
           <span>Top-up credits remaining<strong>{creditBreakdown.topupCredits.toLocaleString()}</strong></span>
           {creditBreakdown.otherCredits > 0 && <span>Other credits<strong>{creditBreakdown.otherCredits.toLocaleString()}</strong></span>}
+          {(creditBreakdown.debtCredits ?? 0) > 0 && <span>Refund balance due<strong>{creditBreakdown.debtCredits!.toLocaleString()}</strong></span>}
         </div>}
         {credits === 0 && <small>Credits may take a moment to appear while Stripe sends its payment confirmation.</small>}<button className="text-link" type="button" disabled={loading} onClick={() => void refreshBalance()}>{loading ? "Refreshing…" : "Refresh balance"}<span className="arrow">→</span></button>
       </div>
       {billing?.billingEnabled && billing.topups && billing.topups.length > 0 && <section className="credit-topup-panel" aria-labelledby="topup-heading">
         <div className="eyebrow"><span className="eyebrow-line" /> NEED MORE HOSTED AUDIO?</div>
         <h2 id="topup-heading">Add a credit pack.</h2>
-        <p>One-time purchases work with Free, Plus, and Creator. Top-up credits don’t expire; monthly plan credits are used first.</p>
+        <p>One-time purchases work with Free, Plus, and Creator. The first top-up includes seven days with two active voice-clone slots, paused while a plan covers cloning.</p>
         <div className="credit-topup-grid">{billing.topups.map((pack) => {
           const price = new Intl.NumberFormat(undefined, { style: "currency", currency: "USD", maximumFractionDigits: 2 }).format(pack.priceCents / 100);
           const estimatedMinutes = Math.round((pack.credits * 1000) / (450 * 900));
@@ -878,7 +880,7 @@ function BillingAccountContent() {
   const subscription = account?.subscription ?? null;
   const planName = subscription?.planId === "plus" ? "Plus" : subscription?.planId === "creator" ? "Creator" : null;
   const periodEnd = subscription?.currentPeriodEnd ? new Date(subscription.currentPeriodEnd) : null;
-  const hasActivePlan = Boolean(subscription && ["active", "trialing", "past_due", "unpaid", "incomplete"].includes(subscription.status));
+  const hasActivePlan = Boolean(subscription && ["active", "trialing"].includes(subscription.status) && new Date(subscription.currentPeriodEnd).getTime() > Date.now());
 
   return <div className="site-shell"><SiteHeader /><main className="billing-success billing-account-page section-wrap">
     <div className="success-orbit"><span>◉</span></div>
@@ -894,6 +896,7 @@ function BillingAccountContent() {
           <span>Monthly plan remaining<strong>{account.creditBreakdown.planCredits.toLocaleString()}</strong></span>
           <span>Top-up credits remaining<strong>{account.creditBreakdown.topupCredits.toLocaleString()}</strong></span>
           {account.creditBreakdown.otherCredits > 0 && <span>Other credits<strong>{account.creditBreakdown.otherCredits.toLocaleString()}</strong></span>}
+          {(account.creditBreakdown.debtCredits ?? 0) > 0 && <span>Refund balance due<strong>{account.creditBreakdown.debtCredits!.toLocaleString()}</strong></span>}
         </div>}
         <button className="text-link" type="button" disabled={loading} onClick={() => void refreshAccount()}>{loading ? "Refreshing…" : "Refresh balance"}<span className="arrow">→</span></button>
       </section>
@@ -906,12 +909,12 @@ function BillingAccountContent() {
             <button className="button button-dark" type="button" disabled={busy || busyTopup !== null} onClick={() => void manageSubscription(subscription.planId)}>{busy ? "Opening Stripe…" : "Manage subscription"}<span className="arrow">→</span></button>
             {subscription.planId === "plus" && <button className="button button-plan-light" type="button" disabled={busy || busyTopup !== null} onClick={() => void manageSubscription("creator")}>Upgrade to Creator <span className="arrow">→</span></button>}
           </div>
-        </> : account ? <><p>You’re using the Free plan. Choose a hosted audio plan whenever you need Fish Audio voices and monthly credits.</p><a className="button button-plan-light" href="/pricing/">Compare plans <span className="arrow">→</span></a></> : null}
+        </> : account && subscription && planName ? <><p>Your {planName} subscription is <strong>{subscription.status.replace(/_/g, " ")}</strong>. Hosted plan access is paused until the billing issue is resolved.</p><button className="button button-dark" type="button" disabled={busy} onClick={() => void manageSubscription(subscription.planId)}>{busy ? "Opening Stripe…" : "Manage subscription"}<span className="arrow">→</span></button></> : account ? <><p>You’re using the Free plan. Choose a hosted audio plan whenever you need Fish Audio voices and monthly credits.</p><a className="button button-plan-light" href="/pricing/">Compare plans <span className="arrow">→</span></a></> : null}
       </section>
       {billingState.status?.billingEnabled && billingState.status.topups && billingState.status.topups.length > 0 ? <section className="credit-topup-panel" aria-labelledby="account-topup-heading">
         <div className="eyebrow"><span className="eyebrow-line" /> ONE-TIME HOSTED AUDIO</div>
         <h2 id="account-topup-heading">Add a credit pack.</h2>
-        <p>Top-up credits are separate from your monthly plan balance and don’t expire.</p>
+        <p>Top-up credits are separate from your monthly plan balance and don’t expire. Your first purchase includes seven days with two active voice-clone slots, paused while a plan covers cloning.</p>
         <div className="credit-topup-grid">{billingState.status.topups.map((pack) => {
           const price = new Intl.NumberFormat(undefined, { style: "currency", currency: "USD", maximumFractionDigits: 2 }).format(pack.priceCents / 100);
           const estimatedMinutes = Math.round((pack.credits * 1000) / (450 * 900));

@@ -254,6 +254,14 @@ body:has(.update-overlay) {
   gap: 10px;
 }
 
+.history-group > h2 {
+  margin: 18px 0 8px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+.history-group > h2 span { color: var(--text-tertiary); font-weight: 400; }
+
 .history-item {
   display: flex;
   align-items: center;
@@ -373,6 +381,136 @@ body:has(.update-overlay) {
 .field-hint {
   font-size: 10px;
   color: var(--label-secondary);
+}
+
+/* ───────────────────────── hosted voice creator ─────────────────────── */
+
+.clone-panel {
+  --clone-accent: var(--accent);
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  overflow: hidden;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-card);
+  background: color-mix(in srgb, var(--control-bg) 50%, transparent);
+}
+
+.clone-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 17px 18px;
+  background: transparent;
+}
+
+.clone-heading { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.clone-heading-icon, .clone-empty-mark {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  flex: 0 0 auto;
+  border: 1px solid color-mix(in srgb, var(--clone-accent) 25%, transparent);
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--clone-accent) 14%, var(--control-bg));
+  color: color-mix(in srgb, var(--clone-accent) 85%, var(--label));
+}
+.clone-heading h2, .clone-create-title h3 { margin: 0; font-size: 14px; font-weight: 650; }
+.clone-heading p, .clone-create-title p { margin: 3px 0 0; color: var(--label-secondary); font-size: 11px; }
+.clone-count { flex: 0 0 auto; padding: 5px 9px; border: 1px solid var(--hairline); border-radius: 99px; color: var(--label-secondary); font-size: 10px; }
+
+.clone-list { padding: 0 18px 14px; }
+.clone-item { display: flex; align-items: center; gap: 10px; min-height: 54px; border-top: 1px solid var(--hairline); }
+.clone-avatar { display: grid; place-items: center; width: 32px; height: 32px; flex: 0 0 auto; border-radius: 10px; background: color-mix(in srgb, var(--clone-accent) 15%, var(--control-bg)); color: var(--clone-accent); font-size: 13px; font-weight: 700; }
+.clone-item-copy { display: flex; flex: 1; min-width: 0; align-items: baseline; justify-content: space-between; gap: 12px; }
+.clone-item-copy strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 600; }
+.clone-status { flex: 0 0 auto; color: var(--label-secondary); font-size: 10px; }
+.clone-status-trained { color: #39a879; }
+.clone-status-failed { color: var(--danger); }
+.clone-delete { border: 0; background: transparent; color: var(--label-secondary); font: inherit; font-size: 10px; cursor: default; }
+.clone-delete:hover { color: var(--danger); }
+.clone-empty { display: flex; align-items: center; gap: 11px; margin: 0 18px 14px; padding: 12px; border: 1px dashed var(--separator); border-radius: 10px; }
+.clone-empty-mark { width: 32px; height: 32px; border-radius: 9px; }
+.clone-empty strong { font-size: 11px; font-weight: 600; }
+.clone-empty > span:last-child { color: var(--label-secondary); font-size: 10px; }
+
+.clone-create { display: flex; flex-direction: column; gap: 14px; padding: 16px 18px 14px; border-top: 1px solid var(--hairline); background: color-mix(in srgb, var(--window-bg) 36%, transparent); }
+.clone-create-title { display: flex; align-items: center; gap: 10px; }
+.clone-step { display: grid; place-items: center; width: 34px; height: 25px; border-radius: 7px; background: color-mix(in srgb, var(--clone-accent) 18%, transparent); color: var(--clone-accent); font-size: 9px; font-weight: 750; letter-spacing: .07em; }
+.clone-fields { display: grid; grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.15fr); align-items: start; gap: 12px; }
+.clone-fields .field { min-width: 0; gap: 7px; }
+.clone-fields .field-label { display: flex; align-items: center; gap: 7px; font-size: 11px; }
+.clone-fields .field-label span { color: var(--label-secondary); font-size: 9px; font-weight: 450; }
+.clone-name-field input { width: 100%; min-width: 0; height: 37px; padding: 0 10px; border: 1px solid var(--separator); border-radius: 8px; outline: none; background: var(--text-bg); color: var(--label); font: inherit; font-size: 11px; user-select: text; }
+.clone-name-field input:focus { border-color: var(--clone-accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--clone-accent) 16%, transparent); }
+.clone-file-button { display: flex; align-items: center; gap: 9px; width: 100%; min-width: 0; height: 49px; padding: 6px 9px; border: 1px dashed color-mix(in srgb, var(--clone-accent) 35%, var(--separator)); border-radius: 8px; background: color-mix(in srgb, var(--control-bg) 70%, transparent); color: var(--label); text-align: left; font: inherit; cursor: default; }
+.clone-file-button:hover:not(:disabled) { border-style: solid; background: color-mix(in srgb, var(--clone-accent) 7%, var(--control-bg)); }
+.clone-file-icon { display: grid; place-items: center; width: 29px; height: 29px; flex: 0 0 auto; border-radius: 7px; background: color-mix(in srgb, var(--clone-accent) 13%, transparent); color: var(--clone-accent); }
+.clone-file-copy { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 2px; }
+.clone-file-copy strong, .clone-file-copy span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.clone-file-copy strong { font-size: 10px; font-weight: 600; }
+.clone-file-copy span { color: var(--label-secondary); font-size: 9px; }
+.clone-file-action { color: var(--clone-accent); font-size: 10px; font-weight: 600; }
+.clone-consent { display: flex; align-items: flex-start; gap: 8px; color: var(--label-secondary); font-size: 10px; line-height: 1.45; }
+.clone-consent input { margin: 1px 0 0; accent-color: var(--clone-accent); flex: 0 0 auto; }
+.clone-submit-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.clone-feedback { color: var(--label-secondary); font-size: 10px; }
+.clone-submit { display: inline-flex; align-items: center; gap: 12px; padding: 8px 12px; border: 0; border-radius: 8px; background: var(--clone-accent); color: white; font: inherit; font-size: 11px; font-weight: 650; cursor: default; box-shadow: 0 3px 10px color-mix(in srgb, var(--clone-accent) 25%, transparent); }
+.clone-submit:hover:not(:disabled) { filter: brightness(1.07); }
+.clone-submit:disabled { opacity: .42; box-shadow: none; }
+.clone-submit span { font-size: 14px; line-height: 10px; }
+.clone-privacy { display: flex; align-items: center; gap: 6px; color: var(--label-secondary); font-size: 9px; }
+.clone-privacy svg { width: 12px; height: 12px; color: #39a879; }
+
+/* ───────────────────────────── credit balance ──────────────────────── */
+
+.credit-balance { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 15px 16px; border: 1px solid var(--hairline); border-radius: var(--radius-card); background: color-mix(in srgb, var(--control-bg) 50%, transparent); }
+.credit-balance > div:first-child { display: flex; align-items: baseline; flex-wrap: wrap; column-gap: 6px; }
+.credit-eyebrow { width: 100%; margin-bottom: 4px; color: var(--label-secondary); font-size: 9px; font-weight: 650; letter-spacing: .09em; }
+.credit-balance strong { font-size: 27px; font-weight: 700; line-height: 1.05; font-variant-numeric: tabular-nums; }
+.credit-unit { color: var(--label-secondary); font-size: 11px; }
+.credit-plan { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; color: var(--label-secondary); font-size: 10px; text-align: right; }
+.credit-plan-name { color: var(--label); font-size: 11px; font-weight: 600; text-transform: capitalize; }
+.credit-breakdown { overflow: hidden; border: 1px solid var(--hairline); border-radius: var(--radius-card); background: color-mix(in srgb, var(--control-bg) 50%, transparent); }
+.credit-breakdown-heading, .credit-source, .credit-total { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 10px; }
+.credit-breakdown-heading { border-bottom: 1px solid var(--hairline); color: var(--label-secondary); font-size: 9px; }
+.credit-breakdown-heading strong { color: var(--label); font-size: 10px; font-weight: 600; }
+.credit-source { font-size: 10px; }
+.credit-source > span { display: inline-flex; align-items: center; gap: 7px; color: var(--label-secondary); }
+.credit-source > strong, .credit-total strong { font-size: 10px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.credit-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--label-secondary); }
+.credit-dot.topup, .credit-dot.other { background: var(--label-secondary); }
+.credit-total { border-top: 1px solid var(--hairline); background: transparent; font-size: 10px; font-weight: 600; }
+.credit-explainer { margin: -5px 0 0; color: var(--label-secondary); font-size: 9px; line-height: 1.4; }
+.account-plan-intro { margin: 0; color: var(--label-secondary); font-size: 11px; }
+.account-plan-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(135px, 1fr)); gap: 8px; }
+.account-plan-grid .setup-plan-card { height: 100%; }
+.account-plan-action { align-self: flex-start; margin-top: 4px; }
+.account-current-plan { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 11px 12px; border: 1px solid var(--hairline); border-radius: var(--radius-card); background: color-mix(in srgb, var(--control-bg) 50%, transparent); }
+.account-current-plan-copy { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
+.account-current-plan-copy strong { font-size: 14px; font-weight: 650; }
+.account-current-plan-copy > span:last-child { color: var(--label-secondary); font-size: 10px; }
+.account-plan-note { flex: 0 0 auto; color: var(--label-secondary); font-size: 10px; text-align: right; }
+.account-upgrade-card { display: flex; flex-direction: column; align-items: flex-start; }
+.account-upgrade-card > div:first-child { display: flex; flex-direction: column; gap: 4px; }
+.account-upgrade-card > div:first-child strong { font-size: 12px; }
+
+@media (max-width: 480px) {
+  .credit-balance { align-items: flex-start; flex-direction: column; }
+  .account-current-plan { align-items: flex-start; flex-direction: column; }
+  .account-plan-note { text-align: left; }
+}
+
+@media (max-width: 580px) {
+  .clone-header { align-items: flex-start; flex-direction: column; }
+  .clone-count { margin-left: 50px; }
+  .clone-fields { grid-template-columns: 1fr; }
+  .clone-empty { align-items: flex-start; flex-wrap: wrap; }
+  .clone-empty > span:last-child { margin-left: 43px; }
+  .clone-submit-row { align-items: stretch; flex-direction: column; }
+  .clone-submit { justify-content: center; }
 }
 
 .inline {
@@ -592,6 +730,29 @@ button:focus-visible {
   margin: 1px 0 0;
   accent-color: var(--accent);
 }
+
+.startup-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 11px 12px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-row);
+  background: color-mix(in srgb, var(--control-bg) 50%, transparent);
+  cursor: default;
+}
+
+.startup-option-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.startup-option-copy strong { font-size: 11px; font-weight: 600; }
+.startup-option-copy > span { color: var(--label-secondary); font-size: 10px; }
+.startup-option input { flex: 0 0 auto; margin: 0; accent-color: var(--accent); }
 
 /* ─────────────────────────── voice browser ─────────────────────────── */
 

@@ -584,6 +584,16 @@ pub async fn desktop_clone_status(voice_id: String) -> Result<Value, String> {
     .await
 }
 #[tauri::command]
+pub async fn desktop_set_clone_active(voice_id: String, active: bool) -> Result<Value, String> {
+    let encoded = url::form_urlencoded::byte_serialize(voice_id.as_bytes()).collect::<String>();
+    json_request(
+        reqwest::Method::PATCH,
+        &format!("/v1/voices/clones/{encoded}"),
+        Some(serde_json::json!({ "active": active })),
+    )
+    .await
+}
+#[tauri::command]
 pub async fn desktop_delete_clone(voice_id: String) -> Result<(), String> {
     let encoded = url::form_urlencoded::byte_serialize(voice_id.as_bytes()).collect::<String>();
     let response = request(
@@ -731,6 +741,7 @@ pub async fn stream_speech(
     model_id: String,
     enhance: bool,
     archive: bool,
+    source: crate::capture::SourceMetadata,
 ) -> Result<(), String> {
     let token = access_token(false).await?;
     let base = origin()?;
@@ -875,7 +886,7 @@ pub async fn stream_speech(
     }
     if app_state.job.lock().unwrap().is_current(job_id) {
         if let (Some(recorder), Some(dir)) = (recorder, history_root.as_deref()) {
-            if let Err(error) = recorder.save(dir, "Fish Audio", &voice_id, &text) {
+            if let Err(error) = recorder.save(dir, "Fish Audio", &voice_id, &text, &source) {
                 eprintln!("[TextHalo] could not save hosted audio history: {error}");
             }
         }

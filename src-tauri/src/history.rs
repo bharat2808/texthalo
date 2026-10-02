@@ -19,6 +19,10 @@ pub struct Entry {
     pub text: String,
     pub duration_seconds: Option<f64>,
     pub audio_file: String,
+    #[serde(default)]
+    pub app_name: Option<String>,
+    #[serde(default)]
+    pub window_title: Option<String>,
 }
 
 /// Incremental WAV writer. It only touches the producer thread, never CoreAudio's callback.
@@ -74,13 +78,13 @@ impl PcmRecorder {
     }
 
     /// Commit one complete request, regardless of how many audio packets it contained.
-    pub fn save(self, dir: &Path, engine: &str, voice: &str, text: &str) -> Result<(), String> {
+    pub fn save(self, dir: &Path, engine: &str, voice: &str, text: &str, source: &crate::capture::SourceMetadata) -> Result<(), String> {
         if self.samples_written == 0 {
             return Ok(());
         }
         let seconds = self.samples_written as f64 / 24_000.0;
         let path = self.finish().ok_or("Could not finish audio history recording")?;
-        if let Err(error) = save_entry(dir, &path, engine, voice, text, Some(seconds)) {
+        if let Err(error) = save_entry(dir, &path, engine, voice, text, Some(seconds), source) {
             let _ = std::fs::remove_file(path);
             return Err(error);
         }
@@ -114,6 +118,7 @@ pub fn save_entry(
     voice: &str,
     text: &str,
     duration_seconds: Option<f64>,
+    source: &crate::capture::SourceMetadata,
 ) -> Result<(), String> {
     std::fs::create_dir_all(dir).map_err(|e| format!("create audio history: {e}"))?;
     let id = audio_path
@@ -141,6 +146,8 @@ pub fn save_entry(
         text: text.to_string(),
         duration_seconds,
         audio_file,
+        app_name: source.app_name.clone(),
+        window_title: source.window_title.clone(),
     };
     let encoded = serde_json::to_vec(&entry).map_err(|e| format!("encode audio history: {e}"))?;
     let tmp = dir.join(format!("{id}.json.part"));
