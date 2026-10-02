@@ -41,9 +41,8 @@ use config::Settings;
 use shortcuts::Action;
 use speech::Voice;
 
-/// Copy-mode capture is bounded: an app that never touches the pasteboard should
-/// cost a blink, not a hang.
-const COPY_TIMEOUT_MS: u64 = 150;
+/// Copy-mode capture is bounded while allowing asynchronous pasteboard writers time to respond.
+const COPY_TIMEOUT_MS: u64 = 1_000;
 const UPDATE_CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_secs(6 * 60 * 60);
 
 /// Deep-link to the Accessibility pane in System Settings for users who need to enable
@@ -565,6 +564,7 @@ fn speak_selection(app: &AppHandle, id: u64) {
         return;
     }
     let (text, source) = match capture::capture_with_source(
+        app,
         settings.capture_mode,
         COPY_TIMEOUT_MS,
         settings.restore_clipboard,

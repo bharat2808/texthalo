@@ -25,6 +25,10 @@ pub enum CaptureError {
     NoSelection,
     /// Posted ⌘C but the pasteboard never changed.
     Timeout,
+    /// Failed to create or dispatch the synthetic ⌘C event.
+    Keystroke,
+    /// Failed to run clipboard access on macOS's main thread.
+    MainThread,
     /// A copy happened but the pasteboard held no usable text.
     Empty,
     /// The user is typing into a secure field (password); we refuse before posting anything.
@@ -39,6 +43,8 @@ impl std::fmt::Display for CaptureError {
             }
             Self::NoSelection => "no selected text found",
             Self::Timeout => "nothing was copied — is text selected?",
+            Self::Keystroke => "TextHalo could not send ⌘C to the selected app",
+            Self::MainThread => "TextHalo could not access the macOS clipboard",
             Self::Empty => "the selection contained no text",
             Self::SecureInput => "not available in password fields",
         };
@@ -46,25 +52,15 @@ impl std::fmt::Display for CaptureError {
     }
 }
 
-/// Capture the current selection from whatever app is frontmost.
-///
-/// `max_chars` truncation is applied by the caller so the error semantics stay clean.
-pub fn capture(
-    mode: crate::config::CaptureMode,
-    timeout_ms: u64,
-    restore: bool,
-) -> Result<String, CaptureError> {
-    platform::capture(mode, timeout_ms, restore)
-}
-
 /// Capture source labels on a best-effort basis alongside the selected text.
 pub fn capture_with_source(
+    app: &tauri::AppHandle,
     mode: crate::config::CaptureMode,
     timeout_ms: u64,
     restore: bool,
 ) -> Result<(String, SourceMetadata), CaptureError> {
     let source = platform::source_metadata();
-    capture(mode, timeout_ms, restore).map(|text| (text, source))
+    platform::capture(mode, timeout_ms, restore, Some(app)).map(|text| (text, source))
 }
 
 /// Is the Accessibility grant in place right now? Re-checked per invocation, never cached:
@@ -101,7 +97,26 @@ mod platform {
     use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
     use objc2_app_kit::{NSPasteboard, NSPasteboardType, NSPasteboardTypeString};
     use objc2_foundation::NSString;
+    use std::sync::mpsc::sync_channel;
     use std::time::{Duration, Instant};
+
+    fn on_main_thread<T: Send + 'static>(
+        app: Option<&tauri::AppHandle>,
+        operation: impl FnOnce() -> T + Send + 'static,
+    ) -> Result<T, CaptureError> {
+        let (sender, receiver) = sync_channel(1);
+        let task = move || {
+            let result = objc2::rc::autoreleasepool(|_| operation());
+            let _ = sender.send(result);
+        };
+        if let Some(app) = app {
+            app.run_on_main_thread(task)
+                .map_err(|_| CaptureError::MainThread)?;
+        } else {
+            task();
+        }
+        receiver.recv().map_err(|_| CaptureError::MainThread)
+    }
 
     pub fn is_trusted() -> bool {
         unsafe { AXIsProcessTrusted() }
@@ -233,18 +248,14 @@ mod platform {
     }
 
     /// Post a synthetic ⌘C to the focused app.
-    fn post_copy_keystroke() {
-        let Ok(source) = CGEventSource::new(CGEventSourceStateID::CombinedSessionState) else {
-            return;
-        };
-        for keydown in [true, false] {
-            let Ok(event) = CGEvent::new_keyboard_event(source.clone(), KeyCode::ANSI_C, keydown)
-            else {
-                continue;
-            };
-            event.set_flags(CGEventFlags::CGEventFlagCommand);
-            event.post(CGEventTapLocation::HID);
-        }
+    fn post_copy_key(down: bool) -> Result<(), CaptureError> {
+        let source = CGEventSource::new(CGEventSourceStateID::CombinedSessionState)
+            .map_err(|_| CaptureError::Keystroke)?;
+        let event = CGEvent::new_keyboard_event(source, KeyCode::ANSI_C, down)
+            .map_err(|_| CaptureError::Keystroke)?;
+        event.set_flags(CGEventFlags::CGEventFlagCommand);
+        event.post(CGEventTapLocation::HID);
+        Ok(())
     }
 
     /// Copy path: snapshot the pasteboard text → ⌘C → wait for changeCount → read → restore.
@@ -253,53 +264,82 @@ mod platform {
     /// `NSPasteboard.pasteboardItems()` + `writeObjects:` with `NSPasteboardWriting`
     /// objects (see docs/DESIGN.md §2) — deferred to v1, and the reason
     /// `restore_clipboard` is a setting rather than an assumption.
-    pub fn copy_selected_text(timeout_ms: u64, restore: bool) -> Result<String, CaptureError> {
-        objc2::rc::autoreleasepool(|_| {
+    pub fn copy_selected_text(
+        app: Option<&tauri::AppHandle>,
+        timeout_ms: u64,
+        restore: bool,
+    ) -> Result<String, CaptureError> {
+        let (before, previous) = on_main_thread(app, || {
             let pasteboard = NSPasteboard::generalPasteboard();
-            let before = pasteboard.changeCount();
-
             let previous: Option<String> = unsafe {
                 pasteboard
                     .stringForType(NSPasteboardTypeString)
                     .map(|s| s.to_string())
             };
+            (pasteboard.changeCount(), previous)
+        })?;
 
-            post_copy_keystroke();
+        on_main_thread(app, || post_copy_key(true))??;
+        // Let the target app process the key-down without blocking Cocoa's main thread.
+        std::thread::sleep(Duration::from_millis(20));
+        on_main_thread(app, || post_copy_key(false))??;
 
-            let deadline = Instant::now() + Duration::from_millis(timeout_ms);
-            let mut captured: Option<String> = None;
-            while Instant::now() < deadline {
-                if pasteboard.changeCount() != before {
-                    captured = unsafe {
+        let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+        let mut observed_change = false;
+        let captured = loop {
+            let (changed, text) = on_main_thread(app, move || {
+                let pasteboard = NSPasteboard::generalPasteboard();
+                let changed = pasteboard.changeCount() != before;
+                let text = if changed {
+                    unsafe {
                         pasteboard
                             .stringForType(NSPasteboardTypeString)
                             .map(|s| s.to_string())
-                    };
-                    break;
+                    }
+                } else {
+                    None
+                };
+                (changed, text)
+            })?;
+            if changed {
+                observed_change = true;
+                if text.as_ref().is_some_and(|text| !text.trim().is_empty()) {
+                    break text;
                 }
-                std::thread::sleep(Duration::from_millis(5));
             }
+            if Instant::now() >= deadline {
+                break if observed_change {
+                    Some(String::new())
+                } else {
+                    None
+                };
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        };
 
-            if restore {
-                if let Some(previous) = previous {
+        if restore {
+            if let Some(previous) = previous {
+                on_main_thread(app, move || {
+                    let pasteboard = NSPasteboard::generalPasteboard();
                     let ty: &NSPasteboardType = unsafe { NSPasteboardTypeString };
                     pasteboard.clearContents();
                     pasteboard.setString_forType(&NSString::from_str(&previous), ty);
-                }
+                })?;
             }
+        }
 
-            match captured {
-                Some(text) if !text.trim().is_empty() => Ok(text),
-                Some(_) => Err(CaptureError::Empty),
-                None => Err(CaptureError::Timeout),
-            }
-        })
+        match captured {
+            Some(text) if !text.trim().is_empty() => Ok(text),
+            Some(_) => Err(CaptureError::Empty),
+            None => Err(CaptureError::Timeout),
+        }
     }
 
     pub fn capture(
         mode: crate::config::CaptureMode,
         timeout_ms: u64,
         restore: bool,
+        app: Option<&tauri::AppHandle>,
     ) -> Result<String, CaptureError> {
         use crate::config::CaptureMode;
         if !is_trusted() {
@@ -311,7 +351,7 @@ mod platform {
                 if secure_input_active() {
                     return Err(CaptureError::SecureInput);
                 }
-                copy_selected_text(timeout_ms, restore)
+                copy_selected_text(app, timeout_ms, restore)
             }
             CaptureMode::AxThenCopy => {
                 if let Some(text) = ax_selected_text() {
@@ -320,7 +360,7 @@ mod platform {
                 if secure_input_active() {
                     return Err(CaptureError::SecureInput);
                 }
-                copy_selected_text(timeout_ms, restore)
+                copy_selected_text(app, timeout_ms, restore)
             }
         }
     }
@@ -344,7 +384,7 @@ mod tests {
             CaptureMode::AxOnly,
             CaptureMode::CopyOnly,
         ] {
-            let result = capture(mode, 150, true);
+            let result = platform::capture(mode, 150, true, None);
             assert!(
                 matches!(result, Err(CaptureError::NoPermission)),
                 "expected NoPermission for {mode:?}, got {result:?}"
@@ -378,6 +418,7 @@ mod platform {
         _mode: crate::config::CaptureMode,
         _timeout_ms: u64,
         _restore: bool,
+        _app: Option<&tauri::AppHandle>,
     ) -> Result<String, CaptureError> {
         Err(CaptureError::NoPermission)
     }
