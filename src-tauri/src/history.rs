@@ -279,6 +279,7 @@ mod tests {
         let source = crate::capture::SourceMetadata {
             app_name: Some("TextEdit".into()),
             window_title: Some("Example document".into()),
+            ..Default::default()
         };
         recorder
             .save(&dir, "Fish Audio", "voice-id", "Hello world", &source)

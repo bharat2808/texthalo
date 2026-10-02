@@ -575,9 +575,40 @@ fn speak_selection(app: &AppHandle, id: u64) {
             return;
         }
     };
+    watch_source_application(app, id, &source);
     let truncated = text.chars().count() > settings.max_chars;
     let text = text.chars().take(settings.max_chars).collect();
     run_speech(app, id, settings, text, truncated, true, source);
+}
+
+/// Watch the captured app instance, independently of which app has focus.
+/// The job lock makes checking ownership and stopping audio one atomic operation
+/// with respect to a replacement request.
+fn watch_source_application(app: &AppHandle, id: u64, source: &capture::SourceMetadata) {
+    #[cfg(target_os = "macos")]
+    {
+        let Some(application) = source.application.clone() else {
+            return;
+        };
+        let app = app.clone();
+        std::thread::spawn(move || loop {
+            let state = app.state::<AppState>();
+            {
+                let mut job = state.job.lock().unwrap();
+                if !job.is_current(id) || matches!(job.status.phase, Phase::Idle | Phase::Error) {
+                    break;
+                }
+                if job.cancel_if_source_terminated(id, application.isTerminated()) {
+                    state.spoken.stop();
+                    let _ = app.emit("kiegen:status", &job.status);
+                    break;
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        });
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = (app, id, source);
 }
 
 fn speak_given(app: &AppHandle, id: u64, text: String) {

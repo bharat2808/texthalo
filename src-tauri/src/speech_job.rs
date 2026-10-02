@@ -38,6 +38,16 @@ impl SpeechJob {
         self.streaming = false;
         self.set(Phase::Idle, None, None);
     }
+    pub fn cancel_if_source_terminated(&mut self, id: u64, terminated: bool) -> bool {
+        if !terminated
+            || !self.is_current(id)
+            || matches!(self.status.phase, Phase::Idle | Phase::Error)
+        {
+            return false;
+        }
+        self.cancel();
+        true
+    }
     /// A gap in streamed playback means more audio is being prepared, not completion.
     pub fn observe_playback(&mut self, playing: bool) -> bool {
         if !playing && matches!(self.status.phase, Phase::Speaking) {
@@ -68,6 +78,32 @@ impl SpeechJob {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn source_termination_cancels_pending_audio() {
+        let mut job = SpeechJob::default();
+        let id = job.begin(Phase::Preparing);
+        assert!(job.cancel_if_source_terminated(id, true));
+        assert!(!job.is_current(id));
+        assert!(matches!(job.status.phase, Phase::Idle));
+    }
+
+    #[test]
+    fn running_source_does_not_interrupt_playback() {
+        let mut job = SpeechJob::default();
+        let id = job.begin(Phase::Speaking);
+        assert!(!job.cancel_if_source_terminated(id, false));
+        assert!(job.is_current(id));
+        assert!(matches!(job.status.phase, Phase::Speaking));
+    }
+
+    #[test]
+    fn old_source_termination_cannot_cancel_a_new_request() {
+        let mut job = SpeechJob::default();
+        let old = job.begin(Phase::Speaking);
+        let current = job.begin(Phase::Preparing);
+        assert!(!job.cancel_if_source_terminated(old, true));
+        assert!(job.is_current(current));
+    }
     #[test]
     fn stop_during_processing_invalidates_pending_playback() {
         let mut job = SpeechJob::default();
