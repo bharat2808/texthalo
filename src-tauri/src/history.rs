@@ -178,12 +178,14 @@ impl PcmRecorder {
         if let Err(error) = save_entry_with_partial(
             dir,
             &path,
-            engine,
-            voice,
-            text,
-            Some(seconds),
-            source,
-            partial,
+            EntryMetadata {
+                engine,
+                voice,
+                text,
+                duration_seconds: Some(seconds),
+                source,
+                partial,
+            },
         ) {
             let _ = std::fs::remove_file(path);
             return Err(error);
@@ -223,24 +225,30 @@ pub fn save_entry(
     save_entry_with_partial(
         dir,
         audio_path,
-        engine,
-        voice,
-        text,
-        duration_seconds,
-        source,
-        false,
+        EntryMetadata {
+            engine,
+            voice,
+            text,
+            duration_seconds,
+            source,
+            partial: false,
+        },
     )
+}
+
+struct EntryMetadata<'a> {
+    engine: &'a str,
+    voice: &'a str,
+    text: &'a str,
+    duration_seconds: Option<f64>,
+    source: &'a crate::capture::SourceMetadata,
+    partial: bool,
 }
 
 fn save_entry_with_partial(
     dir: &Path,
     audio_path: &Path,
-    engine: &str,
-    voice: &str,
-    text: &str,
-    duration_seconds: Option<f64>,
-    source: &crate::capture::SourceMetadata,
-    partial: bool,
+    metadata: EntryMetadata<'_>,
 ) -> Result<(), String> {
     std::fs::create_dir_all(dir).map_err(|e| format!("create audio history: {e}"))?;
     let id = audio_path
@@ -263,14 +271,14 @@ fn save_entry_with_partial(
     let entry = Entry {
         id: id.clone(),
         created_at: now_ms(),
-        engine: engine.to_string(),
-        voice: voice.to_string(),
-        text: text.to_string(),
-        duration_seconds,
+        engine: metadata.engine.to_string(),
+        voice: metadata.voice.to_string(),
+        text: metadata.text.to_string(),
+        duration_seconds: metadata.duration_seconds,
         audio_file,
-        app_name: source.app_name.clone(),
-        window_title: source.window_title.clone(),
-        partial,
+        app_name: metadata.source.app_name.clone(),
+        window_title: metadata.source.window_title.clone(),
+        partial: metadata.partial,
     };
     let encoded = serde_json::to_vec(&entry).map_err(|e| format!("encode audio history: {e}"))?;
     let tmp = dir.join(format!("{id}.json.part"));
