@@ -14,6 +14,11 @@ use serde::Serialize;
 pub struct SourceMetadata {
     pub app_name: Option<String>,
     pub window_title: Option<String>,
+    // Keep the actual app instance: a PID can be reused after an app quits.
+    // Runtime ownership must never be persisted in audio history.
+    #[cfg(target_os = "macos")]
+    #[serde(skip)]
+    pub application: Option<objc2::rc::Retained<objc2_app_kit::NSRunningApplication>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -153,6 +158,7 @@ mod platform {
                 return SourceMetadata {
                     app_name,
                     window_title: None,
+                    application: Some(frontmost),
                 };
             }
             let window = copy_attribute(app, "AXFocusedWindow");
@@ -173,6 +179,7 @@ mod platform {
             SourceMetadata {
                 app_name,
                 window_title,
+                application: Some(frontmost),
             }
         }
     }

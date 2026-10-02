@@ -747,6 +747,30 @@ pub async fn stream_speech(
     enhance: bool,
     history: SpeechHistory,
 ) -> Result<(), String> {
+    let cancelled = app
+        .state::<crate::AppState>()
+        .job
+        .lock()
+        .unwrap()
+        .cancellation(job_id);
+    tokio::select! {
+        biased;
+        _ = cancelled => Ok(()),
+        result = stream_speech_inner(app, job_id, text, voice_id, model_id, enhance, history) => result,
+    }
+}
+
+// Dropping this future on cancellation drops the WebSocket transport immediately.
+// The server's socket-close handler aborts provider work and settles used credits.
+async fn stream_speech_inner(
+    app: AppHandle,
+    job_id: u64,
+    text: String,
+    voice_id: String,
+    model_id: String,
+    enhance: bool,
+    history: SpeechHistory,
+) -> Result<(), String> {
     let SpeechHistory {
         enabled: archive,
         source,
@@ -788,9 +812,9 @@ pub async fn stream_speech(
     app_state.spoken.activate_pcm(player.clone());
     let history_root = archive.then(|| crate::history_dir(&app).ok()).flatten();
     // One recorder for the entire request, across all provider chunks.
-    let mut recorder = history_root
-        .as_deref()
-        .and_then(|dir| crate::history::PcmRecorder::new(dir).ok());
+    let mut recorder = history_root.as_deref().and_then(|dir| {
+        crate::history::ArchivedRecording::new(dir, "Fish Audio", &voice_id, &text, &source).ok()
+    });
     let mut buffer = Vec::<u8>::new();
     let mut received = 0u64;
     let mut is_started = false;
@@ -896,10 +920,8 @@ pub async fn stream_speech(
         tokio::time::sleep(Duration::from_millis(40)).await;
     }
     if app_state.job.lock().unwrap().is_current(job_id) {
-        if let (Some(recorder), Some(dir)) = (recorder, history_root.as_deref()) {
-            if let Err(error) = recorder.save(dir, "Fish Audio", &voice_id, &text, &source) {
-                eprintln!("[TextHalo] could not save hosted audio history: {error}");
-            }
+        if let Some(recorder) = recorder {
+            recorder.complete();
         }
     }
     Ok(())
