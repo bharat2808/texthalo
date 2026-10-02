@@ -134,9 +134,9 @@ After signing and notarizing the app and refreshing its updater archive/signatur
 
 ```sh
 node scripts/write-updater-manifest.mjs \
-  0.1.10 latest.json \
+  0.1.11 latest.json \
   --platform darwin-aarch64 \
-  https://github.com/bharat2808/texthalo/releases/download/v0.1.10/TextHalo-aarch64.app.tar.gz \
+  https://github.com/bharat2808/texthalo/releases/download/v0.1.11/TextHalo-aarch64.app.tar.gz \
   release/arm64/TextHalo.app.tar.gz release/arm64/TextHalo.app.tar.gz.sig
 ```
 
