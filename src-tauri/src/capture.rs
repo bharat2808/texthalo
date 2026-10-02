@@ -64,7 +64,7 @@ pub fn capture_with_source(
     restore: bool,
 ) -> Result<(String, SourceMetadata), CaptureError> {
     let source = platform::source_metadata();
-    platform::capture(mode, timeout_ms, restore).map(|text| (text, source))
+    capture(mode, timeout_ms, restore).map(|text| (text, source))
 }
 
 /// Is the Accessibility grant in place right now? Re-checked per invocation, never cached:
