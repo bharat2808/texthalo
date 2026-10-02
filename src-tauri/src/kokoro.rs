@@ -159,8 +159,9 @@ impl Kokoro {
         let offset = ids.len() * STYLE_WIDTH;
         let style = self.styles[offset..offset + STYLE_WIDTH].to_vec();
 
+        let input_ids = model_input_ids(ids);
         let inputs = ort::inputs![
-            "input_ids" => Tensor::from_array(([1, ids.len()], ids.to_vec()))
+            "input_ids" => Tensor::from_array(([1, input_ids.len()], input_ids))
                 .map_err(|e| format!("input_ids tensor: {e}"))?,
             "style" => Tensor::from_array(([1, STYLE_WIDTH], style))
                 .map_err(|e| format!("style tensor: {e}"))?,
@@ -177,6 +178,16 @@ impl Kokoro {
             .map_err(|e| format!("output tensor: {e}"))?;
         Ok(data.to_vec())
     }
+}
+
+/// Kokoro expects token 0 at both boundaries, as in KModel.forward. These tokens
+/// belong only to the model input; the voice style row uses the phoneme count.
+fn model_input_ids(phoneme_ids: &[i64]) -> Vec<i64> {
+    let mut ids = Vec::with_capacity(phoneme_ids.len() + 2);
+    ids.push(0);
+    ids.extend_from_slice(phoneme_ids);
+    ids.push(0);
+    ids
 }
 
 /// Parse the `model.vocab` half of a HuggingFace `tokenizer.json` into character → id.
@@ -293,6 +304,21 @@ pub fn write_wav(path: &Path, samples: &[f32], sample_rate: u32) -> Result<(), S
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn model_input_preserves_opening_phonemes_and_adds_both_boundaries() {
+        let phonemes = vec![16, 43, 50, 54, 31];
+        let input = model_input_ids(&phonemes);
+        assert_eq!(input, vec![0, 16, 43, 50, 54, 31, 0]);
+        assert_eq!(phonemes.len(), 5);
+
+        let longest_chunk = vec![16; 509];
+        let input = model_input_ids(&longest_chunk);
+        assert_eq!(input.len(), 511);
+        assert_eq!(&input[1..input.len() - 1], longest_chunk.as_slice());
+        assert_eq!(input.first(), Some(&0));
+        assert_eq!(input.last(), Some(&0));
+    }
 
     #[test]
     fn vocab_parses_the_model_section() {
