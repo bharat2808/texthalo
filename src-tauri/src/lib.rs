@@ -1136,6 +1136,7 @@ pub fn run() {
             hosted::desktop_voice_preview,
             hosted::desktop_clones,
             hosted::desktop_clone_status,
+            hosted::desktop_set_clone_active,
             hosted::desktop_delete_clone,
             hosted::desktop_upload_clone,
             hosted::desktop_checkout,

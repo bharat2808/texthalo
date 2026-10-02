@@ -584,6 +584,16 @@ pub async fn desktop_clone_status(voice_id: String) -> Result<Value, String> {
     .await
 }
 #[tauri::command]
+pub async fn desktop_set_clone_active(voice_id: String, active: bool) -> Result<Value, String> {
+    let encoded = url::form_urlencoded::byte_serialize(voice_id.as_bytes()).collect::<String>();
+    json_request(
+        reqwest::Method::PATCH,
+        &format!("/v1/voices/clones/{encoded}"),
+        Some(serde_json::json!({ "active": active })),
+    )
+    .await
+}
+#[tauri::command]
 pub async fn desktop_delete_clone(voice_id: String) -> Result<(), String> {
     let encoded = url::form_urlencoded::byte_serialize(voice_id.as_bytes()).collect::<String>();
     let response = request(
