@@ -733,6 +733,11 @@ struct StreamStart<'a> {
     enhance_text: bool,
 }
 
+pub struct SpeechHistory {
+    pub enabled: bool,
+    pub source: crate::capture::SourceMetadata,
+}
+
 pub async fn stream_speech(
     app: AppHandle,
     job_id: u64,
@@ -740,9 +745,12 @@ pub async fn stream_speech(
     voice_id: String,
     model_id: String,
     enhance: bool,
-    archive: bool,
-    source: crate::capture::SourceMetadata,
+    history: SpeechHistory,
 ) -> Result<(), String> {
+    let SpeechHistory {
+        enabled: archive,
+        source,
+    } = history;
     let token = access_token(false).await?;
     let base = origin()?;
     let url = base
@@ -798,8 +806,10 @@ pub async fn stream_speech(
                 buffer.extend_from_slice(&bytes);
                 let even = buffer.len() & !1;
                 let samples = buffer[..even]
-                    .chunks_exact(2)
-                    .map(|b| i16::from_le_bytes([b[0], b[1]]) as f32 / 32768.0)
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|b| i16::from_le_bytes(*b) as f32 / 32768.0)
                     .collect::<Vec<_>>();
                 buffer.drain(..even);
                 if !samples.is_empty() {

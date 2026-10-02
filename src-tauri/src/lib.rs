@@ -356,8 +356,10 @@ fn run_speech(
                 voice,
                 model_id,
                 enhance,
-                archive,
-                source.clone(),
+                hosted::SpeechHistory {
+                    enabled: archive,
+                    source: source.clone(),
+                },
             )
             .await;
             let state = app.state::<AppState>();

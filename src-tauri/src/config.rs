@@ -351,8 +351,10 @@ mod tests {
 
     #[test]
     fn onboarding_completion_round_trips() {
-        let mut settings = Settings::default();
-        settings.onboarding_completed = true;
+        let settings = Settings {
+            onboarding_completed: true,
+            ..Settings::default()
+        };
         let saved = serde_json::to_string(&settings).unwrap();
         assert!(parse_settings(&saved).unwrap().onboarding_completed);
     }
