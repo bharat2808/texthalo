@@ -267,12 +267,20 @@ mod tests {
         let mut recorder = PcmRecorder::new(&dir).unwrap();
         recorder.write(&vec![0.25; 12_000]);
         recorder.write(&vec![-0.25; 12_000]);
-        recorder.save(&dir, "Fish Audio", "voice-id", "Hello world").unwrap();
+        let source = crate::capture::SourceMetadata {
+            app_name: Some("TextEdit".into()),
+            window_title: Some("Example document".into()),
+        };
+        recorder
+            .save(&dir, "Fish Audio", "voice-id", "Hello world", &source)
+            .unwrap();
         let entries = list(&dir).unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].engine, "Fish Audio");
         assert_eq!(entries[0].voice, "voice-id");
         assert_eq!(entries[0].text, "Hello world");
+        assert_eq!(entries[0].app_name.as_deref(), Some("TextEdit"));
+        assert_eq!(entries[0].window_title.as_deref(), Some("Example document"));
         assert_eq!(entries[0].duration_seconds, Some(1.0));
         let reader = hound::WavReader::open(audio_path(&dir, &entries[0].id).unwrap()).unwrap();
         assert_eq!(reader.duration(), 24_000);
