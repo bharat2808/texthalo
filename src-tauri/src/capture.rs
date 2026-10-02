@@ -59,7 +59,7 @@ pub fn capture_with_source(
     timeout_ms: u64,
     restore: bool,
 ) -> Result<(String, SourceMetadata), CaptureError> {
-    let source = platform::source_metadata();
+    let source = platform::source_metadata(app);
     platform::capture(mode, timeout_ms, restore, Some(app)).map(|text| (text, source))
 }
 
@@ -95,7 +95,7 @@ mod platform {
     use core_foundation::string::{CFString, CFStringRef};
     use core_graphics::event::{CGEvent, CGEventFlags, CGEventTapLocation, KeyCode};
     use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
-    use objc2_app_kit::{NSPasteboard, NSPasteboardType, NSPasteboardTypeString};
+    use objc2_app_kit::{NSPasteboard, NSPasteboardType, NSPasteboardTypeString, NSWorkspace};
     use objc2_foundation::NSString;
     use std::sync::mpsc::sync_channel;
     use std::time::{Duration, Instant};
@@ -130,28 +130,30 @@ mod platform {
         unsafe { AXIsProcessTrustedWithOptions(options.as_concrete_TypeRef()) }
     }
 
-    pub fn source_metadata() -> SourceMetadata {
+    pub fn source_metadata(app: &tauri::AppHandle) -> SourceMetadata {
+        on_main_thread(Some(app), read_source_metadata).unwrap_or_default()
+    }
+
+    fn read_source_metadata() -> SourceMetadata {
         unsafe {
-            let system_wide = AXUIElementCreateSystemWide();
-            if system_wide.is_null() {
-                return SourceMetadata::default();
-            }
-            let focused = copy_attribute(system_wide, kAXFocusedUIElementAttribute);
-            CFRelease(system_wide as CFTypeRef);
-            let Some(focused) = focused else {
+            // A focused app can have no AXFocusedUIElement (for example an Electron
+            // editor with Accessibility support disabled). App attribution must not
+            // depend on that control being exposed.
+            let Some(frontmost) = NSWorkspace::sharedWorkspace().frontmostApplication() else {
                 return SourceMetadata::default();
             };
-            let mut pid: libc::pid_t = 0;
-            let got_pid = accessibility_sys::AXUIElementGetPid(focused as AXUIElementRef, &mut pid)
-                == kAXErrorSuccess;
-            CFRelease(focused);
-            if !got_pid || pid <= 0 {
-                return SourceMetadata::default();
-            }
+            let pid = frontmost.processIdentifier();
+            let app_name = frontmost
+                .localizedName()
+                .map(|name| name.to_string())
+                .filter(|name| !name.trim().is_empty());
 
             let app = accessibility_sys::AXUIElementCreateApplication(pid);
             if app.is_null() {
-                return SourceMetadata::default();
+                return SourceMetadata {
+                    app_name,
+                    window_title: None,
+                };
             }
             let window = copy_attribute(app, "AXFocusedWindow");
             CFRelease(app as CFTypeRef);
@@ -168,15 +170,6 @@ mod platform {
                     (!value.is_empty()).then_some(value)
                 })
             });
-            let mut name = [0i8; 256];
-            let app_name = (libc::proc_name(pid, name.as_mut_ptr().cast(), name.len() as u32) > 0)
-                .then(|| {
-                    std::ffi::CStr::from_ptr(name.as_ptr())
-                        .to_string_lossy()
-                        .trim()
-                        .to_string()
-                })
-                .filter(|name| !name.is_empty());
             SourceMetadata {
                 app_name,
                 window_title,
@@ -398,7 +391,7 @@ mod tests {
 mod platform {
     use super::{CaptureError, SourceMetadata};
 
-    pub fn source_metadata() -> SourceMetadata {
+    pub fn source_metadata(_app: &tauri::AppHandle) -> SourceMetadata {
         SourceMetadata::default()
     }
 
