@@ -1,3 +1,4 @@
+import AssistantSettings, { defaultAssistantPreferences, type AssistantPreferences } from "./AssistantSettings";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
@@ -127,7 +128,8 @@ type Settings = {
   accessibility_prompted: boolean;
   onboarding_completed: boolean;
   launch_at_login: boolean;
-  shortcuts: { speak: string; stop: string };
+  shortcuts: { speak: string; stop: string; transcribe: string; assistant: string };
+  assistant: AssistantPreferences;
   engine: EngineId;
   kokoro: KokoroSettings;
   chatterbox: ChatterboxSettings;
@@ -610,7 +612,7 @@ function MainApp() {
   const [installingUpdate, setInstallingUpdate] = useState(false);
   const [language, setLanguage] = useState<string | null>(null);
   const [showNovelty, setShowNovelty] = useState(false);
-  const [recording, setRecording] = useState<"speak" | "stop" | null>(null);
+  const [recording, setRecording] = useState<"speak" | "stop" | "transcribe" | "assistant" | null>(null);
   const [rateDraft, setRateDraft] = useState<number | null>(null);
   const [install, setInstall] = useState<InstallEvent | null>(null);
   // The last word from adding or deleting a reference voice. Kept rather than timed out: it is
@@ -1192,10 +1194,7 @@ function MainApp() {
       if (!accelerator) return;
       setRecording(null);
       void save({
-        shortcuts:
-          recording === "speak"
-            ? { ...shortcuts, speak: accelerator }
-            : { ...shortcuts, stop: accelerator },
+        shortcuts: { ...shortcuts, [recording]: accelerator },
       });
     };
     window.addEventListener("keydown", onKey, true);
@@ -2272,27 +2271,25 @@ function MainApp() {
           <div className="pane-inner">
             <h1 className="pane-title">Shortcuts</h1>
             <p className="pane-subtitle">
-              These work in every app. Speak plays the selection; Stop silences it.
+              Hold Transcribe or Assistant while you speak, then release. Speak reads your selection.
             </p>
 
             <Card title="Global shortcuts" icon={Icon.command()}>
-              {(["speak", "stop"] as const).map((role) => {
+              {(["speak", "transcribe", "assistant", "stop"] as const).map((role) => {
                 const isRecording = recording === role;
                 return (
                   <div className="field" key={role}>
                     <span className="field-label">
-                      {role === "speak" ? "Speak the selection" : "Stop speaking"}
+                      {{ speak: "Speak the selection", transcribe: "Hold to transcribe", assistant: "Hold to ask assistant", stop: "Stop / cancel" }[role]}
                     </span>
                     <Row
                       selected={!isRecording}
                       glyph={isRecording ? Icon.keyboard() : Icon.checkCircle()}
-                      title={isRecording ? "Press a key combo…" : settings.shortcuts[role]}
+                      title={isRecording ? "Press a key combo…" : settings.shortcuts[role] || "Not assigned"}
                       subtitle={
                         isRecording
                           ? "Press Esc to cancel"
-                          : role === "speak"
-                            ? "Reads the selected text aloud"
-                            : "Stops playback immediately"
+                          : { speak: "Reads selected text aloud", transcribe: "Release to transcribe into the original field", assistant: "Release to process your spoken request", stop: "Stops playback and cancels recording or generation" }[role]
                       }
                       mono={!isRecording}
                       onSelect={() => setRecording(role)}
@@ -2308,6 +2305,7 @@ function MainApp() {
                         </button>
                       }
                     />
+                    {(role === "transcribe" || role === "assistant") && settings.shortcuts[role] && <button className="plain" onClick={() => void save({ shortcuts: { ...settings.shortcuts, [role]: "" } })}>Clear shortcut</button>}
                   </div>
                 );
               })}
@@ -2322,6 +2320,9 @@ function MainApp() {
                 A combination needs at least one modifier (⌘ ⌃ ⌥ ⇧); function keys may be
                 used on their own.
               </div>
+            </Card>
+            <Card title="Transcription and assistant" icon={Icon.textCursor()}>
+              <AssistantSettings value={settings.assistant ?? defaultAssistantPreferences} onChange={assistant => void save({ assistant })} />
             </Card>
           </div>
         ) : null}

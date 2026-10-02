@@ -4,6 +4,8 @@
 //! appear when needed, then the tray is the persistent UI and settings open on demand. The
 //! real app is the Rust service below; the webview is a config editor and setup wizard.
 
+mod assistant;
+mod assistant_job;
 mod capture;
 pub mod chatterbox;
 pub mod config;
@@ -691,6 +693,7 @@ fn save_settings(app: AppHandle, settings: Settings) -> Result<UiState, String> 
     if changed_engine {
         stop_speaking(app.clone());
     }
+    assistant::cancel(&app);
     let refused = shortcuts::apply(&app)?;
     Ok(ui_state(&app, refused))
 }
@@ -1066,6 +1069,7 @@ fn install_tray(app: &AppHandle) -> tauri::Result<()> {
                 std::thread::spawn(move || speak_selection(&app, id));
             }
             "stop" => {
+                assistant::cancel(app);
                 stop_speaking(app.clone());
             }
             "settings" => show_settings(app),
@@ -1095,6 +1099,7 @@ fn install_tray(app: &AppHandle) -> tauri::Result<()> {
             }
             "quit" => {
                 app.state::<AppState>().spoken.stop();
+                assistant::shutdown(app);
                 app.exit(0);
             }
             _ => {}
@@ -1112,6 +1117,12 @@ pub fn run() {
         .on_window_event(|window, event| {
             // A menu-bar app keeps its settings window alive between visits. Destroying
             // it makes get_webview_window("main") return None when Settings is clicked.
+            if window.label() == "assistant" {
+                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                    api.prevent_close();
+                    assistant::cancel(window.app_handle());
+                }
+            }
             if window.label() == "main" {
                 if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                     api.prevent_close();
@@ -1131,20 +1142,39 @@ pub fn run() {
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, shortcut, event| {
-                    // Press only: `Released` would double-trigger every chord.
+                    let action = shortcuts::action_for(app, shortcut);
+                    if let Some(Action::Transcribe | Action::Assistant) = action {
+                        let mode = if matches!(action, Some(Action::Transcribe)) {
+                            assistant_job::Mode::Transcribe
+                        } else {
+                            assistant_job::Mode::Assistant
+                        };
+                        if event.state == ShortcutState::Pressed {
+                            assistant::pressed(
+                                app,
+                                mode,
+                                shortcut.key.to_string(),
+                                format!("{:?}", shortcut.mods),
+                            );
+                        } else {
+                            assistant::released(app, mode);
+                        }
+                        return;
+                    }
                     if event.state != ShortcutState::Pressed {
                         return;
                     }
-                    match shortcuts::action_for(app, shortcut) {
+                    match action {
                         Some(Action::Speak) => {
                             let app = app.clone();
                             let id = begin_speech(&app, Phase::Capturing);
                             std::thread::spawn(move || speak_selection(&app, id));
                         }
                         Some(Action::Stop) => {
+                            assistant::cancel(app);
                             stop_speaking(app.clone());
                         }
-                        None => {}
+                        Some(Action::Transcribe | Action::Assistant) | None => {}
                     }
                 })
                 .build(),
@@ -1184,6 +1214,7 @@ pub fn run() {
                 start_background_update_checks(handle.clone());
             }
             overlay::setup(&handle)?;
+            assistant::setup(&handle)?;
 
             // Show setup on a fresh install, and show permission guidance whenever access
             // is missing. Existing installs keep their saved onboarding state.
@@ -1198,6 +1229,8 @@ pub fn run() {
             update_safety::prepare_update_installation,
             update_safety::finish_update_installation,
             update_safety::record_update_failure,
+            assistant::assistant_state,
+            assistant::assistant_control,
             get_state,
             get_speech_status,
             get_update_overlay_status,

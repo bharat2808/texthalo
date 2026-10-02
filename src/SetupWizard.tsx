@@ -7,7 +7,7 @@ type WizardSettings = {
   launch_at_login: boolean;
   accessibility_prompted: boolean;
   engine: "apple" | "kokoro" | "chatterbox" | "fish";
-  shortcuts: { speak: string; stop: string };
+  shortcuts: { speak: string; stop: string; transcribe: string; assistant: string };
   voice: string | null;
 };
 

@@ -1,0 +1,17 @@
+.assistant-panel { color-scheme: light dark; box-sizing: border-box; min-height: 100vh; padding: 22px; background: light-dark(#faf9f6,#202220); color: light-dark(#242a25,#ecf0ea); font: 14px/1.5 -apple-system,BlinkMacSystemFont,sans-serif; }
+.assistant-panel * { box-sizing: border-box; }
+.assistant-panel header { display:flex; justify-content:space-between; align-items:center; }
+.assistant-panel h1 { margin:0; font-size:24px; font-weight:600; }
+.assistant-eyebrow { font-size:10px; letter-spacing:.15em; color:light-dark(#58694f,#a3be94); }
+.assistant-panel button,.assistant-settings button { padding:8px 12px; border:1px solid light-dark(#cdd5c9,#576250); border-radius:8px; background:light-dark(#fff,#2b3328); color:inherit; cursor:pointer; font:inherit; }
+.assistant-panel button:disabled { opacity:.45; cursor:default; }
+.assistant-panel button:focus-visible,.assistant-panel textarea:focus-visible { outline:2px solid #8aab75; outline-offset:2px; }
+.assistant-status { font-weight:500; }
+.assistant-source,.assistant-privacy,.assistant-help { font-size:12px; opacity:.75; }
+.assistant-error { color:light-dark(#ac3228,#ff9c91); }
+.assistant-result { white-space:pre-wrap; overflow-wrap:anywhere; max-height:260px; overflow:auto; padding:14px; border:1px solid light-dark(#dde1d8,#454b40); border-radius:10px; user-select:text; background:light-dark(#fff,#252923); }
+.assistant-actions { display:flex; flex-wrap:wrap; gap:8px; margin:12px 0; }
+.assistant-panel textarea,.assistant-settings textarea { display:block; width:100%; margin:6px 0 10px; padding:10px; border:1px solid light-dark(#cdd5c9,#576250); border-radius:8px; background:light-dark(#fff,#252923); color:inherit; font:inherit; resize:vertical; }
+.assistant-panel details { margin-top:18px; font-size:12px; }
+.assistant-panel summary { cursor:pointer; }
+.assistant-settings select { max-width:100%; padding:8px; }

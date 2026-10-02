@@ -34,7 +34,8 @@
     "createUpdaterArtifacts": true,
     "macOS": {
       "signingIdentity": "Developer ID Application: Bharat Bharat (BQVR37A9HG)",
-      "hardenedRuntime": true
+      "hardenedRuntime": true,
+      "entitlements": "entitlements.plist"
     },
     "category": "Productivity",
     "shortDescription": "Speak any selected text, from anywhere",
@@ -45,6 +46,9 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
+    ],
+    "externalBin": [
+      "binaries/texthalo-assistant"
     ]
   },
   "plugins": {

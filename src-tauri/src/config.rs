@@ -29,6 +29,8 @@ pub enum CaptureMode {
 pub struct Shortcuts {
     pub speak: String,
     pub stop: String,
+    pub transcribe: String,
+    pub assistant: String,
 }
 
 impl Default for Shortcuts {
@@ -36,6 +38,8 @@ impl Default for Shortcuts {
         Self {
             speak: "Cmd+Shift+S".to_string(),
             stop: "Cmd+Shift+X".to_string(),
+            transcribe: String::new(),
+            assistant: String::new(),
         }
     }
 }
@@ -135,6 +139,25 @@ impl Default for ChatterboxSettings {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
+pub struct AssistantSettings {
+    pub language: String,
+    pub instruction: String,
+    pub dictation_output: String,
+    pub context: String,
+}
+impl Default for AssistantSettings {
+    fn default() -> Self {
+        Self {
+            language: "en-US".into(),
+            instruction: String::new(),
+            dictation_output: "insert".into(),
+            context: "selection".into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Settings {
     /// Whether the macOS Accessibility prompt has been requested on a previous launch.
     pub accessibility_prompted: bool,
@@ -144,6 +167,7 @@ pub struct Settings {
     /// Whether TextHalo should register as a macOS login item.
     pub launch_at_login: bool,
     pub shortcuts: Shortcuts,
+    pub assistant: AssistantSettings,
     /// Which engine speaks. Apple unless the user opts into a local model.
     pub engine: Engine,
     pub kokoro: KokoroSettings,
@@ -187,6 +211,7 @@ impl Default for Settings {
             onboarding_completed: false,
             launch_at_login: false,
             shortcuts: Shortcuts::default(),
+            assistant: AssistantSettings::default(),
             engine: Engine::default(),
             kokoro: KokoroSettings::default(),
             chatterbox: ChatterboxSettings::default(),

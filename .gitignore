@@ -35,3 +35,6 @@ website/.env
 # Browser regression artifacts
 playwright-report/
 test-results/
+
+# Native assistant sidecar compiled by build.rs
+src-tauri/binaries/texthalo-assistant-*

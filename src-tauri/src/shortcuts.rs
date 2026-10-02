@@ -13,6 +13,8 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
 pub enum Action {
     Speak,
     Stop,
+    Transcribe,
+    Assistant,
 }
 
 #[derive(Debug, Clone)]
@@ -36,6 +38,8 @@ pub fn bindings(settings: &Settings) -> Result<Vec<Binding>, String> {
     for (accelerator, action) in [
         (&settings.shortcuts.speak, Action::Speak),
         (&settings.shortcuts.stop, Action::Stop),
+        (&settings.shortcuts.transcribe, Action::Transcribe),
+        (&settings.shortcuts.assistant, Action::Assistant),
     ] {
         if accelerator.trim().is_empty() {
             continue;
@@ -95,6 +99,20 @@ pub fn action_for(app: &AppHandle, shortcut: &Shortcut) -> Option<Action> {
 mod tests {
     use super::*;
     use crate::config::Settings;
+
+    #[test]
+    fn hold_shortcuts_are_optional_and_share_collision_validation() {
+        let mut settings: Settings =
+            serde_json::from_str(r#"{"shortcuts":{"speak":"Cmd+Shift+S","stop":"Cmd+Shift+X"}}"#)
+                .unwrap();
+        assert!(settings.shortcuts.transcribe.is_empty());
+        assert!(settings.shortcuts.assistant.is_empty());
+        settings.shortcuts.transcribe = "Cmd+Shift+D".into();
+        settings.shortcuts.assistant = "Cmd+Shift+A".into();
+        assert_eq!(bindings(&settings).unwrap().len(), 4);
+        settings.shortcuts.assistant = settings.shortcuts.transcribe.clone();
+        assert!(bindings(&settings).is_err());
+    }
 
     /// The shipped defaults must actually parse: a typo here means a silently
     /// hotkey-less app on first launch.
