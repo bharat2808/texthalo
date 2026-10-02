@@ -1033,10 +1033,19 @@ function MainApp() {
         void loadHostedVoices(hostedQueryRef.current, selected);
       }).catch((cause) => setAccountError(cause instanceof Error ? cause.message : String(cause)));
     }
-    const canClone = (account?.cloneEntitlement?.limit ?? 0) > 0;
-    const shouldLoadClones = account && (tab === "account" || (tab === "voice" && state?.settings.engine === "fish" && canClone));
-    if (shouldLoadClones) void invoke<{items: HostedClone[]}>("desktop_clones").then((v) => setHostedClones(v.items)).catch((cause) => setAccountError(cause instanceof Error ? cause.message : String(cause)));
-  }, [tab, state?.settings.engine, state?.system_language, account, loadHostedVoices]);
+    let current = true;
+    const shouldLoadClones = account && (tab === "account" || (tab === "voice" && state?.settings.engine === "fish"));
+    if (shouldLoadClones) void invoke<{items: HostedClone[]}>("desktop_clones").then((v) => {
+      if (!current) return;
+      setHostedClones(v.items);
+      const settings = latestState.current?.settings;
+      const selectedClone = v.items.find((clone) => clone.id === settings?.fish.voice_id);
+      if (settings && selectedClone && (selectedClone.access === "disabled" || (account.cloneEntitlement?.limit ?? 0) <= 0)) {
+        void save({ fish: { ...settings.fish, voice_id: "" } });
+      }
+    }).catch((cause) => { if (current) setAccountError(cause instanceof Error ? cause.message : String(cause)); });
+    return () => { current = false; };
+  }, [tab, state?.settings.engine, state?.system_language, account, loadHostedVoices, save]);
 
   useEffect(() => {
     if (!pendingCloneKey) return;
@@ -1772,7 +1781,7 @@ function MainApp() {
                       </div>
                     ))}
                   </div>
-                  {hostedClones.length > 0 ? <div className="field"><span className="field-label">My hosted clones</span><div className="row-stack">{hostedClones.map((clone) => { const ready = clone.status === "trained" && clone.access !== "disabled"; const selected = settings.fish.voice_id === clone.id; const status = clone.access === "disabled" ? "Inactive slot" : clone.status === "trained" ? "Ready" : clone.status === "failed" ? "Training failed" : clone.status === "created" ? "Queued" : "Training"; return <Row key={clone.id} selected={selected} disabled={!ready} glyph={selected && ready ? Icon.checkCircle() : Icon.circle()} title={clone.name} subtitle={ready ? "Clone · Ready to use" : clone.access === "disabled" ? "Clone · Stored but inactive for your current plan" : `Clone · ${status} · unavailable until training completes`} badge={selected ? "Selected" : status} onSelect={() => void save({ fish: { ...settings.fish, voice_id: clone.id } })} />; })}</div></div> : null}
+                  {hostedClones.length > 0 ? <div className="field"><span className="field-label">My hosted clones</span><div className="row-stack">{hostedClones.map((clone) => { const inactive = (account?.cloneEntitlement?.limit ?? 0) <= 0 || clone.access === "disabled"; const ready = clone.status === "trained" && !inactive; const selected = settings.fish.voice_id === clone.id; const status = inactive ? "Inactive slot" : clone.status === "trained" ? "Ready" : clone.status === "failed" ? "Training failed" : clone.status === "created" ? "Queued" : "Training"; return <Row key={clone.id} selected={selected} disabled={!ready} glyph={selected && ready ? Icon.checkCircle() : Icon.circle()} title={clone.name} subtitle={ready ? "Clone · Ready to use" : inactive ? "Clone · Stored but inactive for your current plan" : `Clone · ${status} · unavailable until training completes`} badge={selected ? "Selected" : status} onSelect={() => void save({ fish: { ...settings.fish, voice_id: clone.id } })} />; })}</div></div> : null}
                   {hostedVoices.length === 0 && !accountError && !hostedLoading ? <span className="card-note">No voices loaded. Search or refresh to browse.</span> : null}
                   <label className="toggle-row"><input type="checkbox" checked={settings.fish.enhance_text} onChange={(event) => void save({ fish: { ...settings.fish, enhance_text: event.target.checked } })} /><span>Enhance text with semantic delivery cues</span></label>
                 </Card>
