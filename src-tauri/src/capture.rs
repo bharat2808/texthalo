@@ -118,25 +118,36 @@ mod platform {
     pub fn source_metadata() -> SourceMetadata {
         unsafe {
             let system_wide = AXUIElementCreateSystemWide();
-            if system_wide.is_null() { return SourceMetadata::default(); }
+            if system_wide.is_null() {
+                return SourceMetadata::default();
+            }
             let focused = copy_attribute(system_wide, kAXFocusedUIElementAttribute);
             CFRelease(system_wide as CFTypeRef);
-            let Some(focused) = focused else { return SourceMetadata::default(); };
+            let Some(focused) = focused else {
+                return SourceMetadata::default();
+            };
             let mut pid: libc::pid_t = 0;
             let got_pid = accessibility_sys::AXUIElementGetPid(focused as AXUIElementRef, &mut pid)
                 == kAXErrorSuccess;
             CFRelease(focused);
-            if !got_pid || pid <= 0 { return SourceMetadata::default(); }
+            if !got_pid || pid <= 0 {
+                return SourceMetadata::default();
+            }
 
             let app = accessibility_sys::AXUIElementCreateApplication(pid);
-            if app.is_null() { return SourceMetadata::default(); }
+            if app.is_null() {
+                return SourceMetadata::default();
+            }
             let window = copy_attribute(app, "AXFocusedWindow");
             CFRelease(app as CFTypeRef);
             let window_title = window.and_then(|window| {
                 let title = copy_attribute(window as AXUIElementRef, "AXTitle");
                 CFRelease(window);
                 title.and_then(|title| {
-                    if CFGetTypeID(title) != CFString::type_id() { CFRelease(title); return None; }
+                    if CFGetTypeID(title) != CFString::type_id() {
+                        CFRelease(title);
+                        return None;
+                    }
                     let value = CFString::wrap_under_create_rule(title as CFStringRef).to_string();
                     let value = value.trim().to_string();
                     (!value.is_empty()).then_some(value)
@@ -144,9 +155,17 @@ mod platform {
             });
             let mut name = [0i8; 256];
             let app_name = (libc::proc_name(pid, name.as_mut_ptr().cast(), name.len() as u32) > 0)
-                .then(|| std::ffi::CStr::from_ptr(name.as_ptr()).to_string_lossy().trim().to_string())
+                .then(|| {
+                    std::ffi::CStr::from_ptr(name.as_ptr())
+                        .to_string_lossy()
+                        .trim()
+                        .to_string()
+                })
                 .filter(|name| !name.is_empty());
-            SourceMetadata { app_name, window_title }
+            SourceMetadata {
+                app_name,
+                window_title,
+            }
         }
     }
 
@@ -339,7 +358,9 @@ mod tests {
 mod platform {
     use super::{CaptureError, SourceMetadata};
 
-    pub fn source_metadata() -> SourceMetadata { SourceMetadata::default() }
+    pub fn source_metadata() -> SourceMetadata {
+        SourceMetadata::default()
+    }
 
     pub fn is_trusted() -> bool {
         false

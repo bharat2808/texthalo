@@ -349,9 +349,17 @@ fn run_speech(
         let model_id = settings.fish.model_id.clone();
         let enhance = settings.fish.enhance_text;
         tauri::async_runtime::spawn(async move {
-            let result =
-                hosted::stream_speech(app.clone(), id, text.clone(), voice, model_id, enhance, archive, source.clone())
-                    .await;
+            let result = hosted::stream_speech(
+                app.clone(),
+                id,
+                text.clone(),
+                voice,
+                model_id,
+                enhance,
+                archive,
+                source.clone(),
+            )
+            .await;
             let state = app.state::<AppState>();
             let mut job = state.job.lock().unwrap();
             if job.is_current(id) {
@@ -574,7 +582,15 @@ fn speak_given(app: &AppHandle, id: u64, text: String) {
     let settings = app.state::<AppState>().settings.lock().unwrap().clone();
     let truncated = text.chars().count() > settings.max_chars;
     let text = text.chars().take(settings.max_chars).collect();
-    run_speech(app, id, settings, text, truncated, true, capture::SourceMetadata::default());
+    run_speech(
+        app,
+        id,
+        settings,
+        text,
+        truncated,
+        true,
+        capture::SourceMetadata::default(),
+    );
 }
 
 fn show_settings(app: &AppHandle) {
@@ -613,15 +629,22 @@ fn save_settings(app: AppHandle, settings: Settings) -> Result<UiState, String> 
     shortcuts::bindings(&settings)?; // validate before writing anything
     use tauri_plugin_autostart::ManagerExt;
     let manager = app.autolaunch();
-    let launch_changed = manager
-        .is_enabled()
-        .unwrap_or_else(|_| app.state::<AppState>().settings.lock().unwrap().launch_at_login)
-        != settings.launch_at_login;
+    let launch_changed = manager.is_enabled().unwrap_or_else(|_| {
+        app.state::<AppState>()
+            .settings
+            .lock()
+            .unwrap()
+            .launch_at_login
+    }) != settings.launch_at_login;
     if launch_changed {
         if settings.launch_at_login {
-            manager.enable().map_err(|e| format!("enable launch at login: {e}"))?;
+            manager
+                .enable()
+                .map_err(|e| format!("enable launch at login: {e}"))?;
         } else {
-            manager.disable().map_err(|e| format!("disable launch at login: {e}"))?;
+            manager
+                .disable()
+                .map_err(|e| format!("disable launch at login: {e}"))?;
         }
     }
     config::save(&app, &settings)?;
@@ -684,7 +707,17 @@ fn preview_voice(
     }
     let sample =
         text.unwrap_or_else(|| "This is how I sound when reading your selection.".to_string());
-    std::thread::spawn(move || run_speech(&app, id, settings, sample, false, false, capture::SourceMetadata::default()));
+    std::thread::spawn(move || {
+        run_speech(
+            &app,
+            id,
+            settings,
+            sample,
+            false,
+            false,
+            capture::SourceMetadata::default(),
+        )
+    });
 }
 
 #[tauri::command]

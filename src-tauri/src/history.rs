@@ -78,12 +78,21 @@ impl PcmRecorder {
     }
 
     /// Commit one complete request, regardless of how many audio packets it contained.
-    pub fn save(self, dir: &Path, engine: &str, voice: &str, text: &str, source: &crate::capture::SourceMetadata) -> Result<(), String> {
+    pub fn save(
+        self,
+        dir: &Path,
+        engine: &str,
+        voice: &str,
+        text: &str,
+        source: &crate::capture::SourceMetadata,
+    ) -> Result<(), String> {
         if self.samples_written == 0 {
             return Ok(());
         }
         let seconds = self.samples_written as f64 / 24_000.0;
-        let path = self.finish().ok_or("Could not finish audio history recording")?;
+        let path = self
+            .finish()
+            .ok_or("Could not finish audio history recording")?;
         if let Err(error) = save_entry(dir, &path, engine, voice, text, Some(seconds), source) {
             let _ = std::fs::remove_file(path);
             return Err(error);

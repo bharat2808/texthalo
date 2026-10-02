@@ -780,7 +780,8 @@ pub async fn stream_speech(
     app_state.spoken.activate_pcm(player.clone());
     let history_root = archive.then(|| crate::history_dir(&app).ok()).flatten();
     // One recorder for the entire request, across all provider chunks.
-    let mut recorder = history_root.as_deref()
+    let mut recorder = history_root
+        .as_deref()
         .and_then(|dir| crate::history::PcmRecorder::new(dir).ok());
     let mut buffer = Vec::<u8>::new();
     let mut received = 0u64;
