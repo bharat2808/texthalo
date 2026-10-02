@@ -14,6 +14,10 @@ import "./App.css";
 
 /* ── types mirroring the Rust side ─────────────────────────────────── */
 
+type ShortcutRole = "speak" | "stop" | "transcribe" | "assistant";
+
+const shortcutLabels: Record<ShortcutRole, string> = { speak: "Listen", stop: "Stop", transcribe: "Dictate", assistant: "Assistant" };
+
 type CaptureMode = "ax_then_copy" | "ax_only" | "copy_only";
 
 type Voice = { name: string; locale: string; novelty: boolean };
@@ -614,7 +618,9 @@ function MainApp() {
   const [installingUpdate, setInstallingUpdate] = useState(false);
   const [language, setLanguage] = useState<string | null>(null);
   const [showNovelty, setShowNovelty] = useState(false);
-  const [recording, setRecording] = useState<"speak" | "stop" | "transcribe" | "assistant" | null>(null);
+  const [shortcutFeedback, setShortcutFeedback] = useState<{ role: ShortcutRole; message: string; error: boolean } | null>(null);
+  const [shortcutSaving, setShortcutSaving] = useState(false);
+  const [recording, setRecording] = useState<ShortcutRole | null>(null);
   const [rateDraft, setRateDraft] = useState<number | null>(null);
   const [install, setInstall] = useState<InstallEvent | null>(null);
   // The last word from adding or deleting a reference voice. Kept rather than timed out: it is
@@ -1178,26 +1184,46 @@ function MainApp() {
     voice.unavailable?.includes("espeak-ng"),
   ).length;
 
-  /* Keyboard recording for the shortcut rows. */
+  const saveShortcut = useCallback(async (role: ShortcutRole, accelerator: string) => {
+    const current = latestState.current;
+    if (!current) return;
+    setRecording(null); setShortcutSaving(true);
+    try {
+      const saved = await save({ shortcuts: { ...current.settings.shortcuts, [role]: accelerator } });
+      const refused = latestState.current?.refused_shortcuts ?? [];
+      setShortcutFeedback({ role, error: !saved || refused.length > 0,
+        message: !saved ? "Could not save this shortcut. Try another combination." : refused.length > 0 ? `macOS could not register ${refused.join(", ")}. Choose another shortcut.` : accelerator ? "Shortcut saved" : "Shortcut cleared" });
+    } finally { setShortcutSaving(false); }
+  }, [save]);
+
+  useEffect(() => { setRecording(null); setShortcutFeedback(null); }, [tab]);
+
+  /* The same recorder serves feature screens, setup, and Settings. */
   useEffect(() => {
     if (!recording || !state) return;
     const shortcuts = state.settings.shortcuts;
     const onKey = (event: KeyboardEvent) => {
+      if (event.repeat) return;
+      // Keep keyboard navigation and the Cancel button available while recording.
+      if (!event.metaKey && !event.ctrlKey && !event.altKey &&
+          (event.key === "Tab" || (event.target instanceof HTMLButtonElement && ["Enter", " "].includes(event.key)))) return;
       event.preventDefault();
       if (event.key === "Escape") {
-        setRecording(null);
+        setRecording(null); setShortcutFeedback(null);
         return;
       }
       const accelerator = acceleratorFromEvent(event);
       if (!accelerator) return;
-      setRecording(null);
-      void save({
-        shortcuts: { ...shortcuts, [recording]: accelerator },
-      });
+      const duplicate = (Object.keys(shortcuts) as ShortcutRole[]).find(role => role !== recording && shortcuts[role]?.toLowerCase() === accelerator.toLowerCase());
+      if (duplicate) {
+        setShortcutFeedback({ role: recording, error: true, message: `Already used by ${shortcutLabels[duplicate]}. Try another combination.` });
+        return;
+      }
+      void saveShortcut(recording, accelerator);
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [recording, save, state]);
+  }, [recording, saveShortcut, state]);
 
   const preview = useCallback(
     (voice: Voice | string | null) => {
@@ -1422,6 +1448,26 @@ function MainApp() {
             }
           : { kind: "secondary" as const, text: "Ready" };
 
+  const enableAccessibility = async () => {
+    if (settings.accessibility_prompted) {
+      await invoke("open_accessibility_settings");
+    } else {
+      const next = await invoke<UiState>("request_accessibility");
+      latestState.current = next;
+      setState(next);
+    }
+  };
+
+  const shortcutControl = (role: ShortcutRole) => <div className="shortcut-control">
+    <div className="task-shortcut">
+      <kbd aria-live="polite">{recording === role ? "Press a key combination…" : settings.shortcuts[role] || "No shortcut yet"}</kbd>
+      <button className="plain" disabled={shortcutSaving} onClick={() => { setShortcutFeedback(null); setRecording(recording === role ? null : role); }}>{recording === role ? "Cancel" : "Change shortcut"}</button>
+      {(role === "transcribe" || role === "assistant") && settings.shortcuts[role] && recording !== role ? <button className="text" disabled={shortcutSaving} onClick={() => void saveShortcut(role, "")}>Clear shortcut</button> : null}
+    </div>
+    {recording === role ? <p className="card-note">Press your new shortcut. Esc to cancel.</p> : null}
+    {shortcutFeedback?.role === role ? <p className={shortcutFeedback.error ? "shortcut-error" : "card-note"} role={shortcutFeedback.error ? "alert" : "status"}>{shortcutFeedback.message}</p> : null}
+  </div>;
+
   const settingsTabs: { id: Tab; title: string }[] = [
     { id: "general", title: "General" },
     { id: "shortcuts", title: "Shortcuts" },
@@ -1541,17 +1587,17 @@ function MainApp() {
             <h2 id="listen-title">Turn text into speech.</h2>
             <p>Select text in any app, then press <kbd>{settings.shortcuts.speak || "Set a shortcut"}</kbd>.</p>
             <div className="home-voice"><span>{activeEngine?.label ?? "Apple voices"}</span><span>{settings.engine === "fish" ? "Hosted" : "On this Mac"}</span></div>
-            {!state.trusted ? <div className="home-notice"><span>Allow Accessibility to read selected text.</span><button className="plain" onClick={() => setTab("permissions")}>Enable access</button></div>
+            {!state.trusted ? <div className="home-notice"><span>Allow Accessibility to read selected text.</span><button className="plain" onClick={() => void enableAccessibility().catch(cause => setError(String(cause)))}>{settings.accessibility_prompted ? "Open Accessibility Settings" : "Enable access"}</button></div>
               : activeEngine && !activeEngine.can_speak ? <div className="home-notice"><span>{activeEngine.status}</span><button className="plain" onClick={() => setTab("voice")}>Set up voice</button></div>
-              : !settings.shortcuts.speak || state.refused_shortcuts.includes(settings.shortcuts.speak) ? <div className="home-notice"><span>Choose an available listening shortcut.</span><button className="plain" onClick={() => setTab("shortcuts")}>Set shortcut</button></div>
+              : !settings.shortcuts.speak || state.refused_shortcuts.includes(settings.shortcuts.speak) ? <div className="home-notice"><span>Choose an available listening shortcut.</span></div>
               : <p className="ready-label">{state.secure_input ? "Leave the password field to start listening." : "Ready when you are"}</p>}
+            {shortcutControl("speak")}
             <div className="inline"><button className="primary-button" onClick={() => setTab("voice")}>Choose a voice</button><button className="plain" disabled={!activeEngine?.can_speak || state.speaking} onClick={() => preview(settings.engine === "apple" ? settings.voice : activeEngine?.selected_voice ?? null)}>Preview voice</button>{state.speaking ? <button className="plain" onClick={() => void invoke("stop_speaking").catch(cause => setError(String(cause)))}>Stop</button> : null}</div>
           </section>
           <div className="home-tasks">
             <section className="task-card"><h2>Dictate</h2><p>Speak and put your words into any text field.</p><kbd>{settings.shortcuts.transcribe || "Set up a shortcut"}</kbd><button className="plain" onClick={() => setTab("transcription")}>Set up dictation</button></section>
             <section className="task-card"><h2>Assistant</h2><p>Ask to write, edit, or read something aloud.</p><kbd>{settings.shortcuts.assistant || "Set up a shortcut"}</kbd><button className="plain" onClick={() => setTab("assistant")}>Set up Assistant</button></section>
           </div>
-          <TaskReadiness mode="overview" onPermissions={() => setTab("permissions")} />
           <button className="text home-history" onClick={() => setTab("history")}>Open your history</button>
         </div> : null}
 
@@ -2272,16 +2318,16 @@ function MainApp() {
         {tab === "transcription" ? <div className="pane-inner">
           <h1 className="pane-title">Dictate</h1>
           <p className="pane-subtitle">Hold your shortcut, speak, then release.</p>
-          <div className="task-shortcut"><kbd>{settings.shortcuts.transcribe || "No shortcut yet"}</kbd><button className="plain" onClick={() => setTab("shortcuts")}>Change shortcut</button></div>
-          <TaskReadiness mode="dictate" onPermissions={() => setTab("permissions")} />
+          {shortcutControl("transcribe")}
+          <TaskReadiness mode="dictate" needsAccessibility={(settings.assistant ?? defaultAssistantPreferences).dictation_output === "insert"} accessibilityPrompted={settings.accessibility_prompted} onAccessibility={enableAccessibility} />
           <Card title="Preferences" icon={Icon.textCursor()}><TranscriptionSettings value={settings.assistant ?? defaultAssistantPreferences} onChange={assistant => void save({ assistant })} /></Card>
           <button className="text" onClick={() => { setHistoryView("transcripts"); setTab("history"); }}>View transcripts</button>
         </div> : null}
         {tab === "assistant" ? <div className="pane-inner">
           <h1 className="pane-title">Assistant</h1>
           <p className="pane-subtitle">Hold your shortcut and ask to write, edit, or read aloud.</p>
-          <div className="task-shortcut"><kbd>{settings.shortcuts.assistant || "No shortcut yet"}</kbd><button className="plain" onClick={() => setTab("shortcuts")}>Change shortcut</button></div>
-          <TaskReadiness mode="assistant" needsScreen={settings.assistant?.context === "screen"} onPermissions={() => setTab("permissions")} />
+          {shortcutControl("assistant")}
+          <TaskReadiness mode="assistant" needsScreen={settings.assistant?.context === "screen"} accessibilityPrompted={settings.accessibility_prompted} onAccessibility={enableAccessibility} />
           <Card title="Make it yours" icon={Icon.textCursor()}><AssistantSettings value={settings.assistant ?? defaultAssistantPreferences} onChange={assistant => void save({ assistant })} /></Card>
           <p className="card-note">{settings.engine === "fish" ? "Generation stays on this Mac. Narration sends the resulting text to TextHalo and Fish Audio." : "Generation and your selected voice run on this Mac."}</p>
         </div> : null}
@@ -2297,40 +2343,7 @@ function MainApp() {
               {title:"Listen",role:"speak"}, {title:"Dictate",role:"transcribe"},
               {title:"Assistant",role:"assistant"}, {title:"Stop / cancel",role:"stop"},
             ] as const).map(({title,role}) => <Card key={role} title={title} icon={Icon.command()}>
-              {(() => {
-                const isRecording = recording === role;
-                return (
-                  <div className="field" key={role}>
-                    <span className="field-label">
-                      {{ speak: "Speak the selection", transcribe: "Hold to transcribe", assistant: "Hold to ask assistant", stop: "Stop / cancel" }[role]}
-                    </span>
-                    <Row
-                      selected={!isRecording}
-                      glyph={isRecording ? Icon.keyboard() : Icon.checkCircle()}
-                      title={isRecording ? "Press a key combo…" : settings.shortcuts[role] || "Not assigned"}
-                      subtitle={
-                        isRecording
-                          ? "Press Esc to cancel"
-                          : { speak: "Reads selected text aloud", transcribe: "Release to transcribe into the original field", assistant: "Release to process your spoken request", stop: "Stops playback and cancels recording or generation" }[role]
-                      }
-                      mono={!isRecording}
-                      onSelect={() => setRecording(role)}
-                      trailing={
-                        <button
-                          className="plain"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            setRecording(isRecording ? null : role);
-                          }}
-                        >
-                          {isRecording ? "Cancel" : "Record…"}
-                        </button>
-                      }
-                    />
-                    {(role === "transcribe" || role === "assistant") && settings.shortcuts[role] && <button className="plain" onClick={() => void save({ shortcuts: { ...settings.shortcuts, [role]: "" } })}>Clear shortcut</button>}
-                  </div>
-                );
-              })()}
+              {shortcutControl(role)}
             </Card>)}
             <Card title="Shortcut availability" icon={Icon.keyboard()}>
               {state.refused_shortcuts.length > 0 ? (

@@ -892,3 +892,15 @@ button:focus-visible, summary:focus-visible, select:focus-visible, input:focus-v
   .section-nav { padding: 14px 18px 0; }
   .history-tabs { padding: 0; }
 }
+
+.shortcut-control { display: grid; gap: 7px; }
+.shortcut-control p { margin: 0; }
+.shortcut-error { color: var(--danger); font-size: 12px; overflow-wrap: anywhere; }
+.listen-hero .shortcut-control { margin: 16px 0; }
+.feature-permissions { padding: 16px; border: 1px solid var(--separator); border-radius: var(--radius-card); background: color-mix(in srgb, var(--control-bg) 50%, transparent); }
+.permission-summary { display: flex; justify-content: space-between; gap: 12px; }
+.permission-summary > span { color: var(--label-secondary); font-size: 12px; }
+.permission-checklist { padding: 0; margin: 10px 0 0; list-style: none; }
+.permission-checklist li { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 12px; padding: 10px 0; border-top: 1px solid var(--hairline); }
+.permission-checklist li > div { display: grid; gap: 3px; }
+.permission-checklist small { color: var(--label-secondary); }

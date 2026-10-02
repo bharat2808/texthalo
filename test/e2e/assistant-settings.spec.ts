@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
-async function boot(page: Page, untrusted = false, speechStatus = 3, onboarding = false, engine = "apple") {
-  await page.addInitScript(({untrusted,speechStatus,onboarding,engine}) => {
+async function boot(page: Page, untrusted = false, speechStatus = 3, onboarding = false, engine = "apple", availability: Record<string, unknown> = {}) {
+  await page.addInitScript(({untrusted,speechStatus,onboarding,engine,availability}) => {
     const state = { settings: {
       accessibility_prompted:!untrusted, onboarding_completed:!onboarding, launch_at_login:false,
       shortcuts:{speak:"Alt+S",stop:"Alt+X",transcribe:"",assistant:""},
@@ -11,7 +11,7 @@ async function boot(page: Page, untrusted = false, speechStatus = 3, onboarding 
       fish:{voice_id:"",model_id:"fish-s21-pro",enhance_text:false,privacy_accepted:false}
     }, voices:[], engines:[{id:"apple",label:"Apple voices",summary:"",can_speak:true,status:"Ready",blocked_reason:null,needs_download:false,download_bytes:0,repo:"",voices:[],ref_voices:[],selected_voice:""}], trusted:!untrusted,secure_input:false,speaking:false,refused_shortcuts:[],system_language:"en_US",config_path:"/test/settings.json" };
     let entries = [{id:"1",createdAt:1700000000000,text:"Synthetic transcript",source:"Test editor"}];
-    Object.assign(window, {__calls:[],__state:state,__native:async (command:string,args:any) => {
+    Object.assign(window, {__availability:{model:"available",microphone:3,recognition:speechStatus,screen:false,accessibility:!untrusted,...availability},__calls:[],__state:state,__native:async (command:string,args:any) => {
       (window as any).__calls.push({command,args});
       switch(command) {
         case "get_state": return structuredClone(state);
@@ -20,14 +20,16 @@ async function boot(page: Page, untrusted = false, speechStatus = 3, onboarding 
         case "desktop_is_signed_in": return false;
         case "get_audio_history": return [];
         case "desktop_billing_plans": return {plans:[]};
-        case "assistant_state": return {availability:{model:"available",microphone:3,recognition:speechStatus,screen:false,accessibility:true}};
-        case "assistant_control": return null;
+        case "assistant_state": return {availability:structuredClone((window as any).__availability)};
+        case "assistant_control": if ((window as any).__permissionError && args.command.startsWith("permission_")) throw new Error("Permission request failed"); return null;
+        case "request_accessibility": state.settings.accessibility_prompted = true; return structuredClone(state);
+        case "open_accessibility_settings": return null;
         case "preview_voice": return null;
         case "transcription_history": if(args.command === "delete") entries=entries.filter(e=>e.id!==args.id); if(args.command === "clear") entries=[]; return entries;
         default: throw new Error(command);
       }
     }});
-  }, {untrusted,speechStatus,onboarding,engine});
+  }, {untrusted,speechStatus,onboarding,engine,availability});
   await page.route("**/src/main.tsx", route => route.fulfill({contentType:"application/javascript",body:`
     import { mockIPC } from "/node_modules/@tauri-apps/api/mocks.js";
     mockIPC(window.__native,{shouldMockEvents:true});
@@ -144,4 +146,127 @@ test("setup preview selects its voice source before playing", async ({page}) => 
   await expect.poll(() => page.evaluate(() => (window as any).__state.settings.engine)).toBe("apple");
   const commands = await page.evaluate(() => (window as any).__calls.map((call:any) => call.command));
   expect(commands.indexOf("save_settings")).toBeLessThan(commands.indexOf("preview_voice"));
+});
+
+for (const [screen, role] of [["Dictate", "transcribe"], ["Assistant", "assistant"]]) {
+  test(`${screen} changes and cancels shortcuts without leaving the feature`, async ({page}) => {
+    await boot(page);
+    await page.getByRole("button", {name:screen,exact:true}).click();
+    await page.getByRole("button", {name:"Change shortcut",exact:true}).click();
+    await expect(page.getByRole("heading", {name:screen,exact:true})).toBeVisible();
+    await page.keyboard.press("Control+Shift+D");
+    await expect.poll(() => page.evaluate(role => (window as any).__state.settings.shortcuts[role], role)).toBe("Ctrl+Shift+D");
+    await expect(page.getByText("Shortcut saved", {exact:true})).toBeVisible();
+    await page.getByRole("button", {name:"Change shortcut",exact:true}).click();
+    await page.keyboard.press("Escape");
+    expect(await page.evaluate(role => (window as any).__state.settings.shortcuts[role], role)).toBe("Ctrl+Shift+D");
+  });
+}
+
+test("inline shortcut rejects a duplicate and lets the user retry", async ({page}) => {
+  await boot(page);
+  await page.getByRole("button", {name:"Dictate",exact:true}).click();
+  await page.getByRole("button", {name:"Change shortcut",exact:true}).click();
+  await page.keyboard.press("Alt+S");
+  await expect(page.getByRole("alert")).toContainText(/already used/i);
+  expect(await page.evaluate(() => (window as any).__state.settings.shortcuts.transcribe)).toBe("");
+  await page.keyboard.press("Control+Shift+D");
+  await expect.poll(() => page.evaluate(() => (window as any).__state.settings.shortcuts.transcribe)).toBe("Ctrl+Shift+D");
+});
+
+test("Assistant requests only missing permissions and reflects grants inline", async ({page}) => {
+  await boot(page, false, 0);
+  await page.getByRole("button", {name:"Assistant",exact:true}).click();
+  await expect(page.getByRole("button", {name:"Enable Microphone",exact:true})).toHaveCount(0);
+  await expect(page.getByRole("button", {name:"Enable Screen Recording",exact:true})).toHaveCount(0);
+  await page.getByRole("button", {name:"Enable Speech Recognition",exact:true}).click();
+  await expect(page.getByRole("button", {name:"Waiting for macOS…",exact:true})).toBeDisabled();
+  await expect(page.getByRole("heading", {name:"Assistant",exact:true})).toBeVisible();
+  expect(await page.evaluate(() => (window as any).__calls.filter((call:any) => call.args?.command?.startsWith("permission_")).map((call:any) => call.args.command))).toEqual(["permission_speech"]);
+  await page.evaluate(async () => {
+    (window as any).__availability.recognition = 3;
+    const {emit} = await import("/node_modules/@tauri-apps/api/event.js");
+    await emit("texthalo:assistant-availability", structuredClone((window as any).__availability));
+  });
+  await expect(page.getByRole("button", {name:"Waiting for macOS…",exact:true})).toHaveCount(0);
+  await expect(page.getByRole("region", {name:"Assistant access"}).getByRole("status")).toHaveText("Ready");
+  await page.getByLabel("Assistant context").selectOption("screen");
+  await page.getByRole("button", {name:"Enable Screen Recording",exact:true}).click();
+  expect(await page.evaluate(() => (window as any).__calls.filter((call:any) => call.args?.command?.startsWith("permission_")).map((call:any) => call.args.command))).toEqual(["permission_speech", "permission_screen"]);
+});
+
+test("Dictate opens denied permission settings without requesting other access", async ({page}) => {
+  await boot(page, false, 1);
+  await page.getByRole("button", {name:"Dictate",exact:true}).click();
+  await page.getByRole("button", {name:"Open Speech Recognition Settings",exact:true}).click();
+  await expect(page.getByRole("heading", {name:"Dictate",exact:true})).toBeVisible();
+  expect(await page.evaluate(() => (window as any).__calls.filter((call:any) => call.args?.command?.startsWith("settings_")).map((call:any) => call.args.command))).toEqual(["settings_speech"]);
+});
+
+test("Listen requests Accessibility directly from Home", async ({page}) => {
+  await boot(page, true);
+  await page.getByRole("button", {name:"Enable access",exact:true}).click();
+  await expect.poll(() => page.evaluate(() => (window as any).__calls.filter((call:any) => call.command === "request_accessibility").length)).toBe(1);
+  await expect(page.getByRole("heading", {name:"Home",exact:true})).toBeVisible();
+});
+
+ test("restricted and unknown permissions never trigger prompts", async ({page}) => {
+  await boot(page, false, 2);
+  await page.getByRole("button", {name:"Assistant",exact:true}).click();
+  await expect(page.getByText("Restricted by macOS", {exact:true})).toBeVisible();
+  await page.evaluate(async () => {
+    delete (window as any).__availability.microphone;
+    delete (window as any).__availability.accessibility;
+    const {emit} = await import("/node_modules/@tauri-apps/api/event.js");
+    await emit("texthalo:assistant-availability", structuredClone((window as any).__availability));
+  });
+  await expect(page.getByRole("button", {name:"Enable Microphone",exact:true})).toBeDisabled();
+  await expect(page.getByRole("button", {name:"Open Accessibility Settings",exact:true})).toBeDisabled();
+  await expect(page.getByText("Restricted by macOS", {exact:true})).toBeVisible();
+  await expect(page.getByRole("button", {name:"Enable Speech Recognition",exact:true})).toHaveCount(0);
+  expect(await page.evaluate(() => (window as any).__calls.filter((call:any) => call.args?.command?.startsWith("permission_")).length)).toBe(0);
+});
+
+test("feature permission errors remain inline and can be retried", async ({page}) => {
+  await boot(page, true, 3, false, "apple", {microphone:0});
+  await page.getByRole("button", {name:"Assistant",exact:true}).click();
+  await page.getByRole("button", {name:"Enable Accessibility",exact:true}).click();
+  expect(await page.evaluate(() => (window as any).__calls.filter((call:any) => call.command === "request_accessibility").length)).toBe(1);
+  await page.evaluate(() => { (window as any).__permissionError = true; });
+  await page.getByRole("button", {name:"Enable Microphone",exact:true}).click();
+  await expect(page.getByRole("alert")).toContainText("Permission request failed");
+  await page.evaluate(() => { (window as any).__permissionError = false; });
+  await page.getByRole("button", {name:"Enable Microphone",exact:true}).click();
+  await expect(page.getByRole("alert")).toHaveCount(0);
+  await expect(page.getByRole("heading", {name:"Assistant",exact:true})).toBeVisible();
+});
+
+test("copy-only dictation does not ask for Accessibility or screen access", async ({page}) => {
+  await boot(page, true);
+  await page.getByRole("button", {name:"Dictate",exact:true}).click();
+  await page.getByLabel("When I finish speaking").selectOption("copy");
+  await expect(page.getByRole("button", {name:"Enable Accessibility",exact:true})).toHaveCount(0);
+  await expect(page.getByRole("button", {name:"Enable Screen Recording",exact:true})).toHaveCount(0);
+});
+
+test("failed shortcut save stays on the feature with an error", async ({page}) => {
+  await boot(page);
+  await page.getByRole("button", {name:"Dictate",exact:true}).click();
+  await page.evaluate(() => { (window as any).__failSave = true; });
+  await page.getByRole("button", {name:"Change shortcut",exact:true}).click();
+  await page.keyboard.press("Control+Shift+D");
+  await expect(page.getByRole("alert")).toContainText("Could not save this shortcut");
+  await expect(page.getByRole("heading", {name:"Dictate",exact:true})).toBeVisible();
+  expect(await page.evaluate(() => (window as any).__state.settings.shortcuts.transcribe)).toBe("");
+});
+
+test("optional recording shortcuts can be cleared directly", async ({page}) => {
+  await boot(page);
+  await page.getByRole("button", {name:"Dictate",exact:true}).click();
+  await page.getByRole("button", {name:"Change shortcut",exact:true}).click();
+  await page.keyboard.press("Control+Shift+D");
+  await expect(page.getByText("Shortcut saved", {exact:true})).toBeVisible();
+  await page.getByRole("button", {name:"Clear shortcut",exact:true}).click();
+  await expect.poll(() => page.evaluate(() => (window as any).__state.settings.shortcuts.transcribe)).toBe("");
+  await expect(page.getByRole("heading", {name:"Dictate",exact:true})).toBeVisible();
 });

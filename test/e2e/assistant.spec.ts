@@ -20,6 +20,7 @@ async function boot(page: Page, phase = "result", canInsert = false) {
 }
 test("applied edit offers scoped undo without a chat composer", async ({ page }) => {
   await boot(page);
+  await expect(page.getByLabel("Generated text")).toHaveText("A concise summary.");
   await page.evaluate(async () => {
     const events = await import("/node_modules/@tauri-apps/api/event.js");
     await events.emit("texthalo:assistant", { id:7, phase:"result", action:"applied", message:"Text replaced", canUndo:true, text:"A concise summary." });

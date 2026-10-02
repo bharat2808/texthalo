@@ -83,17 +83,75 @@ export function TranscriptionSettings({value,onChange}: Props) {
   </div>;
 }
 
-export function TaskReadiness({ mode, needsScreen = false, onPermissions }: {
-  mode: "dictate" | "assistant" | "overview";
+type FeaturePermission = {
+  name: string;
+  key: "microphone" | "speech" | "accessibility" | "screen";
+  status: number | undefined;
+  required: boolean;
+};
+
+export function TaskReadiness({ mode, needsScreen = false, needsAccessibility = true, accessibilityPrompted, onAccessibility }: {
+  mode: "dictate" | "assistant";
   needsScreen?: boolean;
-  onPermissions: () => void;
+  needsAccessibility?: boolean;
+  accessibilityPrompted: boolean;
+  onAccessibility: () => Promise<void>;
 }) {
-  const { availability, error } = useAvailability();
-  const checking = availability.microphone === undefined || availability.recognition === undefined;
-  const needsAccess = !checking && (availability.microphone !== 3 || availability.recognition !== 3 || availability.accessibility === false || (needsScreen && availability.screen !== true));
-  const modelUnavailable = mode !== "dictate" && availability.model !== undefined && availability.model !== "available";
-  return <div className="readiness" role="status">
-    {error ? <p>{error}</p> : checking ? <p>Checking voice access…</p> : needsAccess ? <div className="home-notice"><span>Enable access to use {mode === "dictate" ? "dictation" : mode === "assistant" ? "Assistant" : "dictation and Assistant"}.</span><button className="plain" onClick={onPermissions}>Enable access</button></div> : mode !== "overview" ? <p>Voice access is ready.</p> : null}
-    {modelUnavailable ? <div>Assistant needs Apple Intelligence enabled on a supported Mac.<details><summary>Details</summary>{availability.model}</details></div> : null}
-  </div>;
+  const { availability: a, error } = useAvailability();
+  const [pending, setPending] = useState<string | null>(null);
+  const [requestError, setRequestError] = useState("");
+  const [screenRequested, setScreenRequested] = useState(false);
+  const requesting = useRef(false);
+  const permissions: FeaturePermission[] = [
+    { name: "Microphone", key: "microphone", status: a.microphone, required: true },
+    // Speech Recognition's denied/restricted enum values are reversed from Microphone.
+    { name: "Speech Recognition", key: "speech", status: a.recognition === 1 ? 2 : a.recognition === 2 ? 1 : a.recognition, required: true },
+    { name: "Accessibility", key: "accessibility", status: a.accessibility === undefined ? undefined : a.accessibility ? 3 : 0, required: needsAccessibility },
+    ...(mode === "assistant" ? [{ name: "Screen Recording", key: "screen" as const, status: a.screen === undefined ? undefined : a.screen ? 3 : 0, required: needsScreen }] : []),
+  ];
+  const missing = permissions.filter(permission => permission.required && permission.status !== 3);
+  const checking = missing.some(permission => permission.status === undefined);
+
+  // Permission IPC acknowledges the send; the system dialog resolves later.
+  // Availability events (also refreshed by polling) tell us when it has resolved.
+  useEffect(() => {
+    const status = pending === "microphone" ? a.microphone : pending === "speech" ? a.recognition : undefined;
+    if (error || (status !== undefined && status !== 0)) {
+      requesting.current = false;
+      setPending(null);
+    }
+  }, [pending, a.microphone, a.recognition, error]);
+
+  async function request(permission: FeaturePermission) {
+    if (requesting.current || !permission.required || permission.status === 3 || permission.status === undefined || permission.status === 1) return;
+    requesting.current = true;
+    setPending(permission.key); setRequestError("");
+    let waitForResult = permission.status === 0 && (permission.key === "microphone" || permission.key === "speech");
+    try {
+      if (permission.key === "accessibility") await onAccessibility();
+      else {
+        const openSettings = permission.status === 2 || (permission.key === "screen" && screenRequested);
+        await invoke("assistant_control", { command: `${openSettings ? "settings" : "permission"}_${permission.key}` });
+        if (permission.key === "screen") setScreenRequested(true);
+      }
+    } catch (cause) { waitForResult = false; setRequestError(String(cause)); }
+    finally { if (!waitForResult) { requesting.current = false; setPending(null); } }
+  }
+
+  return <section className="feature-permissions" aria-label={`${mode === "assistant" ? "Assistant" : "Dictate"} access`}>
+    <div className="permission-summary"><strong>Access</strong><span role="status">{checking ? "Checking…" : missing.length ? `${missing.length} needed` : "Ready"}</span></div>
+    <ul className="permission-checklist">
+      {permissions.map(permission => {
+        const granted = permission.status === 3;
+        const restricted = permission.status === 1;
+        const settings = permission.status === 2 || (permission.key === "accessibility" && accessibilityPrompted) || (permission.key === "screen" && screenRequested);
+        const label = !permission.required ? permission.key === "screen" ? "Only for window context" : "Only for inserting text" : permission.status === undefined ? "Checking…" : granted ? "Allowed" : restricted ? "Restricted by macOS" : "Not allowed";
+        return <li key={permission.key}><div><span>{permission.name}</span><small>{label}</small></div>
+          {permission.required && !granted && !restricted ? <button className="plain" disabled={pending !== null || permission.status === undefined} onClick={() => void request(permission)}>{pending === permission.key ? (permission.key === "microphone" || permission.key === "speech") && permission.status === 0 ? "Waiting for macOS…" : "Opening…" : settings ? `Open ${permission.name} Settings` : `Enable ${permission.name}`}</button> : null}
+        </li>;
+      })}
+    </ul>
+    {requestError || error ? <p className="shortcut-error" role="alert">{requestError || error}</p> : null}
+    {mode === "assistant" && a.model !== undefined && a.model !== "available" ? <div className="card-note">Assistant also needs Apple Intelligence on a supported Mac.<details><summary>Details</summary>{a.model}</details></div> : null}
+  </section>;
 }
