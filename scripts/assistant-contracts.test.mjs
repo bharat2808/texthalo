@@ -58,3 +58,15 @@ test("screen OCR reads UI text and honors cancellation", {skip:process.platform 
     assert.equal(result.status, 0, result.stderr);
   } finally { rmSync(directory, {recursive:true,force:true}); }
 });
+
+
+test("screen-only generation cannot choose readSelection", {skip:process.platform !== "darwin"}, () => {
+  const directory = mkdtempSync(join(tmpdir(), "texthalo-generation-tests-"));
+  try {
+    const binary = join(directory, "generation-tests");
+    const compiled = spawnSync("xcrun", ["swiftc", "-parse-as-library", "-target", "arm64-apple-macos14.0", "src-tauri/native/Contracts.swift", "src-tauri/native/AssistantGeneration.swift", "src-tauri/native/AssistantGenerationTests.swift", "-o", binary], {encoding:"utf8",timeout:60000});
+    assert.equal(compiled.status, 0, compiled.stderr);
+    const result = spawnSync(binary, [], {encoding:"utf8",timeout:process.env.TEXTHALO_TEST_LOCAL_MODEL === "1" ? 120000 : 15000});
+    assert.equal(result.status, 0, result.stderr);
+  } finally { rmSync(directory, {recursive:true,force:true}); }
+});

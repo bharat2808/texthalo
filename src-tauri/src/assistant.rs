@@ -544,6 +544,18 @@ pub fn assistant_control(
 mod tests {
     use super::*;
     #[test]
+    fn generation_configuration_preserves_user_preferences_and_context_mode() {
+        let mut settings = Settings::default();
+        settings.assistant.instruction = "Keep replies brief and friendly".into();
+        settings.assistant.context = "screen".into();
+        for command in ["start", "ask"] {
+            let payload = configuration(command, 12, &settings);
+            assert_eq!(payload["instruction"], "Keep replies brief and friendly");
+            assert_eq!(payload["context"], "screen");
+            assert_eq!(payload["id"], 12);
+        }
+    }
+    #[test]
     fn hold_configuration_includes_the_native_request_envelope() {
         let mut settings = Settings::default();
         settings.shortcuts.transcribe = "Hold:LeftOption".into();

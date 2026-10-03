@@ -39,6 +39,7 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
     let element: AXUIElement?
     let original: TargetSnapshot?
     let selection: String
+    let sourceContext: AssistantSource
     let windowID: CGWindowID?
     let bounds: CGRect?
     let caretBounds: CGRect?
@@ -66,7 +67,25 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
         selection = secure ? "" : (element.flatMap { attribute($0, kAXSelectedTextAttribute as CFString) as? String } ?? "")
         let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
         let sourcePID = application?.processIdentifier
-        let window = windows.first { ($0[kCGWindowOwnerPID as String] as? Int32) == sourcePID && ($0[kCGWindowLayer as String] as? Int) == 0 }
+        let sourceWindows = windows.filter { ($0[kCGWindowOwnerPID as String] as? Int32) == sourcePID && ($0[kCGWindowLayer as String] as? Int) == 0 }
+        var focusedWindowTitle = ""
+        if let sourcePID, AXIsProcessTrusted(),
+           let rawWindow = attribute(AXUIElementCreateApplication(sourcePID), kAXFocusedWindowAttribute as CFString),
+           CFGetTypeID(rawWindow) == AXUIElementGetTypeID() {
+            let focusedWindow = unsafeBitCast(rawWindow, to: AXUIElement.self)
+            focusedWindowTitle = attribute(focusedWindow, kAXTitleAttribute as CFString) as? String ?? ""
+        }
+        let window = sourceWindows.first { !focusedWindowTitle.isEmpty && ($0[kCGWindowName as String] as? String) == focusedWindowTitle } ?? sourceWindows.first
+        let fieldLabel = element.flatMap { field in
+            [kAXTitleAttribute, kAXDescriptionAttribute, kAXPlaceholderValueAttribute].compactMap {
+                attribute(field, $0 as CFString) as? String
+            }.first(where: { !$0.isEmpty })
+        } ?? ""
+        sourceContext = AssistantSource(
+            app: application?.localizedName ?? "Unknown app",
+            windowTitle: String((focusedWindowTitle.isEmpty ? window?[kCGWindowName as String] as? String ?? "" : focusedWindowTitle).prefix(500)),
+            focusedRole: element.flatMap { attribute($0, kAXRoleAttribute as CFString) as? String } ?? "",
+            focusedLabel: String(fieldLabel.prefix(300)))
         windowID = (window?[kCGWindowNumber as String] as? NSNumber)?.uint32Value
         bounds = (window?[kCGWindowBounds as String] as? NSDictionary).flatMap { CGRect(dictionaryRepresentation: $0) }
     }
@@ -153,21 +172,6 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
         return true
     }
 
-}
-
-@available(macOS 26.0, *)
-@Generable enum AssistantAction {
-    case preview
-    case speak
-    case readSelection
-    case clarify
-}
-@available(macOS 26.0, *)
-@Generable struct AssistantReply {
-    @Guide(description: "preview for written output, speak only when the user requests narration/read aloud, readSelection when asked to read the original selection unchanged, clarify when input is insufficient")
-    var action: AssistantAction
-    @Guide(description: "The complete generated text or a concise clarification question. No commentary around a requested script.")
-    var text: String
 }
 
 @MainActor final class Assistant {
@@ -297,7 +301,7 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
             cancel(); id = command.id; request = command; result = ""
             let source = Target()
             target = source.application?.processIdentifier == getppid() ? nil : source
-            context = command.context == "none" ? "" : AssistantPrompt.referenceContext(selectedText: target?.selection ?? "")
+            context = sourceReference(mode: command.context)
             event("result", "Type a request, or hold your Assistant shortcut.")
         case "start": start(command)
         case "stop": if command.id == id { finishRecording() }
@@ -306,6 +310,7 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
                 id = command.id; event("error", "Enter a request first."); return
             }
             cancel(); id = command.id; request = command
+            context = sourceReference(mode: command.context)
             if command.usesScreenContext { captureScreen(region: false, prompt: text) }
             else { generate(text) }
         case "undo":
@@ -331,7 +336,7 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
     func start(_ command: Request) {
         cancel(); id = command.id; request = command; result = ""; context = ""; target = Target()
         if command.mode == "assistant", command.context != "none" {
-            context = AssistantPrompt.referenceContext(selectedText: target?.selection ?? "")
+            context = sourceReference(mode: command.context)
         }
         guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized,
               SFSpeechRecognizer.authorizationStatus() == .authorized else {
@@ -349,7 +354,7 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
         if command.mode == "assistant" {
             guard #available(macOS 26.0, *) else { event("error", "Assistant requires macOS 26 or later."); return }
             guard SystemLanguageModel.default.isAvailable else { event("error", "Apple Intelligence is unavailable: \(SystemLanguageModel.default.availability)"); return }
-            context = command.context == "none" ? "" : AssistantPrompt.referenceContext(selectedText: target?.selection ?? "")
+            context = sourceReference(mode: command.context)
         }
         let currentID = id
         let bufferRequest = SFSpeechAudioBufferRecognitionRequest()
@@ -435,6 +440,10 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
             else { self.event("result", "Could not insert into the original field. Keep your cursor in an editable text field while dictating, or use Copy.", text: text) }
         }
     }
+    func sourceReference(mode: String?, screenOCR: String? = nil) -> String {
+        AssistantPrompt.referenceContext(selectedText: target?.selection ?? "", screenOCR: screenOCR,
+                                         source: target?.sourceContext, mode: mode)
+    }
     func generate(_ prompt: String) {
         guard #available(macOS 26.0, *) else { event("error", "Assistant requires macOS 26 or later."); return }
         guard SystemLanguageModel.default.isAvailable else { event("error", "Apple Intelligence is unavailable: \(SystemLanguageModel.default.availability)"); return }
@@ -443,6 +452,7 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
         let source = context
         let previous = String(result.prefix(6000))
         let preference = String((request?.instruction ?? "").prefix(2000))
+        let selection = request?.context == "none" ? "" : target?.selection ?? ""
         event("processing", "Thinking on this Mac…")
         deadline?.cancel()
         deadline = Task {
@@ -453,16 +463,12 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
         generation = Task {
             defer { if self.id == currentID { self.deadline?.cancel(); self.deadline = nil; self.generation = nil } }
             do {
-                let session = LanguageModelSession(instructions: AssistantPrompt.systemInstructions(preference: preference))
-                let response = try await session.respond(
-                    to: AssistantPrompt.userPrompt(request: prompt, reference: source, previous: previous),
-                    generating: AssistantReply.self
-                )
+                let reply = try await generateAssistantReply(request: prompt, preference: preference,
+                    reference: source, previous: previous, selection: selection)
                 guard !Task.isCancelled, self.id == currentID else { return }
-                let reply = response.content
                 let readOriginal = reply.action == .readSelection
-                let text = readOriginal ? (self.request?.context == "none" ? "" : self.target?.selection ?? "") : reply.text
-                guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { self.event("error", "No text is available. Select text or add context first."); return }
+                let text = readOriginal ? selection : reply.text
+                guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { self.event("error", "Assistant returned an empty answer. Please try your request again."); return }
                 self.result = text
                 if reply.action == .speak || readOriginal { self.event("result", "Preparing narration…", text: text, action: "speak") }
                 else if reply.action == .clarify { self.event("result", "Hold Assistant again with more detail", text: text, action: "clarify") }
@@ -517,10 +523,7 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
                 self.screenLog.info("OCR completed in \(Int((ProcessInfo.processInfo.systemUptime - captured) * 1000)) ms")
                 guard !Task.isCancelled, self.id == currentID else { return }
                 guard !text.isEmpty else { self.event("error", "No readable text found. This build extracts text, not visual descriptions."); return }
-                self.context = String(AssistantPrompt.referenceContext(
-                    selectedText: self.request?.context == "none" ? "" : self.target?.selection ?? "",
-                    screenOCR: text
-                ).prefix(10000))
+                self.context = String(self.sourceReference(mode: self.request?.context, screenOCR: text).prefix(10000))
                 if let prompt { self.generate(prompt) }
                 else { self.event("result", "Screen text captured", text: self.result) }
             } catch { guard !Task.isCancelled, self.id == currentID else { return }; self.event("error", "Could not read screen text: \(error.localizedDescription)") }

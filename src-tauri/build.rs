@@ -14,6 +14,7 @@ fn build_assistant() {
         "native/HoldShortcuts.swift",
         "native/SpeechSupport.swift",
         "native/ScreenText.swift",
+        "native/AssistantGeneration.swift",
         "native/Assistant.swift",
         "native/Info.plist",
     ] {
@@ -31,6 +32,7 @@ fn build_assistant() {
             "native/HoldShortcuts.swift",
             "native/SpeechSupport.swift",
             "native/ScreenText.swift",
+            "native/AssistantGeneration.swift",
             "native/Assistant.swift",
             "-o",
             &output,
