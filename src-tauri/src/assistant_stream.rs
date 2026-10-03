@@ -22,7 +22,7 @@ impl SnapshotBuffer {
         let mut end = if finished { tail.len() } else { 0 };
         if !finished {
             for (i, ch) in tail.char_indices() {
-                if !".!?。！？\n".contains(ch) {
+                if !".!?。！？".contains(ch) {
                     continue;
                 }
                 if ch == '.' {
@@ -49,7 +49,7 @@ impl SnapshotBuffer {
                     boundary += closing.len_utf8();
                 }
                 let next = tail[boundary..].chars().next();
-                if "。！？\n".contains(ch) || next.is_some_and(char::is_whitespace) {
+                if "。！？".contains(ch) || next.is_some_and(char::is_whitespace) {
                     for space in tail[boundary..].chars().take_while(|c| c.is_whitespace()) {
                         boundary += space.len_utf8();
                     }
@@ -79,6 +79,14 @@ impl SnapshotBuffer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn ocr_line_wraps_wait_for_sentence_punctuation() {
+        let mut buffer = SnapshotBuffer::default();
+        assert_eq!(buffer.update("A sentence wraps\nacross lines", false).unwrap(), "");
+        assert_eq!(buffer.update("A sentence wraps\nacross lines. Next", false).unwrap(),
+                   "A sentence wraps\nacross lines. ");
+    }
+
     #[test]
     fn waits_for_complete_sentence_and_never_repeats_snapshots() {
         let mut buffer = SnapshotBuffer::default();
