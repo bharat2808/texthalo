@@ -4,6 +4,7 @@ import Speech
 import Vision
 import ApplicationServices
 import FoundationModels
+import OSLog
 
 func emit(_ value: [String: Any]) {
     guard let data = try? JSONSerialization.data(withJSONObject: value),
@@ -190,6 +191,7 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
     var monitors: [Any] = []
     var diagnosticRunning = false
     var diagnostic = ""
+    let screenLog = Logger(subsystem: "com.kiegen.app", category: "ScreenText")
 
     func event(_ phase: String, _ message: String = "", text: String = "", action: String = "preview") {
         var event: [String: Any] = ["id": id, "phase": phase, "message": message, "text": text,
@@ -281,7 +283,9 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
             _ = await withCheckedContinuation { continuation in SFSpeechRecognizer.requestAuthorization { continuation.resume(returning: $0) } }
             availability()
         }
-        case "permission_screen": _ = CGRequestScreenCaptureAccess(); availability()
+        case "permission_screen":
+            if !CGPreflightScreenCaptureAccess() { _ = CGRequestScreenCaptureAccess() }
+            availability()
         case "settings_microphone", "settings_speech", "settings_screen":
             let pane = command.command == "settings_microphone" ? "Privacy_Microphone" : command.command == "settings_speech" ? "Privacy_SpeechRecognition" : "Privacy_ScreenCapture"
             if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?" + pane) { NSWorkspace.shared.open(url) }
@@ -476,28 +480,41 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
         let currentID = id
         let window = target?.windowID
         guard region || window != nil else { event("error", "No original window is available. Use selected-text context in Assistant settings."); return }
-        event("capturing_screen", "Extracting screen text locally…")
-        let process = Process()
-        screenProcess = process
+        event("capturing_screen", "Capturing your window…")
         generation = Task {
             defer { if self.id == currentID { self.screenProcess = nil } }
             do {
-                try await Task.sleep(for: .milliseconds(250))
-                let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
-                defer { try? FileManager.default.removeItem(at: directory) }
-                let file = directory.appendingPathComponent("screen.png")
-                process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
-                process.arguments = region ? ["-x", "-i", "-s", file.path] : ["-x", "-l", String(window!), file.path]
-                try process.run()
-                // Launch on the main actor so cancellation cannot race process startup.
-                let text = try await Task.detached {
-                    process.waitUntilExit()
-                    guard process.terminationStatus == 0, FileManager.default.fileExists(atPath: file.path) else { throw NSError(domain: "Capture canceled", code: 1) }
-                    let request = VNRecognizeTextRequest(); request.recognitionLevel = .accurate
-                    try VNImageRequestHandler(url: file).perform([request])
-                    return (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }.joined(separator: "\n")
-                }.value
+                let started = ProcessInfo.processInfo.systemUptime
+                let image: CGImage
+                if region {
+                    // Preserve explicit region selection; normal window capture
+                    // never launches the screenshot command or writes an image.
+                    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+                    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+                    defer { try? FileManager.default.removeItem(at: directory) }
+                    let file = directory.appendingPathComponent("screen.png")
+                    let process = Process()
+                    self.screenProcess = process
+                    process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+                    process.arguments = ["-x", "-i", "-s", "-T", "0", file.path]
+                    try Task.checkCancellation()
+                    try process.run()
+                    image = try await Task.detached {
+                        process.waitUntilExit()
+                        guard process.terminationStatus == 0,
+                              let source = CGImageSourceCreateWithURL(file as CFURL, nil),
+                              let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else { throw NSError(domain: "Capture canceled", code: 1) }
+                        return image
+                    }.value
+                } else {
+                    image = try await ScreenText.capture(windowID: window!)
+                }
+                guard !Task.isCancelled, self.id == currentID else { return }
+                let captured = ProcessInfo.processInfo.systemUptime
+                self.screenLog.info("Capture completed in \(Int((captured - started) * 1000)) ms")
+                self.event("capturing_screen", "Reading screen text locally…")
+                let text = try await ScreenText.recognize(image)
+                self.screenLog.info("OCR completed in \(Int((ProcessInfo.processInfo.systemUptime - captured) * 1000)) ms")
                 guard !Task.isCancelled, self.id == currentID else { return }
                 guard !text.isEmpty else { self.event("error", "No readable text found. This build extracts text, not visual descriptions."); return }
                 self.context = String(AssistantPrompt.referenceContext(
@@ -506,7 +523,7 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
                 ).prefix(10000))
                 if let prompt { self.generate(prompt) }
                 else { self.event("result", "Screen text captured", text: self.result) }
-            } catch { guard !Task.isCancelled, self.id == currentID else { return }; self.event("error", "Screen capture canceled or unavailable.") }
+            } catch { guard !Task.isCancelled, self.id == currentID else { return }; self.event("error", "Could not read screen text: \(error.localizedDescription)") }
         }
     }
     func restoreSourceIfAssistantFocused(explicit: Bool = false) {

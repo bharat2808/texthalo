@@ -46,3 +46,15 @@ test("development app declares the same privacy purposes as the release app", {s
     assert.equal(dev[key], release[key]);
   }
 });
+
+
+test("screen OCR reads UI text and honors cancellation", {skip:process.platform !== "darwin"}, () => {
+  const directory = mkdtempSync(join(tmpdir(), "texthalo-screen-tests-"));
+  try {
+    const binary = join(directory, "screen-tests");
+    const compiled = spawnSync("xcrun", ["swiftc", "-parse-as-library", "-target", "arm64-apple-macos14.0", "src-tauri/native/ScreenText.swift", "src-tauri/native/ScreenTextTests.swift", "-o", binary], {encoding:"utf8",timeout:60000});
+    assert.equal(compiled.status, 0, compiled.stderr);
+    const result = spawnSync(binary, [], {encoding:"utf8",timeout:15000});
+    assert.equal(result.status, 0, result.stderr);
+  } finally { rmSync(directory, {recursive:true,force:true}); }
+});
