@@ -743,6 +743,11 @@ function MainApp() {
   useEffect(() => { void refreshHostedAccount(); }, [refreshHostedAccount]);
 
   useEffect(() => {
+    const off = listen("texthalo:assistant-usage", () => { void refreshHostedAccount(); });
+    return () => { void off.then(unlisten => unlisten()); };
+  }, [refreshHostedAccount]);
+
+  useEffect(() => {
     if (!account) return;
     const refreshTimer = window.setInterval(() => void refreshHostedAccount(), 3 * 60 * 1000);
     const expiry = account.cloneEntitlement?.expiresAt ? new Date(account.cloneEntitlement.expiresAt).getTime() : 0;
@@ -2413,9 +2418,11 @@ function MainApp() {
           <div className="service-heading"><h1 className="pane-title">Assistant</h1>{readinessIcon("assistant", "Assistant")}</div>
           <p className="pane-subtitle">Hold your shortcut and ask to write, edit, or read aloud.</p>
           {shortcutControl("assistant")}
-          <TaskReadiness mode="assistant" accessibilityPrompted={settings.accessibility_prompted} onAccessibility={enableAccessibility} />
+          <TaskReadiness mode="assistant" preferences={settings.assistant ?? defaultAssistantPreferences} accessibilityPrompted={settings.accessibility_prompted} onAccessibility={enableAccessibility} />
           <Card title="Make it yours" icon={Icon.textCursor()}><AssistantSettings value={settings.assistant ?? defaultAssistantPreferences} onChange={assistant => void save({ assistant })} /></Card>
-          <p className="card-note"><strong>Privacy:</strong> TextHalo captures your current window only while you use Assistant. Your latest 50 runs—including requests, selected text, screenshots, prompts, and answers—are saved locally in Assistant history. If you choose a hosted voice, only the final words being spoken are sent to TextHalo and Fish Audio.</p>
+          <p className="card-note"><strong>Privacy:</strong> TextHalo captures your current window only while you use Assistant. Your latest 50 runs—including requests, selected text, screenshots, prompts, and answers—are saved locally in Assistant history. Cloud Assistant sends your request and text context to TextHalo and its model provider when cloud processing is enabled. A hosted voice separately sends the words being spoken to TextHalo and Fish Audio.</p>
+          <button className="text" onClick={() => { setHistoryView("assistant"); setTab("history"); }}>View Assistant history</button>
+          {(settings.assistant?.provider ?? "local") !== "local" && <button className="text" onClick={() => setTab("account")}>Account and credits</button>}
         </div> : null}
 
         {tab === "shortcuts" ? (

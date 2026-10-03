@@ -2,10 +2,11 @@ import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { assistantUsageLabel, type AssistantUsage } from "./assistantUsage";
 import "./assistant.css";
 import "./SpeechOverlay.css";
 
-type Status = { id?: number; phase?: string; action?: string; message?: string; text?: string; canUndo?: boolean };
+type Status = { id?: number; phase?: string; action?: string; message?: string; text?: string; canUndo?: boolean; provider?: string; usage?: AssistantUsage };
 export default function AssistantPanel() {
   const [status, setStatus] = useState<Status>({});
   const current = useRef(status);
@@ -45,6 +46,8 @@ export default function AssistantPanel() {
   const completed = ["applied", "copied", "undone"].includes(status.action ?? "");
   const livePreview = busy && !!status.text;
   const visibleText = busy && (status.text?.length ?? 0) > 2000 ? "…" + status.text!.slice(-2000) : status.text;
+  const providerLabel = status.provider === "cloud" ? "TextHalo Cloud" : "On this Mac";
+  const usageLabel = status.provider === "cloud" ? assistantUsageLabel(status.usage) : "";
   if (busy || completed) {
     const label = status.phase === "recording" ? "Listening…"
       : status.phase === "capturing_screen" ? "Reading screen…"
@@ -53,7 +56,7 @@ export default function AssistantPanel() {
     return <main className={`overlay-root speech-overlay ${livePreview ? "with-transcript" : ""} ${busy ? status.phase === "recording" ? "recording" : status.phase === "speaking" ? "speaking" : "preparing" : "completed"}`}>
       <div className="speech-status">
       {busy ? <div className="activity" aria-hidden="true">{[0,1,2,3,4].map(index => <i key={index} style={{animationDelay:`${index * -0.13}s`}} />)}</div> : <span aria-hidden="true">✓</span>}
-      <span className="speech-label" role={error ? "alert" : "status"} title={error || status.message}>{error || label}</span>
+      <span className="speech-label" role={error ? "alert" : "status"} title={error || `${providerLabel}${usageLabel ? ` · ${usageLabel}` : ""}`}>{error || label}{status.provider === "cloud" && <small className="assistant-provider-label">Cloud</small>}</span>
       {applied && status.canUndo ? <button className="overlay-undo" disabled={pending} onClick={() => void action("undo")}>Undo</button>
         : <button aria-label={busy ? "Cancel" : "Dismiss"} title={busy ? "Cancel (Esc)" : "Dismiss"} onClick={() => void action("cancel")}><span /></button>}
       </div>
@@ -66,6 +69,7 @@ export default function AssistantPanel() {
       <p role="status">{status.message || "Ready"}</p>
       {!busy && status.canUndo && <button disabled={pending} onClick={() => void action("undo")}>Undo</button>}
     </div>
+    {status.provider && <p className="assistant-help">{providerLabel}{usageLabel ? ` · ${usageLabel}` : ""}</p>}
     {error && <p role="alert" className="assistant-error">{error}</p>}
     {!applied && status.text && <><div ref={preview} className={`assistant-result${busy ? " assistant-live" : ""}`} aria-label={status.phase === "recording" ? "Live transcript" : "Generated text"} tabIndex={busy ? undefined : 0}>{visibleText}</div>
       {!busy && <div className="assistant-actions"><button disabled={pending} onClick={() => void action("copy")}>Copy</button></div>}</>}

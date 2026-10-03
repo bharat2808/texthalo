@@ -5,6 +5,7 @@
 //! real app is the Rust service below; the webview is a config editor and setup wizard.
 
 mod assistant;
+mod hosted_assistant;
 mod assistant_job;
 mod assistant_stream;
 mod capture;

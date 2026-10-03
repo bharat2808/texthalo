@@ -27,3 +27,4 @@
 html:has(.assistant-panel), body:has(.assistant-panel), #root:has(.assistant-panel) { background: transparent !important; }
 
 .assistant-live { max-height:116px; overflow:hidden; }
+.assistant-provider-label { margin-left: 8px; font-size: 10px; opacity: .7; font-weight: 500; }

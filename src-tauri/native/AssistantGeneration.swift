@@ -93,6 +93,39 @@ struct AssistantMarkerDecoder {
     }
 }
 
+/// One cloud inference owns its frozen selection and a monotonic action/text stream.
+/// This validates frames before any delivery side effect, including streaming speech.
+struct HostedAssistantResponse {
+    let id: UInt64
+    let selection: String
+    private(set) var last: AssistantReply?
+    private(set) var terminal = false
+
+    mutating func receive(id: UInt64, action: String?, text: String?, complete: Bool) throws -> AssistantReply? {
+        guard id == self.id, !terminal else { return nil }
+        guard let action, let parsed = AssistantAction(rawValue: action), let text,
+              last == nil || last?.action == parsed,
+              parsed == .readSelection || last == nil || text.hasPrefix(last!.text) else {
+            terminal = true
+            throw AssistantProtocolError.invalidMarker(action ?? "")
+        }
+        let value = parsed == .readSelection ? selection : text
+        if parsed == .readSelection && selection.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            terminal = true
+            throw AssistantProtocolError.missingSelection
+        }
+        if complete && value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            terminal = true
+            throw AssistantProtocolError.emptyResponse
+        }
+        let reply = AssistantReply(action: parsed, text: value)
+        let changed = reply != last
+        last = reply
+        terminal = complete
+        return complete || (changed && !value.isEmpty) ? reply : nil
+    }
+}
+
 enum AssistantScreenSupport {
     static var isAvailable: Bool {
         AssistantContextPolicy.supportsScreenText(osMajor: ProcessInfo.processInfo.operatingSystemVersion.majorVersion)

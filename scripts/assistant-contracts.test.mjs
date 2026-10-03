@@ -132,3 +132,30 @@ import Foundation
     assert.ok(events.every(event => event.id === 7));
   } finally { rmSync(directory, {recursive:true,force:true}); }
 });
+
+test("cloud native fulfillment rejects late and malformed frames and bypasses local generation", {skip:process.platform !== "darwin"}, () => {
+  const directory = mkdtempSync(join(tmpdir(), "texthalo-cloud-native-"));
+  try {
+    const source = join(directory, "Assistant.swift");
+    writeFileSync(source, readFileSync("src-tauri/native/Assistant.swift", "utf8").split("@main struct Main {")[0]);
+    const binary = join(directory, "cloud");
+    const sources = ["Contracts", "HoldShortcuts", "SpeechSupport", "ScreenCapture", "ScreenText", "GenerationHistory", "AssistantGeneration"].map(name => `src-tauri/native/${name}.swift`);
+    const compiled = spawnSync("xcrun", ["swiftc", "-parse-as-library", "-target", "arm64-apple-macos14.0", ...sources, source, "src-tauri/native/HostedAssistantTests.swift", "-o", binary], {encoding:"utf8", timeout:60000});
+    assert.equal(compiled.status, 0, compiled.stderr);
+    const result = spawnSync(binary, [], {encoding:"utf8", timeout:10000});
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    const events = result.stdout.trim().split("\n").map(line => JSON.parse(line));
+    const input = events.find(event => event.phase === "generation_input");
+    assert.ok(input, "cloud dispatch must emit generation_input without running FoundationModels");
+    assert.equal(input.request, "Write a greeting");
+    assert.equal(input.preferences, "Brief");
+    assert.equal(input.previousOutput, "Earlier answer");
+    assert.equal(input.screenText, "");
+    assert.deepEqual(input.source, {app:"", windowTitle:"", focusedRole:"", focusedLabel:""});
+    assert.equal(input.selection, "");
+    assert.equal(events.filter(event => event.phase === "result" && event.action === "clarify").length, 1);
+    assert.equal(events.filter(event => event.phase === "error").length, 3);
+    assert.equal(typeof input.auditId, "string");
+    assert.ok(!events.some(event => event.text === "Wrong" || event.text === "Late"));
+  } finally { rmSync(directory, {recursive:true,force:true}); }
+});

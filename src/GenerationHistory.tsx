@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { assistantUsageLabel, type AssistantUsage } from "./assistantUsage";
 
 type Summary = { id: string; createdAt: number; request: string; status: string; source: string };
-type Record = Summary & { transcript?: string; output?: string; rawOutput?: string; systemInstructions?: string; userPrompt?: string; screenshot?: string; message?: string; events?: { phase: string; at: number; message: string }[] };
+type Record = Summary & { provider?: string; model?: string; usage?: AssistantUsage; transcript?: string; output?: string; rawOutput?: string; systemInstructions?: string; userPrompt?: string; screenshot?: string; message?: string; events?: { phase: string; at: number; message: string }[] };
 
 export default function GenerationHistory() {
   const [entries, setEntries] = useState<Summary[]>([]);
@@ -29,7 +30,7 @@ export default function GenerationHistory() {
   const textStyle = { whiteSpace: "pre-wrap" as const, overflowWrap: "anywhere" as const, maxHeight: 320, overflow: "auto" };
   return <div>
     <h1 className="pane-title">Assistant history</h1>
-    <p className="card-note">Latest 50 runs, saved only on this Mac, including requests, prompts, answers, and captured screenshots. Older runs and their screenshots are removed automatically.</p>
+    <p className="card-note">Latest 50 runs, stored on this Mac, including requests, prompts, answers, and captured screenshots. Cloud requests also send text context to the hosted model. Older local runs and their screenshots are removed automatically.</p>
     <button className="plain" disabled={loading} onClick={() => void refresh()}>Refresh</button>
     {error && <p role="alert">{error}</p>}
     {loading && <p>Loading runs…</p>}
@@ -37,6 +38,8 @@ export default function GenerationHistory() {
     {record && <article className="permission-row" aria-label="Generation record">
       <div className="inline"><h2>Run details</h2><button className="plain" onClick={() => setRecord(null)}>Close details</button></div>
       <p>{new Date(record.createdAt).toLocaleString()} · {record.source} · {record.status}</p>
+      {record.model && <p className="card-note">{record.model}</p>}
+      {record.usage && <p className="card-note">{assistantUsageLabel(record.usage)}{record.usage.refundedCredits ? ` · ${record.usage.refundedCredits.toLocaleString()} reserved credits returned` : ""}</p>}
       {record.message && <p>{record.message}</p>}
       {[ ["Request", record.request], ["Speech transcript", record.transcript], ["Generated answer", record.output] ].map(([label, value]) => value ? <section key={label}><h3>{label}</h3><p style={textStyle}>{value}</p></section> : null)}
       {record.screenshot && <details><summary>Captured screenshot</summary><img src={record.screenshot} alt="Screenshot captured for this Assistant run" style={{ maxWidth: "100%", height: "auto" }} /></details>}

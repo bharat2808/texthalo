@@ -143,6 +143,8 @@ pub struct AssistantSettings {
     pub language: String,
     pub instruction: String,
     pub dictation_output: String,
+    pub provider: String,
+    pub cloud_consent_version: Option<u32>,
 }
 impl Default for AssistantSettings {
     fn default() -> Self {
@@ -150,6 +152,8 @@ impl Default for AssistantSettings {
             language: "en-US".into(),
             instruction: String::new(),
             dictation_output: "insert".into(),
+            provider: "local".into(),
+            cloud_consent_version: None,
         }
     }
 }
@@ -370,6 +374,24 @@ mod tests {
     fn legacy_settings_are_migrated_without_showing_onboarding() {
         let settings = parse_settings(r#"{"accessibility_prompted": true}"#).unwrap();
         assert!(settings.onboarding_completed);
+    }
+
+    #[test]
+    fn legacy_assistant_remains_local_without_cloud_consent() {
+        let settings: Settings = serde_json::from_str(r#"{"assistant":{"language":"fr-FR"}}"#).unwrap();
+        assert_eq!(settings.assistant.provider, "local");
+        assert_eq!(settings.assistant.cloud_consent_version, None);
+        assert_eq!(settings.assistant.language, "fr-FR");
+    }
+
+    #[test]
+    fn assistant_cloud_choice_and_consent_round_trip() {
+        let mut settings = Settings::default();
+        settings.assistant.provider = "cloud".into();
+        settings.assistant.cloud_consent_version = Some(1);
+        let loaded: Settings = serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+        assert_eq!(loaded.assistant.provider, "cloud");
+        assert_eq!(loaded.assistant.cloud_consent_version, Some(1));
     }
 
     #[test]

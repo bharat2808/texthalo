@@ -126,7 +126,7 @@ fn write_credentials(credentials: &DesktopCredentials) -> Result<(), String> {
         Some(credentials.clone());
     Ok(())
 }
-async fn access_token(force_refresh: bool) -> Result<String, String> {
+pub(crate) async fn access_token(force_refresh: bool) -> Result<String, String> {
     let _guard = TOKEN_LOCK.lock().await;
     let mut credentials = read_credentials()?;
     if force_refresh || credentials.expires_at <= unix_now().saturating_add(45) {
@@ -175,6 +175,7 @@ fn unix_now() -> u64 {
 }
 pub fn clear_token() -> Result<(), String> {
     let app = secure_storage_app()?;
+    crate::assistant::cancel(app);
     app.secure_storage()
         .remove_item(app.clone(), storage_request(None))
         .map_err(|_| "Could not remove the saved sign-in from secure storage.".to_string())?;
@@ -228,7 +229,7 @@ async fn request(
         "Could not reach the TextHalo service. Check your internet connection.".to_string()
     })
 }
-async fn json_request(
+pub(crate) async fn json_request(
     method: reqwest::Method,
     path: &str,
     body: Option<Value>,
@@ -426,7 +427,8 @@ async fn exchange_desktop_code(
 }
 
 #[tauri::command]
-pub async fn desktop_sign_out() -> Result<(), String> {
+pub async fn desktop_sign_out(app: AppHandle) -> Result<(), String> {
+    crate::assistant::cancel(&app);
     if let Ok(credentials) = read_credentials() {
         let _ = reqwest::Client::new()
             .post(format!("{}/v1/desktop/sessions/revoke", origin()?))
@@ -438,6 +440,9 @@ pub async fn desktop_sign_out() -> Result<(), String> {
 }
 #[tauri::command]
 pub async fn desktop_account() -> Result<Value, String> {
+    if let Ok(app) = secure_storage_app() {
+        tauri::async_runtime::spawn(crate::hosted_assistant::recover(app.clone()));
+    }
     json_request(reqwest::Method::GET, "/v1/account", None).await
 }
 #[tauri::command]

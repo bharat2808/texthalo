@@ -5,6 +5,7 @@ import Foundation
 /// retention cannot leave orphaned images behind. Writes replace files atomically.
 @MainActor final class GenerationHistory {
     private let file: URL
+    var auditID: String { file.deletingPathExtension().lastPathComponent }
     private var record: [String: Any]
     private var finished = false
     private var lastWrite = Date.distantPast

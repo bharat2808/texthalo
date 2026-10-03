@@ -32,12 +32,19 @@ export function serviceReadiness(input: Input): Record<string, string[]> {
   ];
   const accessibility = input.trusted ? [] : ["Allow Accessibility access."];
   const secureInput = input.secureInput ? ["Leave the password field to use shortcuts."] : [];
-  const model = a.model === "available" ? [] : [!a.model ? "Checking Apple Intelligence…"
+  const usesCloud = p.provider === "cloud" || (p.provider === "automatic" && a.model !== undefined && a.model !== "available");
+  const cloud = [
+    ...(p.cloud_consent_version === 1 ? [] : ["Enable cloud processing in Assistant settings."]),
+    ...(a.cloudConfigured ? [] : ["Cloud Assistant is not configured in this build."]),
+    ...(a.cloudSignedIn ? [] : ["Sign in from Account to use Cloud Assistant."]),
+  ];
+  const model = usesCloud ? cloud : a.model === "available" ? [] : [!a.model ? "Checking Apple Intelligence…"
     : a.model.includes("appleIntelligenceNotEnabled") ? "Turn on Apple Intelligence in System Settings."
     : a.model.includes("modelNotReady") ? "Apple Intelligence is still downloading or preparing."
     : "Apple Intelligence is unavailable on this Mac. Check its requirements in System Settings."];
-  const visualContext = a.imageInput === undefined ? ["Checking visual context support…"]
-    : a.imageInput && a.screen !== true
+  const screenInput = usesCloud ? a.cloudScreenInput ?? a.imageInput : a.imageInput;
+  const visualContext = screenInput === undefined ? ["Checking visual context support…"]
+    : screenInput && a.screen !== true
       ? [a.screen === undefined ? "Checking Screen Recording access…" : "Allow Screen Recording to use Assistant."]
       : [];
   return {

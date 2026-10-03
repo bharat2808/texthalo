@@ -42,6 +42,18 @@ test("recording preserves cancellation without a composer", async ({ page }) => 
   await page.keyboard.press("Escape");
   await expect.poll(async () => page.evaluate(() => (window as any).__calls.some((c: any) => c.args?.command === "cancel"))).toBeTruthy();
 });
+test("cloud response shows generation usage without adding a composer", async ({ page }) => {
+  await boot(page);
+  await expect(page.getByLabel("Generated text")).toBeVisible();
+  await page.evaluate(async () => {
+    const { emit } = await import("/node_modules/@tauri-apps/api/event.js");
+    await emit("texthalo:assistant", { id: 7, phase: "result", provider: "cloud", text: "A cloud answer.", message: "Ready", usage: { billingStatus: "settled", chargedCredits: 12, refundedCredits: 88 } });
+  });
+  await expect(page.getByText("TextHalo Cloud · 12 credits for generation")).toBeVisible();
+  await expect(page.getByRole("textbox")).toHaveCount(0);
+  await page.getByRole("button", { name: "Copy", exact: true }).click();
+  expect(await page.evaluate(() => (window as any).__calls.at(-1).args)).toEqual({ command: "copy", requestId: 7 });
+});
 
 test("dictation and generation share the compact activity overlay", async ({page}, testInfo) => {
   await page.emulateMedia({colorScheme:"dark"});

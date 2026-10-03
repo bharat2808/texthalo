@@ -45,10 +45,17 @@ struct PasteDispatch {
     var isDeliverable: Bool { wroteText && targetValid && keyEventsReady }
 }
 
+enum AssistantProvider: String, Decodable {
+    case local, cloud
+}
+
 struct Request: Decodable {
     var command: String
     var id: UInt64 = 0
     var mode: String?
+    var provider: AssistantProvider?
+    var action: String?
+    var message: String?
     var language: String?
     var instruction: String?
     // Command-local capture choice for the explicit window/region action. It is
@@ -74,6 +81,7 @@ enum AssistantContextPolicy {
     // Disabled by default so text-only behavior can also be tested on macOS 27.
     static let visionEnabledByDefault = false
     static func supportsScreenText(osMajor: Int) -> Bool { osMajor >= 26 }
+    static func supportsCloudScreenText(osMajor: Int) -> Bool { osMajor >= 14 }
     static func usesVision(sdkSupportsImages: Bool, osMajor: Int, enabled: Bool) -> Bool {
         enabled && sdkSupportsImages && osMajor >= 27
     }

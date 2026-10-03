@@ -24,6 +24,11 @@ pub struct AssistantState {
 #[derive(Default)]
 struct Inner {
     hold_error: String,
+    cloud: Option<(u64, String, tokio::sync::watch::Sender<bool>)>,
+    provider: String,
+    cloud_started: Option<u64>,
+    billing_request: Option<(u64, String)>,
+    usage: Value,
     native: Option<Native>,
     job: HoldJob,
     status: Value,
@@ -53,6 +58,7 @@ pub fn configure_holds(app: &AppHandle) -> Result<(), String> {
 
 pub fn setup(app: &AppHandle) -> tauri::Result<()> {
     app.manage(AssistantState::default());
+    tauri::async_runtime::spawn(crate::hosted_assistant::recover(app.clone()));
     WebviewWindowBuilder::new(
         app,
         "assistant",
@@ -124,6 +130,7 @@ fn send(app: &AppHandle, inner: &mut Inner, value: Value) -> Result<(), String> 
             let mut inner = state.inner.lock().unwrap();
             if inner.native.as_ref().map(|n| n.child.id()) == Some(pid) {
                 inner.native = None;
+                cancel_cloud(&mut inner);
                 stop_assistant_speech(&app, &mut inner);
                 inner.job.cancel();
                 inner.status = json!({"phase":"error","message":"The native assistant stopped. Hold the shortcut again to retry."});
@@ -207,6 +214,7 @@ pub(crate) fn sync_speech(app: &AppHandle) -> bool {
         if matches!(status.phase, Phase::Idle | Phase::Error) {
             inner.speech_feed = None;
             if matches!(status.phase, Phase::Error) {
+                cancel_cloud(&mut inner);
                 let id = inner.status["id"].as_u64().unwrap_or(0);
                 if inner.native.is_some() { let _ = send(app, &mut inner, json!({"command":"halt","id":id})); }
             } else {
@@ -350,6 +358,7 @@ fn receive(app: &AppHandle, mut event: Value) {
     let mut inner = state.inner.lock().unwrap();
     if event["phase"] == "availability" {
         event["holdError"] = json!(inner.hold_error);
+        cloud_availability(app, &mut event);
         inner.availability = event.clone();
         let _ = app.emit("texthalo:assistant-availability", event);
         return;
@@ -358,6 +367,17 @@ fn receive(app: &AppHandle, mut event: Value) {
         return;
     };
     if !inner.job.current(id) {
+        return;
+    }
+    if event["phase"] == "generation_input" {
+        if inner.provider != "cloud" || inner.cloud_started == Some(id) { return; }
+        inner.cloud_started = Some(id);
+        let request = uuid::Uuid::new_v4().to_string();
+        let (cancel, receiver) = tokio::sync::watch::channel(false);
+        inner.billing_request = Some((id, request.clone()));
+        inner.cloud = Some((id, request.clone(), cancel));
+        let app = app.clone();
+        tauri::async_runtime::spawn(crate::hosted_assistant::run(app, id, request, event, receiver));
         return;
     }
     if inner.status["phase"] == "error" && inner.status["assistantSpeech"] == true
@@ -387,9 +407,11 @@ fn receive(app: &AppHandle, mut event: Value) {
         return;
     }
     if event["phase"] == "error" {
+        cancel_cloud(&mut inner);
         stop_assistant_speech(app, &mut inner);
     }
     if event["phase"] == "canceled" {
+        cancel_cloud(&mut inner);
         stop_assistant_speech(app, &mut inner);
         inner.job.cancel();
     } else if matches!(event["phase"].as_str(), Some("result" | "error")) {
@@ -426,6 +448,8 @@ fn receive(app: &AppHandle, mut event: Value) {
     event["hostedSpeech"] = json!(
         app.state::<AppState>().settings.lock().unwrap().engine == crate::config::Engine::Fish
     );
+    event["provider"] = json!(inner.provider);
+    event["usage"] = inner.usage.clone();
     inner.status = event;
     publish(app, &inner.status);
 }
@@ -514,6 +538,8 @@ pub fn pressed(app: &AppHandle, mode: Mode, key: String, modifiers: String) {
     let Some(id) = inner.job.press(mode) else {
         return;
     };
+    cancel_cloud(&mut inner);
+    inner.usage = Value::Null;
     // Prevent existing narration being captured as the user's request.
     inner.speech_feed = None;
     inner.speech_id = None;
@@ -521,10 +547,19 @@ pub fn pressed(app: &AppHandle, mode: Mode, key: String, modifiers: String) {
     let settings = app.state::<AppState>().settings.lock().unwrap().clone();
     inner.speech_settings = Some(settings.clone());
     let mut command = configuration("start", id, &settings);
+    if mode == Mode::Assistant && settings.assistant.provider == "automatic" && inner.availability["model"].as_str().is_none() {
+        let _ = send(app, &mut inner, json!({"command":"status","id":0}));
+    }
+    let provider = if mode == Mode::Assistant { resolve_provider(&settings, &inner.availability) } else { Ok("local") };
+    let provider = match provider { Ok(p) => p, Err(message) => {
+        inner.job.finish(id); inner.status = json!({"id":id,"phase":"error","message":message}); publish(app, &inner.status); return;
+    }};
+    inner.provider = provider.into();
+    command["provider"] = json!(provider);
     command["mode"] = json!(mode);
     command["key"] = json!(key);
     command["modifiers"] = json!(modifiers);
-    inner.status = json!({"id":id,"phase":"processing","message":"Starting microphone…","text":""});
+    inner.status = json!({"id":id,"phase":"processing","message":"Starting microphone…","text":"","provider":provider});
     // Wait for the native context snapshot before showing any new UI.
     if let Err(error) = send(app, &mut inner, command) {
         inner.job.finish(id);
@@ -550,6 +585,7 @@ pub fn cancel(app: &AppHandle) {
     cancel_locked(app, &mut inner);
 }
 fn cancel_locked(app: &AppHandle, inner: &mut Inner) {
+    cancel_cloud(inner);
     inner.job.cancel();
     stop_assistant_speech(app, inner);
     inner.status = json!({"phase":"idle","text":""});
@@ -568,7 +604,10 @@ fn cancel_locked(app: &AppHandle, inner: &mut Inner) {
 }
 pub fn shutdown(app: &AppHandle) {
     if let Some(state) = app.try_state::<AssistantState>() {
-        state.inner.lock().unwrap().native = None;
+        let mut inner = state.inner.lock().unwrap();
+        cancel_cloud(&mut inner);
+        inner.job.cancel();
+        inner.native = None;
     }
 }
 
@@ -576,7 +615,9 @@ pub fn shutdown(app: &AppHandle) {
 pub fn assistant_state(app: AppHandle) -> Value {
     let state = app.state::<AssistantState>();
     let inner = state.inner.lock().unwrap();
-    json!({"status":inner.status,"availability":inner.availability})
+    let mut availability = inner.availability.clone();
+    cloud_availability(&app, &mut availability);
+    json!({"status":inner.status,"availability":availability})
 }
 fn result_id(status: &Value, request_id: Option<u64>) -> Result<u64, String> {
     let id = status["id"]
@@ -634,15 +675,23 @@ pub fn assistant_control(
         if text.chars().count() > 4000 {
             return Err("Use a shorter request (up to 4,000 characters).".into());
         }
+        cancel_cloud(&mut inner);
         stop_assistant_speech(&app, &mut inner);
         inner.job.cancel();
         let id = inner.job.press(Mode::Assistant).unwrap();
         inner.job.release(Mode::Assistant);
         let settings = app.state::<AppState>().settings.lock().unwrap().clone();
         inner.speech_settings = Some(settings.clone());
+        if settings.assistant.provider == "automatic" && inner.availability["model"].as_str().is_none() {
+            let _ = send(&app, &mut inner, json!({"command":"status","id":0}));
+        }
+        let provider = resolve_provider(&settings, &inner.availability)?;
+        inner.provider = provider.into();
+        inner.usage = Value::Null;
         let mut value = configuration(&command, id, &settings);
+        value["provider"] = json!(provider);
         value["text"] = json!(text);
-        inner.status = json!({"id":id,"phase":"processing","message":"Thinking on this Mac…"});
+        inner.status = json!({"id":id,"phase":"processing","message":if provider == "cloud" { "Thinking with cloud Assistant…" } else { "Thinking on this Mac…" },"provider":provider});
         publish(&app, &inner.status);
         return send(&app, &mut inner, value);
     }
@@ -684,6 +733,19 @@ pub fn assistant_control(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn automatic_never_assumes_cloud_before_native_availability() {
+        let mut settings = Settings::default();
+        settings.assistant.provider = "automatic".into();
+        settings.assistant.cloud_consent_version = Some(1);
+        assert!(resolve_provider(&settings, &json!({})).unwrap_err().contains("Checking"));
+    }
+    #[test]
+    fn finalized_billing_cannot_be_downgraded_by_late_reconciliation() {
+        assert!(!billing_update_allowed(&json!({"billingStatus":"settled"}), &json!({"billingStatus":"reserved"})));
+        assert!(!billing_update_allowed(&json!({"billingStatus":"released"}), &json!({"billingStatus":"pending"})));
+        assert!(billing_update_allowed(&json!({"billingStatus":"reserved"}), &json!({"billingStatus":"settled"})));
+    }
     #[test]
     fn stopped_or_replaced_narration_loses_only_its_own_overlay() {
         assert_eq!(narration_ownership(Some(4), 4), NarrationOwnership::Current);
@@ -810,4 +872,101 @@ pub fn transcription_history(
         _ => return Err("Unknown history action".into()),
     }
     crate::transcription_history::list(&path)
+}
+
+fn resolve_provider(settings: &Settings, availability: &Value) -> Result<&'static str, String> {
+    if settings.assistant.provider == "automatic" && availability["model"].as_str().is_none() {
+        return Err(
+            "Checking Apple Intelligence availability. Try the voice shortcut again in a moment."
+                .into(),
+        );
+    }
+    crate::hosted_assistant::resolve(
+        &settings.assistant.provider,
+        settings.assistant.cloud_consent_version,
+        availability["model"] == "available",
+        crate::hosted::service_configured(),
+        crate::hosted::is_signed_in(),
+    )
+}
+fn cloud_availability(app: &AppHandle, value: &mut Value) {
+    if !value.is_object() {
+        *value = json!({});
+    }
+    value["cloudConfigured"] = json!(crate::hosted::service_configured());
+    value["cloudSignedIn"] = json!(crate::hosted::is_signed_in());
+    let state = app.state::<AppState>();
+    let settings = state.settings.lock().unwrap();
+    value["provider"] = json!(settings.assistant.provider);
+    value["effectiveProvider"] = json!(resolve_provider(&settings, value).ok());
+}
+fn cancel_cloud(inner: &mut Inner) {
+    if let Some((_, _, cancel)) = inner.cloud.take() {
+        cancel.send_replace(true);
+    }
+}
+pub(crate) fn hosted_delivery(
+    app: &AppHandle,
+    id: u64,
+    request: &str,
+    command: &str,
+    action: &str,
+    text: &str,
+    message: Option<&str>,
+) {
+    let state = app.state::<AssistantState>();
+    let mut inner = state.inner.lock().unwrap();
+    if !inner.job.current(id)
+        || !inner
+            .cloud
+            .as_ref()
+            .is_some_and(|(owned, key, _)| *owned == id && key == request)
+    {
+        return;
+    }
+    // Never restart a dead helper for a network completion.
+    if inner
+        .native
+        .as_mut()
+        .is_none_or(|native| native.child.try_wait().ok().flatten().is_some())
+    {
+        cancel_cloud(&mut inner);
+        return;
+    }
+    let payload = json!({"command":command,"id":id,"action":action,"text":text,"message":message});
+    if let Err(message) = send(app, &mut inner, payload) {
+        cancel_cloud(&mut inner);
+        inner.job.cancel();
+        inner.status =
+            json!({"id":id,"phase":"error","message":message,"text":text,"provider":"cloud"});
+        publish(app, &inner.status);
+    }
+}
+fn billing_update_allowed(previous: &Value, next: &Value) -> bool {
+    !matches!(
+        previous["billingStatus"].as_str(),
+        Some("settled" | "released")
+    ) || matches!(next["billingStatus"].as_str(), Some("settled" | "released"))
+}
+pub(crate) fn hosted_usage(app: &AppHandle, id: u64, request: &str, usage: Value) {
+    let state = app.state::<AssistantState>();
+    let mut inner = state.inner.lock().unwrap();
+    let owns_billing = inner
+        .billing_request
+        .as_ref()
+        .is_some_and(|(owned, key)| *owned == id && key == request);
+    if owns_billing && !billing_update_allowed(&inner.usage, &usage) {
+        return;
+    }
+    let _ = app.emit(
+        "texthalo:assistant-usage",
+        json!({"id":id,"requestId":request,"usage":usage}),
+    );
+    // Billing updates can outlive generation, but cannot revive or replace the presentation.
+    if inner.status["id"] != id || !owns_billing {
+        return;
+    }
+    inner.usage = usage.clone();
+    inner.status["usage"] = usage;
+    let _ = app.emit("texthalo:assistant", &inner.status);
 }

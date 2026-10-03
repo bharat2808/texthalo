@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-export type AssistantPreferences = { language: string; instruction: string; dictation_output: string };
-export const defaultAssistantPreferences: AssistantPreferences = { language: "en-US", instruction: "", dictation_output: "insert" };
-export type Availability = { model?: string; microphone?: number; recognition?: number; accessibility?: boolean; screen?: boolean; imageInput?: boolean; diagnostic?: string; holdError?: string };
+export type AssistantPreferences = { language: string; instruction: string; dictation_output: string; provider?: "local" | "cloud" | "automatic"; cloud_consent_version?: number | null };
+export const defaultAssistantPreferences: AssistantPreferences = { language: "en-US", instruction: "", dictation_output: "insert", provider: "local", cloud_consent_version: null };
+export type Availability = { model?: string; microphone?: number; recognition?: number; accessibility?: boolean; screen?: boolean; imageInput?: boolean; cloudScreenInput?: boolean; diagnostic?: string; holdError?: string; cloudConfigured?: boolean; cloudSignedIn?: boolean; provider?: string; effectiveProvider?: string };
 type Props = { value: AssistantPreferences; onChange: (value: AssistantPreferences) => void };
 export function useAvailability() {
   const [availability, setAvailability] = useState<Availability>({});
@@ -33,7 +33,7 @@ export function PermissionsSettings() {
     {([
       {name:"Microphone",key:"microphone",status:a.microphone,description:"Records while you hold Dictate or Assistant."},
       {name:"Speech Recognition",key:"speech",status:a.recognition === 1 ? 2 : a.recognition === 2 ? 1 : a.recognition,description:"Converts your voice into text on this Mac."},
-      {name:"Screen Recording",key:"screen",status:a.screen === undefined ? undefined : a.screen ? 3 : 0,description:a.imageInput === false ? "Visual context needs a TextHalo build with native image input." : "Lets Assistant capture your current window when you make a request."},
+      {name:"Screen Recording",key:"screen",status:a.screen === undefined ? undefined : a.screen ? 3 : 0,description:a.imageInput === false && a.cloudScreenInput !== true ? "Visual context is unavailable in this build." : "Lets Assistant capture your current window when you make a request."},
     ]).map(p => <section className="permission-row" key={p.key}>
       <strong>{p.name}</strong><div className="card-note">{p.description}</div><p>{label(p.status)}</p>
       <div className="inline">
@@ -51,11 +51,25 @@ export default function AssistantSettings({ value, onChange }: Props) {
   const draft = useRef(value.instruction);
   useEffect(() => { draft.current = value.instruction; setInstruction(value.instruction); }, [value.instruction]);
   return <div className="assistant-settings">
+    <div className="field"><label className="field-label" htmlFor="assistant-provider">Assistant model</label>
+      <select id="assistant-provider" value={value.provider ?? "local"} onChange={event => onChange({ ...value, instruction: draft.current, provider: event.target.value as AssistantPreferences["provider"] })}>
+        <option value="local">On this Mac · Apple Intelligence</option>
+        <option value="cloud">TextHalo Cloud · Uses credits</option>
+        <option value="automatic">Automatic · Prefer this Mac</option>
+      </select>
+      <p className="card-note">Hold the same Assistant shortcut to speak. Cloud fulfills your request using your TextHalo credit balance. Automatic uses Cloud when Apple Intelligence is unavailable at the start of a request.</p>
+    </div>
+    {value.provider && value.provider !== "local" && <div className="field">
+      <label className="checkbox-row"><input type="checkbox" checked={value.cloud_consent_version === 1} onChange={event => onChange({ ...value, instruction: draft.current, cloud_consent_version: event.target.checked ? 1 : null })} />Enable cloud processing for Assistant</label>
+      <p className="card-note">Your spoken request is transcribed on this Mac. For Cloud requests, the transcript, instructions, selected text, text read from your current window, and previous answer when used are sent to TextHalo and its model provider. Screenshots and microphone audio are not uploaded for Assistant generation. Generated answers use credits; a hosted voice uses additional credits. Canceling may still use credits for generation already performed.</p>
+      {!availability.cloudConfigured && <p className="card-note">Cloud Assistant is not configured in this build.</p>}
+      {availability.cloudConfigured && !availability.cloudSignedIn && <p className="card-note">Sign in from Account to use Cloud Assistant.</p>}
+    </div>}
     <div className="field"><label className="field-label" htmlFor="assistant-instruction">Assistant instructions</label>
       <textarea id="assistant-instruction" rows={7} maxLength={2000} value={instruction} onChange={event => { draft.current = event.target.value; setInstruction(event.target.value); }} onBlur={() => { if (draft.current !== value.instruction) onChange({ ...value, instruction: draft.current }); }} placeholder="Use a warm tone. Keep writing concise. When I ask for a voiceover, write a script ready to read aloud." />
       <p className="card-note">Your preferences for every request. You can undo text edits.</p>
     </div>
-    <p className="card-note">Assistant automatically uses selected text and, when supported, a private snapshot of your original window.</p>
+    <p className="card-note">Assistant automatically uses selected text and, when supported, a snapshot of your original window. Cloud receives extracted text, not the screenshot.</p>
     <p className="card-note" role="status">Apple Intelligence: {availability.model ?? "Checking…"}</p>
     {error && <p role="alert">{error}</p>}
   </div>;
@@ -86,11 +100,12 @@ type FeaturePermission = {
   required: boolean;
 };
 
-export function TaskReadiness({ mode, needsAccessibility = true, accessibilityPrompted, onAccessibility }: {
+export function TaskReadiness({ mode, needsAccessibility = true, accessibilityPrompted, onAccessibility, preferences = defaultAssistantPreferences }: {
   mode: "dictate" | "assistant";
   needsAccessibility?: boolean;
   accessibilityPrompted: boolean;
   onAccessibility: () => Promise<void>;
+  preferences?: AssistantPreferences;
 }) {
   const { availability: a, error } = useAvailability();
   const [pending, setPending] = useState<string | null>(null);
@@ -102,7 +117,7 @@ export function TaskReadiness({ mode, needsAccessibility = true, accessibilityPr
     // Speech Recognition's denied/restricted enum values are reversed from Microphone.
     { name: "Speech Recognition", key: "speech", status: a.recognition === 1 ? 2 : a.recognition === 2 ? 1 : a.recognition, required: true },
     { name: "Accessibility", key: "accessibility", status: a.accessibility === undefined ? undefined : a.accessibility ? 3 : 0, required: needsAccessibility },
-    ...(mode === "assistant" ? [{ name: "Screen Recording", key: "screen" as const, status: a.screen === undefined ? undefined : a.screen ? 3 : 0, required: a.imageInput !== false }] : []),
+    ...(mode === "assistant" ? [{ name: "Screen Recording", key: "screen" as const, status: a.screen === undefined ? undefined : a.screen ? 3 : 0, required: (preferences.provider === "cloud" || (preferences.provider === "automatic" && a.model !== "available") ? a.cloudScreenInput ?? a.imageInput : a.imageInput) !== false }] : []),
   ];
   const missing = permissions.filter(permission => permission.required && permission.status !== 3);
   const checking = missing.some(permission => permission.status === undefined);
@@ -147,6 +162,6 @@ export function TaskReadiness({ mode, needsAccessibility = true, accessibilityPr
       })}
     </ul>
     {requestError || error ? <p className="shortcut-error" role="alert">{requestError || error}</p> : null}
-    {mode === "assistant" && a.model !== undefined && a.model !== "available" ? <div className="card-note">Assistant also needs Apple Intelligence on a supported Mac.<details><summary>Details</summary>{a.model}</details></div> : null}
+    {mode === "assistant" && (preferences.provider ?? "local") === "local" && a.model !== undefined && a.model !== "available" ? <div className="card-note">On-device Assistant needs Apple Intelligence. You can select TextHalo Cloud in Assistant model settings.<details><summary>Details</summary>{a.model}</details></div> : null}
   </section>;
 }
