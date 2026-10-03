@@ -2,6 +2,13 @@ import AppKit
 
 @main struct ScreenTextTests {
     @MainActor static func main() async throws {
+        let unordered = [
+            ScreenText.Line(text: "Third line.", bounds: CGRect(x: 0.2, y: 0.2, width: 0.5, height: 0.05)),
+            ScreenText.Line(text: "Second right", bounds: CGRect(x: 0.5, y: 0.6, width: 0.3, height: 0.05)),
+            ScreenText.Line(text: "Second left", bounds: CGRect(x: 0.1, y: 0.6, width: 0.3, height: 0.05)),
+            ScreenText.Line(text: "First line.", bounds: CGRect(x: 0.2, y: 0.9, width: 0.5, height: 0.05)),
+        ]
+        assert(ScreenText.orderedText(from: unordered) == "First line.\nSecond left\nSecond right\nThird line.")
         let image = NSImage(size: NSSize(width: 1000, height: 300))
         image.lockFocus()
         NSColor.white.setFill()

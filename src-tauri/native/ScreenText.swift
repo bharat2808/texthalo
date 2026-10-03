@@ -3,6 +3,23 @@ import ScreenCaptureKit
 import Vision
 
 enum ScreenText {
+    struct Line: Equatable {
+        let text: String
+        let bounds: CGRect
+    }
+
+    static func orderedText(from lines: [Line]) -> String {
+        lines.sorted {
+            // Vision does not guarantee that results arrive in reading order.
+            // Quantize normalized vertical positions so words on the same row
+            // read left-to-right, then move from the top of the window down.
+            let lhsRow = Int(($0.bounds.midY * 1000).rounded())
+            let rhsRow = Int(($1.bounds.midY * 1000).rounded())
+            if lhsRow != rhsRow { return lhsRow > rhsRow }
+            return $0.bounds.minX < $1.bounds.minX
+        }.map(\.text).joined(separator: "\n")
+    }
+
     // Keep capture in the signed helper and avoid a subprocess and PNG round trip.
     @available(macOS 14.0, *)
     static func capture(windowID: CGWindowID) async throws -> CGImage {
@@ -31,7 +48,11 @@ enum ScreenText {
             try Task.checkCancellation()
             try VNImageRequestHandler(cgImage: image).perform([request])
             try Task.checkCancellation()
-            let text = (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }.joined(separator: "\n")
+            let lines = (request.results ?? []).compactMap { observation -> Line? in
+                guard let text = observation.topCandidates(1).first?.string else { return nil }
+                return Line(text: text, bounds: observation.boundingBox)
+            }
+            let text = orderedText(from: lines)
             guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 throw NSError(domain: "TextHalo", code: 2, userInfo: [NSLocalizedDescriptionKey: "No readable text found. This build extracts text, not visual descriptions."])
             }

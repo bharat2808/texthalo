@@ -14,9 +14,11 @@ import FoundationModels
         assert(!standaloneSchema.contains("readSelection") && !standaloneSchema.contains("relevantContext"), "Standalone requests must not be forced through a reference schema")
         assert(selectionSchema.contains("readSelection"), "Explicit selection reading remains supported")
         assert(deliverySchema.contains("shouldProduceAudibleSpeech") && referenceSchema.contains("referenceUse"))
-        assert(screenSchema.contains("useScreenTextVerbatim"), "The screen generation contract can request exact source reading")
+        assert(!screenSchema.contains("useScreenTextVerbatim"), "Only the deterministic parser may request exact source reading")
         assert(!standaloneSchema.contains("useScreenTextVerbatim"))
         assert(explicitAssistantCommand(for: "Read the book aloud to me") == .readSourceAloud)
+        assert(explicitAssistantCommand(for: "Read what is on my screen and summarize it") == nil)
+        assert(explicitAssistantCommand(for: "Read what is on my screen aloud and summarize it") == .generateSpokenAnswer)
         assert(explicitAssistantCommand(for: "Transcribe the screen text exactly") == .returnSourceVerbatim)
         assert(explicitAssistantCommand(for: "Summarize the book aloud") == .generateSpokenAnswer)
         assert(explicitAssistantCommand(for: "Generate audio describing my screen") == .generateSpokenAnswer)
@@ -24,6 +26,13 @@ import FoundationModels
         assert(explicitAssistantCommand(for: "Write an email to my manager requesting two days of leave") == .generateStandaloneText)
         assert(explicitAssistantCommand(for: "Write an email based on this document") == nil)
         assert(explicitAssistantCommand(for: "Do not read it aloud; just write a summary") == .generateWrittenAnswer)
+        assert(parseOCRReadingValidation("{\"verdict\":\"pass\",\"issues\":[]}")?.passes == true)
+        let failedReading = parseOCRReadingValidation("```json\n{\"verdict\":\"repair\",\"issues\":[\"fragmented sentences\"]}\n```")
+        assert(failedReading?.passes == false && failedReading?.issues == ["fragmented sentences"])
+        assert(parseOCRReadingValidation("The narration looks fine") == nil)
+        let storedBrokenReading = "a foreboding sense of isolation led some to see it as a reminder. The passage continues and ends with the woi"
+        let boundaryIssues = deterministicOCRReadingIssues(storedBrokenReading)
+        assert(boundaryIssues.count == 2 && boundaryIssues[0].contains("begins mid-sentence") && boundaryIssues[1].contains("ends mid-sentence"))
         for action in ["preview", "speak", "clarify"] { assert(screenSchema.contains(action)) }
         let written = AssistantReply(action: .preview, text: "Here is the screen summary.")
         assert(routeAssistantReply(written, delivery: .audio, selection: "").action == .speak)
@@ -49,16 +58,41 @@ import FoundationModels
         if ProcessInfo.processInfo.environment["TEXTHALO_TEST_LOCAL_MODEL"] == "1" {
             guard SystemLanguageModel.default.isAvailable else { throw NSError(domain: "Model unavailable", code: 1) }
             let bookPage = """
+                Chrome
+                Back  Forward  Reload
+                Library
                 Chapter One
-                It was a bright cold day in April, and the clocks were striking thirteen.
-                Winston Smith slipped quickly through the glass doors of Victory Mansions.
+                it was a bright cold day
+                in April and the clocks were striking thirteen
+                Winston Smith slipped quickly through the glass doors
+                of Victory Mansions
+                Bookmarks
                 """
             let bookReading = try await generateAssistantReply(
                 request: "Read the book aloud to me.", preference: "",
                 reference: AssistantPrompt.referenceContext(selectedText: "", screenOCR: bookPage),
                 previous: "", selection: "", screenText: bookPage)
-            assert(bookReading.action == .speak && bookReading.text == bookPage,
-                   "A book reading must use the captured words without a generated preamble")
+            print("OCR READING: \(bookReading.text)"); fflush(stdout)
+            assert(bookReading.action == .speak && bookReading.text != bookPage,
+                   "Screen OCR must be interpreted rather than sent directly to speech")
+            assert(bookReading.text.contains("bright cold day") && bookReading.text.contains("Winston Smith"),
+                   "A book reading must preserve the relevant passage")
+            assert(!bookReading.text.contains("Back  Forward") && !bookReading.text.contains("Bookmarks"),
+                   "A book reading must exclude unrelated browser chrome")
+            assert(!bookReading.text.contains("day\nin April")
+                   && bookReading.text.contains("thirteen. Winston Smith")
+                   && bookReading.text.hasSuffix("."),
+                   "The OCR rewriter must reconnect wrapped lines and restore punctuation")
+            let storedNoisyReading = """
+                a foreboding sense of isolation led some to see it as a reminder not only of nature's power but also of God's. The apocalypse. Armageddon. The End of Times. PROLOGUE For a small group in the visitors' room at the women's correctional facility near Gig Harbor, Washington, that spring, it was exactly as they'd imagined. Even wanted. In the spring of 1980, Mount Saint Helens erupted with an ominous, terrifying cloud of volcanic ash that blanketed much of Washington state. Yakima, an agricultural city on the east side of the Cascade Range, was especially hard hit as the otherworldly ash plume blocked the sun, turning day into night. Five inches of ash fell like powdery gray snow. It was unlike anything anyone had experienced. Cars couldn't move as air filters clogged. Businesses shuttered. Residents were told to stay indoors. Fear and were willing to kill for it. Tina Cunningham, twenty-five, had visited the Washington Corrections Center for Women nearly every week for more than four years when the eruption occurred. She, her husband, Gary, and their two sons, one an infant, lived nearby in Port Orchard, just a fifteen-minute drive away. The visits were like a family reunion, though of the woi
+                """
+            let recoveredReading = try await generateOCRReading(
+                request: "Read the visible book passage aloud.", screenText: storedNoisyReading)
+            print("RECOVERED STORED READING: \(recoveredReading)"); fflush(stdout)
+            assert(deterministicOCRReadingIssues(recoveredReading).isEmpty,
+                   "The stored broken narration must not pass with clipped boundaries")
+            assert(!recoveredReading.contains("Fear and were willing") && !recoveredReading.contains("the woi"),
+                   "The stored malformed OCR merge and truncated word must be repaired or omitted")
             let ocr = """
             Codex
             New chat
@@ -95,6 +129,12 @@ import FoundationModels
             assert(["code", "assistant", "screen", "development"].contains(where: { summary.text.lowercased().contains($0) }), "Explain the main development conversation")
             assert(summary.text != ocr && !summary.text.contains("New chat\nProjects"))
             assert(summary.text.split(whereSeparator: \.isWhitespace).count < 140)
+            let mixedSummary = try await generateAssistantReply(
+                request: "Read what is on my screen and summarize it.", preference: "",
+                reference: reference, previous: "", selection: "", screenText: ocr)
+            assert(mixedSummary.action == .preview)
+            assert(mixedSummary.text != ocr && !mixedSummary.text.contains("New chat\nProjects"),
+                   "A mixed read-and-summarize request must return the generated summary, not raw OCR")
             let exactText = "Invoice total: $42\nDue Friday"
             let transcription = try await generateAssistantReply(request: "Transcribe the screen text exactly, preserving its words and line breaks.", preference: "", reference: AssistantPrompt.referenceContext(selectedText: "", screenOCR: exactText), previous: "", selection: "", screenText: exactText)
             print("EXPLICIT TRANSCRIPTION: \(transcription.text)"); fflush(stdout)
