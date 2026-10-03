@@ -178,7 +178,7 @@ test("Assistant requests only missing permissions and reflects grants inline", a
   await boot(page, false, 0);
   await page.getByRole("button", {name:"Assistant",exact:true}).click();
   await expect(page.getByRole("button", {name:"Enable Microphone",exact:true})).toHaveCount(0);
-  await expect(page.getByRole("button", {name:"Enable Screen Recording",exact:true})).toHaveCount(0);
+  await expect(page.getByRole("button", {name:"Enable Screen Recording",exact:true})).toBeVisible();
   await page.getByRole("button", {name:"Enable Speech Recognition",exact:true}).click();
   await expect(page.getByRole("button", {name:"Waiting for macOS…",exact:true})).toBeDisabled();
   await expect(page.getByRole("heading", {name:"Assistant",exact:true})).toBeVisible();
@@ -189,8 +189,7 @@ test("Assistant requests only missing permissions and reflects grants inline", a
     await emit("texthalo:assistant-availability", structuredClone((window as any).__availability));
   });
   await expect(page.getByRole("button", {name:"Waiting for macOS…",exact:true})).toHaveCount(0);
-  await expect(page.getByRole("region", {name:"Assistant access"}).getByRole("status")).toHaveText("Ready");
-  await page.getByLabel("Assistant context").selectOption("screen");
+  await expect(page.getByRole("region", {name:"Assistant access"}).getByRole("status")).toHaveText("1 needed");
   await page.getByRole("button", {name:"Enable Screen Recording",exact:true}).click();
   expect(await page.evaluate(() => (window as any).__calls.filter((call:any) => call.args?.command?.startsWith("permission_")).map((call:any) => call.args.command))).toEqual(["permission_speech", "permission_screen"]);
 });
@@ -269,4 +268,48 @@ test("optional recording shortcuts can be cleared directly", async ({page}) => {
   await page.getByRole("button", {name:"Clear shortcut",exact:true}).click();
   await expect.poll(() => page.evaluate(() => (window as any).__state.settings.shortcuts.transcribe)).toBe("");
   await expect(page.getByRole("heading", {name:"Dictate",exact:true})).toBeVisible();
+});
+
+test("section readiness explains missing setup and updates when ready", async ({page}) => {
+  await boot(page, false, 3, false, "apple", {screen:true});
+  const nav = page.getByRole("navigation", {name:"Main"});
+  const dictate = page.getByRole("button", {name:"Dictate status", exact:true});
+  const assistant = page.getByRole("button", {name:"Assistant status", exact:true});
+  await expect(page.getByRole("button", {name:"Voices status", exact:true})).toHaveAttribute("title", "Ready to use");
+  await expect(dictate).toHaveAttribute("title", /Set a Dictate shortcut/);
+  await dictate.hover();
+  await expect(page.getByRole("tooltip")).toContainText("Set a Dictate shortcut");
+  await dictate.press("Escape");
+  await expect(page.getByRole("tooltip")).toHaveCount(0);
+  await assistant.focus();
+  await expect(page.getByRole("tooltip")).toContainText("Set an Assistant shortcut");
+  // Test configured shortcuts through the real feature controls.
+  await nav.getByRole("button", {name:"Dictate", exact:true}).click();
+  await page.getByRole("button", {name:"Change shortcut", exact:true}).click();
+  await page.keyboard.press("Control+Shift+D");
+  await expect(dictate).toHaveAttribute("title", "Ready to use");
+  await nav.getByRole("button", {name:"Assistant", exact:true}).click();
+  await page.getByRole("button", {name:"Change shortcut", exact:true}).click();
+  await page.keyboard.press("Control+Shift+A");
+  await expect(assistant).toHaveAttribute("title", "Ready to use");
+});
+
+test("section readiness only requires permissions needed by each feature", async ({page}) => {
+  await boot(page, false, 1, false, "apple", {microphone:2, model:"unavailable", screen:false});
+  await expect(page.getByRole("button", {name:"Dictate status", exact:true})).toHaveAttribute("title", /Microphone access is denied/);
+  await expect(page.getByRole("button", {name:"Dictate status", exact:true})).toHaveAttribute("title", /Speech Recognition access is denied/);
+  await expect(page.getByRole("button", {name:"Assistant status", exact:true})).toHaveAttribute("title", /Apple Intelligence/);
+  await expect(page.getByRole("button", {name:"Voices status", exact:true})).toHaveAttribute("title", "Ready to use");
+});
+
+
+test("Assistant requires screen permission for every context and explains privacy", async ({page}) => {
+  await boot(page);
+  await page.getByRole("navigation", {name:"Main"}).getByRole("button", {name:"Assistant", exact:true}).click();
+  for (const context of ["selection", "none", "screen"]) {
+    await page.getByLabel("Assistant context").selectOption(context);
+    await expect(page.getByRole("button", {name:"Enable Screen Recording", exact:true})).toBeVisible();
+    await expect(page.getByRole("button", {name:"Assistant status", exact:true})).toHaveAttribute("title", /Allow Screen Recording/);
+  }
+  await expect(page.getByText(/Assistant processes your speech and screen context on this Mac/)).toBeVisible();
 });

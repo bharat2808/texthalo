@@ -212,6 +212,13 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
         } catch { diagnostic = "Local transcription test failed: \(error.localizedDescription)" }
     }
     func handle(_ command: Request) {
+        let startsAssistant = command.command == "open" || command.command == "ask"
+            || (command.command == "start" && command.mode == "assistant")
+        if startsAssistant && !CGPreflightScreenCaptureAccess() {
+            cancel(); id = command.id
+            event("error", "Enable Screen Recording in TextHalo’s Assistant section, then try again.")
+            return
+        }
         switch command.command {
         case "status": availability()
         case "permissions": Task { await permissions() }

@@ -3,9 +3,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 export type AssistantPreferences = { language: string; instruction: string; dictation_output: string; context: string };
 export const defaultAssistantPreferences: AssistantPreferences = { language: "en-US", instruction: "", dictation_output: "insert", context: "selection" };
-type Availability = { model?: string; microphone?: number; recognition?: number; accessibility?: boolean; screen?: boolean; diagnostic?: string };
+export type Availability = { model?: string; microphone?: number; recognition?: number; accessibility?: boolean; screen?: boolean; diagnostic?: string };
 type Props = { value: AssistantPreferences; onChange: (value: AssistantPreferences) => void };
-function useAvailability() {
+export function useAvailability() {
   const [availability, setAvailability] = useState<Availability>({});
   const [error, setError] = useState("");
   async function command(command: string) {
@@ -33,7 +33,7 @@ export function PermissionsSettings() {
     {([
       {name:"Microphone",key:"microphone",status:a.microphone,description:"Records while you hold Dictate or Assistant."},
       {name:"Speech Recognition",key:"speech",status:a.recognition === 1 ? 2 : a.recognition === 2 ? 1 : a.recognition,description:"Converts your voice into text on this Mac."},
-      {name:"Screen Recording",key:"screen",status:a.screen === undefined ? undefined : a.screen ? 3 : 0,description:"Lets Assistant use text from your screen when you choose window context."},
+      {name:"Screen Recording",key:"screen",status:a.screen === undefined ? undefined : a.screen ? 3 : 0,description:"Required for Assistant. Screen text is read only when you choose window context."},
     ]).map(p => <section className="permission-row" key={p.key}>
       <strong>{p.name}</strong><div className="card-note">{p.description}</div><p>{label(p.status)}</p>
       <div className="inline">
@@ -90,9 +90,8 @@ type FeaturePermission = {
   required: boolean;
 };
 
-export function TaskReadiness({ mode, needsScreen = false, needsAccessibility = true, accessibilityPrompted, onAccessibility }: {
+export function TaskReadiness({ mode, needsAccessibility = true, accessibilityPrompted, onAccessibility }: {
   mode: "dictate" | "assistant";
-  needsScreen?: boolean;
   needsAccessibility?: boolean;
   accessibilityPrompted: boolean;
   onAccessibility: () => Promise<void>;
@@ -107,7 +106,7 @@ export function TaskReadiness({ mode, needsScreen = false, needsAccessibility = 
     // Speech Recognition's denied/restricted enum values are reversed from Microphone.
     { name: "Speech Recognition", key: "speech", status: a.recognition === 1 ? 2 : a.recognition === 2 ? 1 : a.recognition, required: true },
     { name: "Accessibility", key: "accessibility", status: a.accessibility === undefined ? undefined : a.accessibility ? 3 : 0, required: needsAccessibility },
-    ...(mode === "assistant" ? [{ name: "Screen Recording", key: "screen" as const, status: a.screen === undefined ? undefined : a.screen ? 3 : 0, required: needsScreen }] : []),
+    ...(mode === "assistant" ? [{ name: "Screen Recording", key: "screen" as const, status: a.screen === undefined ? undefined : a.screen ? 3 : 0, required: true }] : []),
   ];
   const missing = permissions.filter(permission => permission.required && permission.status !== 3);
   const checking = missing.some(permission => permission.status === undefined);

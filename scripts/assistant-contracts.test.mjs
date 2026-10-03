@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -14,4 +14,24 @@ test("native insertion, hold-release, and scoped Undo contracts", {skip:process.
     const result = spawnSync(binary, [], {encoding:"utf8",timeout:10000});
     assert.equal(result.status, 0, result.stderr);
   } finally { rmSync(directory, {recursive:true,force:true}); }
+});
+
+
+test("development app declares the same privacy purposes as the release app", {skip:process.platform !== "darwin"}, () => {
+  const readPlist = (path) => {
+    const result = spawnSync("/usr/bin/plutil", ["-convert", "json", "-o", "-", path], {encoding:"utf8"});
+    assert.equal(result.status, 0, result.stderr);
+    return JSON.parse(result.stdout);
+  };
+  const dev = readPlist("src-tauri/DevInfo.plist");
+  const release = readPlist("src-tauri/Info.plist");
+  assert.equal(dev.CFBundleExecutable, "kiegen");
+  const config = JSON.parse(readFileSync("src-tauri/tauri.conf.json", "utf8"));
+  assert.equal(dev.CFBundleIdentifier, config.identifier);
+  assert.equal(dev.CFBundleName, config.productName);
+  assert.equal(dev.CFBundleDisplayName, config.productName);
+  for (const key of ["NSMicrophoneUsageDescription", "NSSpeechRecognitionUsageDescription"]) {
+    assert.ok(dev[key]?.trim());
+    assert.equal(dev[key], release[key]);
+  }
 });

@@ -1,5 +1,7 @@
+import { createPortal } from "react-dom";
+import { serviceReadiness } from "./serviceReadiness";
 import TranscriptionHistory from "./TranscriptionHistory";
-import AssistantSettings, { PermissionsSettings, TranscriptionSettings, TaskReadiness, defaultAssistantPreferences, type AssistantPreferences } from "./AssistantSettings";
+import AssistantSettings, { PermissionsSettings, TranscriptionSettings, TaskReadiness, useAvailability, defaultAssistantPreferences, type AssistantPreferences } from "./AssistantSettings";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
@@ -599,6 +601,8 @@ function Note({
 /* ── app ───────────────────────────────────────────────────────────── */
 
 function MainApp() {
+  const serviceAvailability = useAvailability();
+  const [serviceTooltip, setServiceTooltip] = useState<{ id: string; x: number; y: number } | null>(null);
   const [state, setState] = useState<UiState | null>(null);
   const [appVersion, setAppVersion] = useState<string | null>(null);
   const [historyView, setHistoryView] = useState<"audio" | "transcripts">("audio");
@@ -1483,6 +1487,30 @@ function MainApp() {
     { id: "history", title: "History", icon: Icon.history() },
   ];
 
+  const readiness = serviceReadiness({
+    availability: serviceAvailability.availability, error: serviceAvailability.error,
+    trusted: state.trusted, secureInput: state.secure_input,
+    shortcuts: settings.shortcuts, refused: state.refused_shortcuts,
+    preferences: settings.assistant ?? defaultAssistantPreferences, engine: activeEngine,
+  });
+
+  const readinessIcon = (id: string, label: string) => {
+    const reasons = readiness[id];
+    const show = (element: HTMLElement) => {
+      const rect = element.getBoundingClientRect();
+      setServiceTooltip({id, x: Math.max(12, Math.min(rect.left, window.innerWidth - 300)), y: Math.min(rect.bottom + 6, window.innerHeight - 240)});
+    };
+    return <button type="button" className={`service-status ${reasons.length ? "not-ready" : "ready"}`}
+      aria-label={`${label} status`} title={reasons.join("\n") || "Ready to use"}
+      aria-description={reasons.join(" ") || "Ready to use"}
+      onMouseEnter={event => show(event.currentTarget)} onFocus={event => show(event.currentTarget)}
+      onMouseLeave={() => setServiceTooltip(null)} onBlur={() => setServiceTooltip(null)}
+      onKeyDown={event => { if (event.key === "Escape") setServiceTooltip(null); }}
+      onClick={event => show(event.currentTarget)}>
+      {reasons.length ? Icon.info() : Icon.checkCircle()}
+    </button>;
+  };
+
   const paidAccountPlans = accountPlans?.filter((plan) => plan.id !== "free") ?? [];
   const activeAccountSubscription = subscriptionIsActive(account?.subscription ?? null) ? account?.subscription ?? null : null;
   const currentAccountPlanIndex = paidAccountPlans.findIndex((plan) => plan.id === activeAccountSubscription?.planId);
@@ -1549,6 +1577,9 @@ function MainApp() {
 
   return (
     <div className="settings">
+      {serviceTooltip && createPortal(<div className="service-tooltip" role="tooltip" style={{left: serviceTooltip.x, top: serviceTooltip.y}}>
+        {readiness[serviceTooltip.id]?.join("\n") || "Ready to use"}
+      </div>, document.body)}
       <nav className="sidebar" aria-label="Main">
         <div className="sidebar-brand"><img src={appLogo} alt="" /><strong>TextHalo</strong></div>
         {tabs.map((entry) => (
@@ -1556,7 +1587,7 @@ function MainApp() {
             key={entry.id}
             className={tab === entry.id ? "sidebar-row active" : "sidebar-row"}
             aria-current={tab === entry.id ? "page" : undefined}
-            onClick={() => setTab(entry.id)}
+            onClick={() => { setServiceTooltip(null); setTab(entry.id); }}
           >
             {entry.icon}
             <span>{entry.title}</span>
@@ -1583,9 +1614,9 @@ function MainApp() {
         {tab === "home" ? <div className="pane-inner home-pane">
           <header><h1 className="pane-title">Home</h1><p className="home-intro">Listen. Dictate. Get a little help.</p></header>
           <section className="listen-hero" aria-labelledby="listen-title">
-            <div className="home-eyebrow">LISTEN</div>
+            <div className="service-heading"><div className="home-eyebrow">LISTEN</div>{readinessIcon("voice", "Voices")}</div>
             <h2 id="listen-title">Turn text into speech.</h2>
-            <p>Select text in any app, then press <kbd>{settings.shortcuts.speak || "Set a shortcut"}</kbd>.</p>
+            <p>Select text in any app, then use your shortcut.</p>
             <div className="home-voice"><span>{activeEngine?.label ?? "Apple voices"}</span><span>{settings.engine === "fish" ? "Hosted" : "On this Mac"}</span></div>
             {!state.trusted ? <div className="home-notice"><span>Allow Accessibility to read selected text.</span><button className="plain" onClick={() => void enableAccessibility().catch(cause => setError(String(cause)))}>{settings.accessibility_prompted ? "Open Accessibility Settings" : "Enable access"}</button></div>
               : activeEngine && !activeEngine.can_speak ? <div className="home-notice"><span>{activeEngine.status}</span><button className="plain" onClick={() => setTab("voice")}>Set up voice</button></div>
@@ -1595,8 +1626,8 @@ function MainApp() {
             <div className="inline"><button className="primary-button" onClick={() => setTab("voice")}>Choose a voice</button><button className="plain" disabled={!activeEngine?.can_speak || state.speaking} onClick={() => preview(settings.engine === "apple" ? settings.voice : activeEngine?.selected_voice ?? null)}>Preview voice</button>{state.speaking ? <button className="plain" onClick={() => void invoke("stop_speaking").catch(cause => setError(String(cause)))}>Stop</button> : null}</div>
           </section>
           <div className="home-tasks">
-            <section className="task-card"><h2>Dictate</h2><p>Speak and put your words into any text field.</p><kbd>{settings.shortcuts.transcribe || "Set up a shortcut"}</kbd><button className="plain" onClick={() => setTab("transcription")}>Set up dictation</button></section>
-            <section className="task-card"><h2>Assistant</h2><p>Ask to write, edit, or read something aloud.</p><kbd>{settings.shortcuts.assistant || "Set up a shortcut"}</kbd><button className="plain" onClick={() => setTab("assistant")}>Set up Assistant</button></section>
+            <section className="task-card"><div className="service-heading"><h2>Dictate</h2>{readinessIcon("transcription", "Dictate")}</div><p>Speak and put your words into any text field.</p><kbd>{settings.shortcuts.transcribe || "Set up a shortcut"}</kbd><button className="plain" onClick={() => setTab("transcription")}>Set up dictation</button></section>
+            <section className="task-card"><div className="service-heading"><h2>Assistant</h2>{readinessIcon("assistant", "Assistant")}</div><p>Ask to write, edit, or read something aloud.</p><kbd>{settings.shortcuts.assistant || "Set up a shortcut"}</kbd><button className="plain" onClick={() => setTab("assistant")}>Set up Assistant</button></section>
           </div>
           <button className="text home-history" onClick={() => setTab("history")}>Open your history</button>
         </div> : null}
@@ -1684,7 +1715,7 @@ function MainApp() {
           <div className="pane-inner">
             <div className="history-heading">
               <div>
-                <h1 className="pane-title">Voices</h1>
+                <div className="service-heading"><h1 className="pane-title">Voices</h1>{readinessIcon("voice", "Voices")}</div>
                 <p className="pane-subtitle">
                   Find a voice you enjoy listening to.
                 </p>
@@ -2316,7 +2347,7 @@ function MainApp() {
           <Card title="Voice and screen access" icon={Icon.gear()}><PermissionsSettings /></Card>
         </div> : null}
         {tab === "transcription" ? <div className="pane-inner">
-          <h1 className="pane-title">Dictate</h1>
+          <div className="service-heading"><h1 className="pane-title">Dictate</h1>{readinessIcon("transcription", "Dictate")}</div>
           <p className="pane-subtitle">Hold your shortcut, speak, then release.</p>
           {shortcutControl("transcribe")}
           <TaskReadiness mode="dictate" needsAccessibility={(settings.assistant ?? defaultAssistantPreferences).dictation_output === "insert"} accessibilityPrompted={settings.accessibility_prompted} onAccessibility={enableAccessibility} />
@@ -2324,12 +2355,12 @@ function MainApp() {
           <button className="text" onClick={() => { setHistoryView("transcripts"); setTab("history"); }}>View transcripts</button>
         </div> : null}
         {tab === "assistant" ? <div className="pane-inner">
-          <h1 className="pane-title">Assistant</h1>
+          <div className="service-heading"><h1 className="pane-title">Assistant</h1>{readinessIcon("assistant", "Assistant")}</div>
           <p className="pane-subtitle">Hold your shortcut and ask to write, edit, or read aloud.</p>
           {shortcutControl("assistant")}
-          <TaskReadiness mode="assistant" needsScreen={settings.assistant?.context === "screen"} accessibilityPrompted={settings.accessibility_prompted} onAccessibility={enableAccessibility} />
+          <TaskReadiness mode="assistant" accessibilityPrompted={settings.accessibility_prompted} onAccessibility={enableAccessibility} />
           <Card title="Make it yours" icon={Icon.textCursor()}><AssistantSettings value={settings.assistant ?? defaultAssistantPreferences} onChange={assistant => void save({ assistant })} /></Card>
-          <p className="card-note">{settings.engine === "fish" ? "Generation stays on this Mac. Narration sends the resulting text to TextHalo and Fish Audio." : "Generation and your selected voice run on this Mac."}</p>
+          <p className="card-note"><strong>Privacy:</strong> Assistant processes your speech and screen context on this Mac. With a cloud voice, only the text to be spoken is sent to TextHalo and Fish Audio to generate speech. Local voices keep speech generation on your Mac too.</p>
         </div> : null}
 
         {tab === "shortcuts" ? (
