@@ -783,6 +783,7 @@ async fn stream_speech_inner(
     use std::sync::mpsc::TryRecvError;
     let (mut upload, input) = match input {
         SpeechInput::Complete(text) => {
+            let text = crate::speech_input::normalize(&text);
             let mut upload = crate::hosted_input::Upload::default();
             upload.append(&text)?;
             upload.finish()?;
@@ -855,6 +856,7 @@ async fn stream_speech_inner(
                     if let Some(input) = input.as_ref() {
                         match input.try_recv() {
                             Ok(SpeechEvent::Delta(delta)) => {
+                                let delta = crate::speech_input::normalize(&delta);
                                 let sequence = upload.append(&delta)?;
                                 socket.send(Message::Text(json!({"type":"append_text","sequence":sequence,"text":delta}).to_string().into()))
                                     .await.map_err(|_| "Could not send generated speech text.".to_string())?;

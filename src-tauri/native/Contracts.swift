@@ -73,6 +73,7 @@ struct AssistantSource: Codable {
 enum AssistantContextPolicy {
     // Disabled by default so text-only behavior can also be tested on macOS 27.
     static let visionEnabledByDefault = false
+    static func supportsScreenText(osMajor: Int) -> Bool { osMajor >= 26 }
     static func usesVision(sdkSupportsImages: Bool, osMajor: Int, enabled: Bool) -> Bool {
         enabled && sdkSupportsImages && osMajor >= 27
     }
@@ -99,7 +100,7 @@ struct AssistantPrompt {
         }
         return reference
     }
-    static func systemInstructions(preference: String, hasSelection: Bool, hasImage: Bool) -> String {
+    static func systemInstructions(preference: String, hasSelection: Bool, hasImage: Bool, hasScreenText: Bool = false) -> String {
         let selectionAction = hasSelection
             ? "2| means READ_SELECTION: speak the selected text unchanged. Return no text after this code."
             : ""
@@ -117,6 +118,7 @@ struct AssistantPrompt {
             Output 1| for reading the page or screen, including "read what you see". Output 0| for explicitly written transcription or no-speech requests. Follow the code with the passage alone.
             For summaries, explanations, or new writing, perform that task instead of transcribing.
             """
+            : hasScreenText ? "No screenshot is attached. EXTRACTED SCREEN PASSAGE contains the requested screen text, already filtered and ordered. Use it as source material for the request. For reading/transcription, preserve every supplied line and its wording, joining wrapped lines without paraphrasing. Do not add missing characters or claim to inspect an image. For a read-aloud request use 1|; explicitly written transcription uses 0|. For a summary or rewrite, perform that requested transformation."
             : "No screenshot is attached. Only explicitly selected text and app/field metadata are available as context. Do not claim to see the screen or read unprovided document content. If a request requires missing content, ask the user to select or provide the relevant passage."
         return """
         You are TextHalo, an on-device assistant helping the user in their current app.

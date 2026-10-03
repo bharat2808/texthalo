@@ -4,7 +4,7 @@ import ScreenCaptureKit
 
 enum ScreenCapture {
     /// Capture the original target window entirely in memory. The image is sent
-    /// directly to Foundation Models on builds that support image attachments.
+    /// used for OCR, or sent to Foundation Models when image input is enabled.
     @available(macOS 14.0, *)
     static func window(_ windowID: CGWindowID) async throws -> CGImage {
         try Task.checkCancellation()

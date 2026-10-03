@@ -177,7 +177,8 @@ impl Spoken {
         rate: u32,
         archive_path: Option<&Path>,
     ) -> Result<Report, String> {
-        self.speech.speak(text, voice, rate, archive_path)?;
+        let normalized = crate::speech_input::normalize(text);
+        self.speech.speak(&normalized, voice, rate, archive_path)?;
         Ok(Report {
             chars: text.chars().count(),
             phonemes: 0,
@@ -211,6 +212,8 @@ impl Spoken {
         settings: &Settings,
         text: &str,
     ) -> Result<(Vec<f32>, Report, u32), String> {
+        let normalized = crate::speech_input::normalize(text);
+        let text = normalized.as_str();
         let (samples, phoneme_count, dropped, rate) = match settings.engine {
             Engine::Kokoro => {
                 let dir =

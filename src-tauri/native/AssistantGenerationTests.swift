@@ -16,6 +16,18 @@ import ImageIO
         let right = (0..<5).map { ScreenText.Line(text: "R\($0)", bounds: CGRect(x: 0.6, y: 0.8 - Double($0) * 0.05, width: 0.3, height: 0.02)) }
         assert(ScreenText.ordered(Array((right + left).reversed())).map(\.text) == (left + right).map(\.text))
         assert(ScreenText.ordered(Array(left.reversed())).map(\.text) == left.map(\.text))
+        let sourceLines = ["Toolbar", "First original line.", "Second original line.", "Progress"]
+        let extracted = try ScreenText.validatedPassage(response: "First original line. Second original line.", lines: sourceLines)
+        assert(extracted == "First original line.\nSecond original line.")
+        for invalid in ["", "First changed line.", "Second original line. First original line.", "First original line. Invented sentence.", "First original line. First original line."] {
+            do {
+                _ = try ScreenText.validatedPassage(response: invalid, lines: sourceLines)
+                assertionFailure("Invalid extraction must not send the entire screen: \(invalid)")
+            } catch { }
+        }
+        assert(!AssistantContextPolicy.supportsScreenText(osMajor: 25))
+        assert(AssistantContextPolicy.supportsScreenText(osMajor: 26))
+        assert(AssistantContextPolicy.supportsScreenText(osMajor: 27))
         var decoder = AssistantMarkerDecoder()
         let partialMarker = try decoder.update(snapshot: "1", selection: "")
         assert(partialMarker == nil)

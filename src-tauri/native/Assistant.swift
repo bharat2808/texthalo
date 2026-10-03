@@ -282,7 +282,7 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
               "microphone": AVCaptureDevice.authorizationStatus(for: .audio).rawValue,
               "recognition": SFSpeechRecognizer.authorizationStatus().rawValue,
               "accessibility": AXIsProcessTrusted(), "screen": CGPreflightScreenCaptureAccess(),
-              "imageInput": AssistantImageSupport.isAvailable, "diagnostic": diagnostic])
+              "imageInput": AssistantScreenSupport.isAvailable, "diagnostic": diagnostic])
     }
     func permissions() async {
         // Only an explicit Settings button invokes this; never resume an old hold afterward.
@@ -321,7 +321,7 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
         let startsAssistant = command.command == "open" || command.command == "ask"
             || (command.command == "start" && command.mode == "assistant")
         if startsAssistant && command.command != "open" { beginAudit(command, input: command.text ?? "") }
-        if startsAssistant && AssistantImageSupport.isAvailable && !CGPreflightScreenCaptureAccess() {
+        if startsAssistant && AssistantScreenSupport.isAvailable && !CGPreflightScreenCaptureAccess() {
             cancel(); id = command.id
             event("error", "Enable Screen Recording in TextHalo’s Assistant section, then try again.")
             return
@@ -370,7 +370,7 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
             cancel(); id = command.id; request = command
             context = sourceReference()
             if let retainedImage { screenImage = nil; generate(text, screenImage: retainedImage) }
-            else if AssistantImageSupport.isAvailable, target?.windowID != nil { captureScreen(region: false, prompt: text) }
+            else if AssistantScreenSupport.isAvailable, target?.windowID != nil { captureScreen(region: false, prompt: text) }
             else { generate(text) }
         case "undo":
             guard command.id == id, target?.canUndo == true else { return }
@@ -444,7 +444,7 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
         engine = audioEngine
         do {
             try audioEngine.start(); recording = true
-            if command.mode == "assistant", AssistantImageSupport.isAvailable,
+            if command.mode == "assistant", AssistantScreenSupport.isAvailable,
                CGPreflightScreenCaptureAccess(), let windowID = target?.windowID {
                 // Capture the original window once while the user speaks. Its
                 // request-owned task survives key-up but never cancellation.
@@ -490,7 +490,7 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
         guard !text.isEmpty else { cancel(); event("error", "No speech detected. Hold the shortcut and try again."); return }
         if mode == "assistant" {
             audit?.input(["transcript": text, "request": text])
-            if AssistantImageSupport.isAvailable, let preparation = screenPreparation {
+            if AssistantScreenSupport.isAvailable, let preparation = screenPreparation {
                 let currentID = id
                 event("capturing_screen", "Preparing visual context…")
                 generation = Task {
@@ -505,7 +505,7 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
                         self.event("error", "Could not capture visual context: \(error.localizedDescription)")
                     }
                 }
-            } else if AssistantImageSupport.isAvailable, target?.windowID != nil { captureScreen(region: false, prompt: text) }
+            } else if AssistantScreenSupport.isAvailable, target?.windowID != nil { captureScreen(region: false, prompt: text) }
             else { generate(text) }
         }
         else {
@@ -565,7 +565,7 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
                 audit?.input(["request": prompt, "selection": selection, "reference": source, "previousOutput": previous,
                               "systemInstructions": AssistantPrompt.systemInstructions(preference: preference, hasSelection: !selection.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, hasImage: screenImage != nil),
                               "userPrompt": AssistantPrompt.userPrompt(request: prompt, reference: source, previous: previous),
-                              "imageAttached": screenImage != nil, "attachmentLabel": "original-window"])
+                              "imageAttached": false, "screenCaptured": screenImage != nil, "attachmentLabel": "original-window"])
                 if let screenImage { audit?.screenshot(screenImage) }
                 let reply = try await generateAssistantReply(request: prompt, preference: preference,
                     reference: source, previous: previous, selection: selection, screenImage: screenImage,
@@ -602,8 +602,8 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
         }
     }
     func captureScreen(region: Bool, prompt: String? = nil) {
-        guard AssistantImageSupport.isAvailable else {
-            event("error", "Visual context requires a TextHalo build made with the macOS 27 SDK."); return
+        guard AssistantScreenSupport.isAvailable else {
+            event("error", "Screen context requires macOS 26 or later."); return
         }
         guard CGPreflightScreenCaptureAccess() else {
             event("error", "Enable Screen Recording in TextHalo’s Permissions section, then hold Assistant again."); return

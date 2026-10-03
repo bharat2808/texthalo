@@ -2,7 +2,7 @@ import CoreGraphics
 import Foundation
 import Vision
 
-/// Text supplements the same captured image; it never replaces a user selection.
+/// OCR from the captured window, shared by text-only and image-assisted context.
 enum ScreenText {
     struct Line {
         let text: String
@@ -58,7 +58,31 @@ enum ScreenText {
         return output
     }
 
+    static func validatedPassage(response: String, lines: [String]) throws -> String {
+        func normalized(_ text: String) -> String {
+            text.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+        }
+        var remaining = normalized(response)
+        var selected: [String] = []
+        for line in lines {
+            let candidate = normalized(line)
+            guard !candidate.isEmpty, remaining == candidate || remaining.hasPrefix(candidate + " ") else { continue }
+            selected.append(line)
+            remaining = String(remaining.dropFirst(candidate.count)).trimmingCharacters(in: .whitespaces)
+            if remaining.isEmpty { break }
+        }
+        guard remaining.isEmpty, !selected.isEmpty else {
+            throw NSError(domain: "TextHalo.ScreenText", code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Could not isolate the requested screen passage without changing its text. Select the passage or capture a smaller region."])
+        }
+        return selected.joined(separator: "\n")
+    }
+
     static func recognize(_ image: CGImage) async throws -> String {
+        reference(from: try await recognizeLines(image))
+    }
+
+    static func recognizeLines(_ image: CGImage) async throws -> [Line] {
         let request = VNRecognizeTextRequest()
         // Restored from 26da5ae: accurate recognition can stall/fail while
         // initializing Apple's compute runtime. Do not silently retry it.
@@ -72,7 +96,7 @@ enum ScreenText {
                 guard let text = observation.topCandidates(1).first?.string else { return nil }
                 return Line(text: text, bounds: observation.boundingBox)
             }
-            return reference(from: lines)
+            return ordered(lines)
         }
         return try await withTaskCancellationHandler {
             try Task.checkCancellation()
