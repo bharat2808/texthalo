@@ -285,6 +285,18 @@ export default function App() {
 }
 
 const Icon = {
+  sparkles: () => (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="m6 3 1.5 4.5L12 9l-4.5 1.5L6 15l-1.5-4.5L0 9l4.5-1.5L6 3Z" transform="translate(1 -1) scale(.9)" />
+      <path d="M12.5 1v4M10.5 3h4" />
+    </svg>
+  ),
+  person: () => (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" aria-hidden="true">
+      <circle cx="8" cy="4.75" r="2.75" />
+      <path d="M2.5 14v-1a5.5 4 0 0 1 11 0v1" />
+    </svg>
+  ),
   gear: () =>
     ico([
       "M8 4.754a3.246 3.246 0 1 0 0 6.492 3.246 3.246 0 0 0 0-6.492M5.754 8a2.246 2.246 0 1 1 4.492 0 2.246 2.246 0 0 1-4.492 0",
@@ -1483,7 +1495,7 @@ function MainApp() {
     { id: "home", title: "Home", icon: Icon.box() },
     { id: "voice", title: "Voices", icon: Icon.speaker() },
     { id: "transcription", title: "Dictate", icon: Icon.textCursor() },
-    { id: "assistant", title: "Assistant", icon: Icon.textCursor() },
+    { id: "assistant", title: "Assistant", icon: Icon.sparkles() },
     { id: "history", title: "History", icon: Icon.history() },
   ];
 
@@ -1594,7 +1606,7 @@ function MainApp() {
           </button>
         ))}
         <div className="sidebar-spacer" />
-        <button className={`sidebar-row${tab === "account" ? " active" : ""}`} aria-current={tab === "account" ? "page" : undefined} onClick={() => setTab("account")}>{Icon.gear()} Account</button>
+        <button className={`sidebar-row${tab === "account" ? " active" : ""}`} aria-current={tab === "account" ? "page" : undefined} onClick={() => setTab("account")}>{Icon.person()} Account</button>
         <button className={`sidebar-row${inSettings ? " active" : ""}`} aria-current={inSettings ? "page" : undefined} onClick={() => setTab("general")}>{Icon.gear()} Settings</button>
         {error ? (
           <Note kind="error" icon={Icon.xCircle()}>

@@ -41,6 +41,9 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
     .title("TextHalo Assistant")
     .inner_size(380.0, 130.0)
     .decorations(false)
+    .transparent(true)
+    .shadow(false)
+    .focusable(false)
     .resizable(false)
     .focused(false)
     .always_on_top(true)
@@ -110,22 +113,70 @@ fn send(app: &AppHandle, inner: &mut Inner, value: Value) -> Result<(), String> 
         .map_err(|e| format!("Native assistant connection failed: {e}"))
 }
 
-fn publish(app: &AppHandle, status: &Value) {
-    let _ = app.emit("texthalo:assistant", status);
-    let show = !matches!(
+struct Presentation {
+    show: bool,
+    compact: bool,
+    height: f64,
+}
+
+fn presentation(status: &Value) -> Presentation {
+    let show = !matches!(status["phase"].as_str(), Some("idle" | "canceled"))
+        && !matches!(status["action"].as_str(), Some("speak" | "applied"));
+    let compact = matches!(
         status["phase"].as_str(),
-        Some("idle" | "canceled" | "capturing_screen")
-    ) && status["action"] != "speak";
+        Some("recording" | "processing" | "capturing_screen")
+    ) || matches!(
+        status["action"].as_str(),
+        Some("copied" | "undone")
+    );
     let expanded =
         status["text"].as_str().is_some_and(|s| !s.is_empty()) && status["action"] != "applied";
-    let height = if expanded { 360.0 } else { 140.0 };
+    let height = if compact {
+        44.0
+    } else if expanded {
+        360.0
+    } else {
+        140.0
+    };
+    Presentation { show, compact, height }
+}
+
+fn publish(app: &AppHandle, status: &Value) {
+    let _ = app.emit("texthalo:assistant", status);
+    let Presentation { show, compact, height } = presentation(status);
+    if matches!(
+        status["action"].as_str(),
+        Some("copied" | "undone")
+    ) {
+        let id = status["id"].clone();
+        let action = status["action"].clone();
+        let app = app.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_secs(3));
+            let state = app.state::<AssistantState>();
+            let inner = state.inner.lock().unwrap();
+            if inner.status["id"] == id
+                && inner.status["action"] == action
+                && inner.status["phase"] == "result"
+            {
+                if let Some(window) = app.get_webview_window("assistant") {
+                    let _ = window.hide();
+                }
+            }
+        });
+    }
     let anchor = status.get("bounds").cloned();
     let app = app.clone();
     let _ = app.clone().run_on_main_thread(move || {
         if let Some(window) = app.get_webview_window("assistant") {
             if show {
-                let _ = window.set_size(tauri::LogicalSize::new(380.0, height));
-                position_panel(&window, anchor.as_ref(), height);
+                let _ = window.set_focusable(!compact);
+                if compact {
+                    crate::overlay::position(&window, false);
+                } else {
+                    let _ = window.set_size(tauri::LogicalSize::new(380.0, height));
+                    position_panel(&window, anchor.as_ref(), height);
+                }
                 #[cfg(target_os = "macos")]
                 if let Ok(raw) = window.ns_window() {
                     // Tauri show() makes a window key. Order it forward without activation instead.
@@ -270,7 +321,7 @@ fn stop_assistant_speech(app: &AppHandle, inner: &mut Inner) {
 fn configuration(command: &str, id: u64, settings: &Settings) -> Value {
     json!({"command":command,"id":id,"language":settings.assistant.language,
         "instruction":settings.assistant.instruction,"context":settings.assistant.context,
-        "output":settings.assistant.dictation_output})
+        "output":settings.assistant.dictation_output,"restoreClipboard":settings.restore_clipboard})
 }
 
 pub fn pressed(app: &AppHandle, mode: Mode, key: String, modifiers: String) {
@@ -441,6 +492,15 @@ pub fn assistant_control(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn completed_insertion_closes_the_overlay() {
+        let applied = presentation(&json!({"phase":"result","action":"applied","message":"Text inserted"}));
+        assert!(!applied.show);
+        let processing = presentation(&json!({"phase":"processing","message":"Inserting text…"}));
+        assert!(processing.show && processing.compact && processing.height == 44.0);
+        let fallback = presentation(&json!({"phase":"result","text":"Keep this text","message":"Could not insert"}));
+        assert!(fallback.show && !fallback.compact && fallback.height == 360.0);
+    }
     #[test]
     fn stale_or_busy_results_cannot_be_undone_or_copied() {
         let ready = json!({"id":7,"phase":"result"});

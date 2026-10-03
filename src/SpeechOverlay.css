@@ -1,8 +1,8 @@
 html:has(.overlay-root), body:has(.overlay-root), #root:has(.overlay-root) { margin: 0; width: 100%; height: 100%; background: transparent !important; overflow: hidden; }
-.speech-overlay { box-sizing: border-box; display: flex; align-items: center; gap: 12px; height: 44px; padding: 0 13px; background: #080808; color: #fff; border-radius: 13px; border: 1px solid #ffffff18; font: 12px -apple-system, BlinkMacSystemFont, sans-serif; user-select: none; animation: appear 160ms ease-out; }
+.speech-overlay { box-sizing: border-box; display: flex; align-items: center; gap: 12px; height: 44px; padding: 0 13px; background: light-dark(#ececec,#323232); color: light-dark(rgba(0,0,0,.85),rgba(255,255,255,.85)); border-radius: 13px; border: 1px solid light-dark(rgba(0,0,0,.12),rgba(255,255,255,.14)); font: 12px -apple-system, BlinkMacSystemFont, sans-serif; user-select: none; animation: appear 160ms ease-out; }
 .speech-label { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .activity { display: flex; align-items: center; justify-content: center; gap: 3px; width: 27px; height: 22px; }
-.activity i { width: 3px; height: 17px; border-radius: 3px; background: white; animation: bars 850ms ease-in-out infinite alternate; }
+.activity i { width: 3px; height: 17px; border-radius: 3px; background: light-dark(#007aff,#0a84ff); animation: bars 850ms ease-in-out infinite alternate; }
 .capturing .activity i, .preparing .activity i { height: 8px; animation-duration: 600ms; opacity: .7; }
 .error .activity { color: #ff6961; font-weight: 700; font-size: 20px; }
 .speech-overlay button { display: grid; place-items: center; width: 25px; height: 25px; padding: 0; border: 0; border-radius: 50%; background: #ee4545; cursor: pointer; }
@@ -25,3 +25,5 @@ html:has(.overlay-root), body:has(.overlay-root), #root:has(.overlay-root) { mar
 .recovery-actions .secondary { background: #ffffff18; color: white; }
 .recovery-actions .secondary:hover { background: #ffffff30; }
 .recovery-actions button:disabled { opacity: .5; cursor: wait; }
+
+.speech-overlay .overlay-undo { width: auto; padding: 0 8px; border-radius: 6px; background: #ffffff20; color: white; font: inherit; }

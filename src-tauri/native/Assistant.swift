@@ -74,17 +74,72 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
         var settable = DarwinBoolean(false)
         return AXUIElementIsAttributeSettable(element, kAXSelectedTextAttribute as CFString, &settable) == .success && settable.boolValue
     }
-    func insert(_ text: String) -> Bool {
+    func insert(_ text: String, restoreClipboard: Bool) async -> Bool {
         guard let application, !application.isTerminated,
               NSWorkspace.shared.frontmostApplication == application,
               let element, let focused = focusedElement(), let original, let current = snapshot(element),
-              original.permitsInsertion(current: current, sameElement: CFEqual(element, focused), editable: editable) else { return false }
-        guard let edit = TextEditReceipt(original: original, replacement: text),
-              AXUIElementSetAttributeValue(element, kAXSelectedTextAttribute as CFString, text as CFString) == .success else { return false }
-        if let after = snapshot(element), after.value == edit.updatedValue {
-            receipt = edit; committed = after
+              original.permitsInsertion(current: current, sameElement: CFEqual(element, focused), editable: true),
+              let edit = TextEditReceipt(original: original, replacement: text) else { return false }
+        if editable && AXUIElementSetAttributeValue(element, kAXSelectedTextAttribute as CFString, text as CFString) == .success {
+            if let after = snapshot(element), edit.acceptsCommit(after) {
+                receipt = edit; committed = after
+                return true
+            }
         }
-        return true
+        // Web and Electron editors often expose the caret but not a writable
+        // AXSelectedText. Paste only into the same, unchanged editable field.
+        let role = attribute(element, kAXRoleAttribute as CFString) as? String
+        guard original.permitsPaste(current: current, sameElement: true, role: role) else { return false }
+        let modifiers: CGEventFlags = [.maskCommand, .maskControl, .maskAlternate, .maskShift]
+        for _ in 0..<40 {
+            if CGEventSource.flagsState(.combinedSessionState).intersection(modifiers).isEmpty { break }
+            do { try await Task.sleep(for: .milliseconds(25)) } catch { return false }
+        }
+        guard !Task.isCancelled,
+              CGEventSource.flagsState(.combinedSessionState).intersection(modifiers).isEmpty,
+              NSWorkspace.shared.frontmostApplication == application,
+              let focused = focusedElement(), CFEqual(element, focused), snapshot(element) == original,
+              let source = CGEventSource(stateID: .hidSystemState),
+              let down = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: true),
+              let up = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: false) else { return false }
+        let pasteboard = NSPasteboard.general
+        let saved = restoreClipboard ? (pasteboard.pasteboardItems ?? []).map { item in
+            item.types.compactMap { type in item.data(forType: type).map { (type, $0) } }
+        } : []
+        pasteboard.clearContents()
+        let wroteText = pasteboard.setString(text, forType: .string)
+        let changeCount = pasteboard.changeCount
+        defer {
+            if restoreClipboard {
+                // Let the receiving app consume the paste, and never overwrite a
+                // newer clipboard change made by the user or another app.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                    guard pasteboard.changeCount == changeCount else { return }
+                    pasteboard.clearContents()
+                    let items = saved.map { entries in
+                        let item = NSPasteboardItem()
+                        for (type, data) in entries { item.setData(data, forType: type) }
+                        return item
+                    }
+                    if !items.isEmpty { pasteboard.writeObjects(items) }
+                }
+            }
+        }
+        guard wroteText else { return false }
+        down.flags = .maskCommand; up.flags = .maskCommand
+        down.post(tap: .cgSessionEventTap); up.post(tap: .cgSessionEventTap)
+        // Do not report success merely because the key events were posted.
+        for _ in 0..<30 {
+            do { try await Task.sleep(for: .milliseconds(25)) } catch { return false }
+            let sameApplication = NSWorkspace.shared.frontmostApplication == application
+            guard let focused = focusedElement(), let after = snapshot(focused) else { continue }
+            let focusedRole = attribute(focused, kAXRoleAttribute as CFString) as? String
+            if edit.acceptsPasteCommit(after, sameApplication: sameApplication, role: focusedRole) {
+                if CFEqual(element, focused) { receipt = edit; committed = after }
+                return true
+            }
+        }
+        return false
     }
     var canUndo: Bool { receipt != nil && committed != nil }
     func undo() -> Bool {
@@ -131,6 +186,7 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
     var audioRequest: SFSpeechAudioBufferRecognitionRequest?
     var recognition: SFSpeechRecognitionTask?
     var generation: Task<Void, Never>?
+    var insertion: Task<Void, Never>?
     var deadline: Task<Void, Never>?
     var heldTimer: Timer?
     var transcriptGate = TranscriptGate()
@@ -159,6 +215,7 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
         recording = false
     }
     func cancel() {
+        insertion?.cancel(); insertion = nil
         generation?.cancel(); generation = nil
         deadline?.cancel(); deadline = nil
         stopAudio()
@@ -276,6 +333,12 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
               SFSpeechRecognizer.authorizationStatus() == .authorized else {
             event("error", "Enable Microphone and Speech Recognition in TextHalo’s Permissions section, then hold the shortcut again."); return
         }
+        if command.output != "copy" || command.mode == "assistant" {
+            guard AXIsProcessTrusted() else {
+                event("error", "Enable Accessibility for TextHalo to insert text into your app."); return
+            }
+        }
+        event("processing", "Starting microphone…")
         let recognizer: SFSpeechRecognizer
         do { recognizer = try localRecognizer(language: command.language ?? "en-US") }
         catch { event("error", error.localizedDescription); return }
@@ -354,8 +417,18 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
         }
     }
     func insertResult() {
-        if target?.insert(result) == true { event("result", target?.original?.length == 0 ? "Text inserted" : "Text replaced", action: "applied") }
-        else { event("result", "The original field is unavailable or changed. Use Copy.", text: result) }
+        let currentID = id
+        let text = result
+        let source = target
+        let restoreClipboard = request?.restoreClipboard ?? true
+        event("processing", "Inserting text…")
+        insertion = Task {
+            let inserted = await source?.insert(text, restoreClipboard: restoreClipboard) == true
+            guard !Task.isCancelled, self.id == currentID else { return }
+            self.insertion = nil
+            if inserted { self.event("result", source?.original?.length == 0 ? "Text inserted" : "Text replaced", action: "applied") }
+            else { self.event("result", "Could not insert into the original field. Keep your cursor in an editable text field while dictating, or use Copy.", text: text) }
+        }
     }
     func generate(_ prompt: String) {
         guard #available(macOS 26.0, *) else { event("error", "Assistant requires macOS 26 or later."); return }

@@ -4,6 +4,10 @@ struct TargetSnapshot: Equatable {
     let value: String
     let location: Int
     let length: Int
+    func permitsPaste(current: TargetSnapshot, sameElement: Bool, role: String?) -> Bool {
+        let textField = role == "AXTextField" || role == "AXTextArea" || role == "AXComboBox"
+        return permitsInsertion(current: current, sameElement: sameElement, editable: textField)
+    }
     func permitsInsertion(current: TargetSnapshot, sameElement: Bool, editable: Bool) -> Bool {
         sameElement && editable && self == current && location >= 0 && length >= 0
             && location <= value.utf16.count && length <= value.utf16.count - location
@@ -22,6 +26,7 @@ struct Request: Decodable {
     var key: String?
     var modifiers: String?
     var restore: Bool?
+    var restoreClipboard: Bool?
 }
 
 // A recognizer may finalize before key-up; only release authorizes delivering text.
@@ -56,6 +61,13 @@ struct TextEditReceipt {
         originalText = (original.value as NSString).substring(with: range)
         updatedValue = (original.value as NSString).replacingCharacters(in: range, with: replacement)
         replacementLength = replacement.utf16.count
+    }
+    func acceptsCommit(_ snapshot: TargetSnapshot?) -> Bool {
+        snapshot?.value == updatedValue
+    }
+    func acceptsPasteCommit(_ snapshot: TargetSnapshot?, sameApplication: Bool, role: String?) -> Bool {
+        sameApplication && ["AXTextField", "AXTextArea", "AXComboBox"].contains(role ?? "")
+            && acceptsCommit(snapshot)
     }
     func permitsUndo(current: TargetSnapshot, committed: TargetSnapshot, sameElement: Bool, editable: Bool) -> Bool {
         committed.value == updatedValue && committed.permitsInsertion(current: current, sameElement: sameElement, editable: editable)

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import "./assistant.css";
+import "./SpeechOverlay.css";
 
 type Status = { id?: number; phase?: string; action?: string; message?: string; text?: string; canUndo?: boolean };
 export default function AssistantPanel() {
@@ -29,6 +30,20 @@ export default function AssistantPanel() {
     window.addEventListener("keydown", onKey);
     return () => { disposed = true; void off.then(unlisten => unlisten()); window.removeEventListener("keydown", onKey); };
   }, []);
+  if (applied) return null;
+  const completed = ["applied", "copied", "undone"].includes(status.action ?? "");
+  if (busy || completed) {
+    const label = status.phase === "recording" ? "Listening…"
+      : status.phase === "capturing_screen" ? "Reading screen…"
+      : status.message === "Thinking on this Mac…" ? "Generating…"
+      : status.message || "Processing…";
+    return <main className={`overlay-root speech-overlay ${busy ? status.phase === "recording" ? "recording" : "preparing" : "completed"}`}>
+      {busy ? <div className="activity" aria-hidden="true">{[0,1,2,3,4].map(index => <i key={index} style={{animationDelay:`${index * -0.13}s`}} />)}</div> : <span aria-hidden="true">✓</span>}
+      <span className="speech-label" role={error ? "alert" : "status"} title={error || status.message}>{error || label}</span>
+      {applied && status.canUndo ? <button className="overlay-undo" disabled={pending} onClick={() => void action("undo")}>Undo</button>
+        : <button aria-label={busy ? "Cancel" : "Dismiss"} title={busy ? "Cancel (Esc)" : "Dismiss"} onClick={() => void action("cancel")}><span /></button>}
+    </main>;
+  }
   return <main className="assistant-panel">
     <header><span className="assistant-eyebrow">TEXTHALO</span><button aria-label="Dismiss" onClick={() => void action("cancel")}>×</button></header>
     <div className="assistant-status-row"><span className={busy ? "assistant-indicator active" : "assistant-indicator"} aria-hidden="true" />

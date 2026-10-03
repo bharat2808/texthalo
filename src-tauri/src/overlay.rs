@@ -122,7 +122,7 @@ fn tick(app: &AppHandle) {
     }
 }
 
-fn position(window: &tauri::WebviewWindow, error: bool) {
+pub(crate) fn position(window: &tauri::WebviewWindow, error: bool) {
     let width = if error { 430.0 } else { 270.0 };
     let height = if error { 190.0 } else { 44.0 };
     // AppKit coordinates are logical points with the origin at the bottom left.
