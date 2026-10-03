@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 export type AssistantPreferences = { language: string; instruction: string; dictation_output: string; context: string };
-export const defaultAssistantPreferences: AssistantPreferences = { language: "en-US", instruction: "", dictation_output: "insert", context: "selection" };
+export const defaultAssistantPreferences: AssistantPreferences = { language: "en-US", instruction: "", dictation_output: "insert", context: "screen" };
 export type Availability = { model?: string; microphone?: number; recognition?: number; accessibility?: boolean; screen?: boolean; diagnostic?: string };
 type Props = { value: AssistantPreferences; onChange: (value: AssistantPreferences) => void };
 export function useAvailability() {
@@ -58,7 +58,7 @@ export default function AssistantSettings({ value, onChange }: Props) {
     <div className="field"><label className="field-label" htmlFor="assistant-context">Assistant context</label>
       <select id="assistant-context" value={value.context} onChange={event => onChange({ ...value, instruction: draft.current, context: event.target.value })}>
         <option value="selection">Selected text</option><option value="screen">Selected text and original window</option><option value="none">Only my spoken request</option>
-      </select><p className="card-note">Window context reads visible text on your Mac, not images.</p>
+      </select><p className="card-note">Window context recognizes visible words locally with Apple Vision. It does not interpret images, colors, charts, or layout.</p>
     </div>
     <p className="card-note" role="status">Apple Intelligence: {availability.model ?? "Checking…"}</p>
     {error && <p role="alert">{error}</p>}

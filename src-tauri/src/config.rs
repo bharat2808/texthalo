@@ -151,7 +151,7 @@ impl Default for AssistantSettings {
             language: "en-US".into(),
             instruction: String::new(),
             dictation_output: "insert".into(),
-            context: "selection".into(),
+            context: "screen".into(),
         }
     }
 }
@@ -281,6 +281,7 @@ mod tests {
             "copy_only"
         );
         assert!(!settings.onboarding_completed);
+        assert_eq!(settings.assistant.context, "screen");
     }
 
     /// Config files written before the engine choice existed must keep working: they have

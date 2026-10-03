@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import "./assistant.css";
 import "./SpeechOverlay.css";
 
@@ -17,6 +18,12 @@ export default function AssistantPanel() {
     try { await invoke("assistant_control", { command, requestId: current.current.id }); }
     catch (cause) { setError(String(cause)); }
     finally { setPending(false); }
+  }
+  async function beginDrag(event: React.MouseEvent<HTMLElement>) {
+    if (event.button !== 0 || (event.target as HTMLElement).closest("button")) return;
+    event.preventDefault();
+    try { await getCurrentWindow().startDragging(); }
+    catch (cause) { setError(String(cause)); }
   }
   useEffect(() => {
     let disposed = false;
@@ -45,7 +52,7 @@ export default function AssistantPanel() {
     </main>;
   }
   return <main className="assistant-panel">
-    <header><span className="assistant-eyebrow">TEXTHALO</span><button aria-label="Dismiss" onClick={() => void action("cancel")}>×</button></header>
+    <header onMouseDown={event => void beginDrag(event)}><span className="assistant-eyebrow">TEXTHALO</span><button aria-label="Dismiss" onClick={() => void action("cancel")}>×</button></header>
     <div className="assistant-status-row"><span className={busy ? "assistant-indicator active" : "assistant-indicator"} aria-hidden="true" />
       <p role="status">{status.message || "Ready"}</p>
       {applied && status.canUndo && <button disabled={pending} onClick={() => void action("undo")}>Undo</button>}

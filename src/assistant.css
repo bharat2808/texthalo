@@ -1,6 +1,8 @@
 .assistant-panel { --overlay-window:light-dark(#ececec,#323232); --overlay-control:light-dark(#fff,#1e1e1e); --overlay-label:light-dark(rgba(0,0,0,.85),rgba(255,255,255,.85)); --overlay-secondary:light-dark(rgba(0,0,0,.5),rgba(255,255,255,.55)); --overlay-separator:light-dark(rgba(0,0,0,.12),rgba(255,255,255,.14)); --overlay-accent:light-dark(#007aff,#0a84ff); border-radius: 13px; border: 1px solid var(--overlay-separator); color-scheme: light dark; box-sizing: border-box; min-height: 100vh; padding: 12px 16px; background:var(--overlay-window); color:var(--overlay-label); font: 13px/1.5 -apple-system,BlinkMacSystemFont,sans-serif; }
 .assistant-panel * { box-sizing: border-box; }
-.assistant-panel header { display:flex; justify-content:space-between; align-items:center; }
+.assistant-panel header { display:flex; justify-content:space-between; align-items:center; cursor:grab; user-select:none; }
+.assistant-panel header:active { cursor:grabbing; }
+.assistant-panel header button { cursor:pointer; }
 .assistant-eyebrow { font-size:10px; letter-spacing:.12em; opacity:.65; }
 .assistant-panel button { padding:5px 10px; border:1px solid var(--overlay-separator); border-radius:7px; background:var(--overlay-control); color:inherit; cursor:pointer; font:inherit; }
 .assistant-panel button:disabled { opacity:.45; cursor:default; }

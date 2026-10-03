@@ -12,8 +12,9 @@ async function boot(page: Page, phase = "result", canInsert = false) {
     } });
   }, { phase, canInsert });
   await page.route("**/src/main.tsx", route => route.fulfill({ contentType: "application/javascript", body: `
-    import { mockIPC } from "/node_modules/@tauri-apps/api/mocks.js";
+    import { mockIPC, mockWindows } from "/node_modules/@tauri-apps/api/mocks.js";
     mockIPC(window.__native, { shouldMockEvents: true });
+    mockWindows("assistant");
     await import("/src/main.tsx?e2e");
   ` }));
   await page.goto("/?assistant");
@@ -67,4 +68,14 @@ test("fallback results use the TextHalo dark palette", async ({page}) => {
   await boot(page);
   await expect(page.locator(".assistant-panel")).toHaveCSS("background-color", "rgb(50, 50, 50)");
   await expect(page.locator(".assistant-result")).toHaveCSS("background-color", "rgb(30, 30, 30)");
+});
+
+test("fallback header drags the window without stealing button interactions", async ({page}) => {
+  await boot(page);
+  await page.locator(".assistant-panel header").hover();
+  await page.mouse.down();
+  await page.mouse.up();
+  await expect.poll(() => page.evaluate(() => (window as any).__calls)).toContainEqual(expect.objectContaining({command:"plugin:window|start_dragging"}));
+  await page.getByRole("button", {name:"Dismiss"}).dispatchEvent("mousedown", {button:0});
+  expect(await page.evaluate(() => (window as any).__calls.filter((call: any) => call.command === "plugin:window|start_dragging").length)).toBe(1);
 });
