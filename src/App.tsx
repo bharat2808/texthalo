@@ -1,3 +1,4 @@
+import Row from "./SelectionRow";
 import { createPortal } from "react-dom";
 import { serviceReadiness } from "./serviceReadiness";
 import TranscriptionHistory from "./TranscriptionHistory";
@@ -548,54 +549,6 @@ function Card({
   );
 }
 
-function Row({
-  selected,
-  glyph,
-  title,
-  subtitle,
-  mono,
-  badge,
-  disabled,
-  onSelect,
-  trailing,
-}: {
-  selected: boolean;
-  glyph: React.ReactNode;
-  title: string;
-  subtitle?: string;
-  mono?: boolean;
-  badge?: string;
-  disabled?: boolean;
-  onSelect: () => void;
-  trailing?: React.ReactNode;
-}) {
-  return (
-    <div
-      className={selected ? "sel-row selected" : "sel-row"}
-      role="button"
-      tabIndex={disabled ? -1 : 0}
-      aria-pressed={selected}
-      /* `:disabled` cannot match a div, so the attribute is what carries the state. */
-      aria-disabled={disabled ? true : undefined}
-      onClick={disabled ? undefined : onSelect}
-      onKeyDown={(event) => {
-        if (disabled || event.target !== event.currentTarget) return;
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault();
-          onSelect();
-        }
-      }}
-    >
-      <span className="glyph">{glyph}</span>
-      <span className="sel-text">
-        <span className={mono ? "sel-title mono" : "sel-title"}>{title}</span>
-        {subtitle ? <span className="sel-subtitle">{subtitle}</span> : null}
-      </span>
-      {badge ? <span className="sel-badge">{badge}</span> : null}
-      {trailing}
-    </div>
-  );
-}
 
 function Note({
   kind,

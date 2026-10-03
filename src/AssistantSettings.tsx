@@ -1,3 +1,4 @@
+import SelectionRow from "./SelectionRow";
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -51,12 +52,21 @@ export default function AssistantSettings({ value, onChange }: Props) {
   const draft = useRef(value.instruction);
   useEffect(() => { draft.current = value.instruction; setInstruction(value.instruction); }, [value.instruction]);
   return <div className="assistant-settings">
-    <div className="field"><label className="field-label" htmlFor="assistant-provider">Assistant model</label>
-      <select id="assistant-provider" value={value.provider ?? "local"} onChange={event => onChange({ ...value, instruction: draft.current, provider: event.target.value as AssistantPreferences["provider"] })}>
-        <option value="local">On this Mac · Apple Intelligence</option>
-        <option value="cloud">TextHalo Cloud · Uses credits</option>
-        <option value="automatic">Automatic · Prefer this Mac</option>
-      </select>
+    <div className="field"><span className="field-label" id="assistant-provider-label">Assistant model</span>
+      <div className="row-stack" role="group" aria-labelledby="assistant-provider-label">
+        {([
+          { id: "local", title: "On this Mac", subtitle: "Apple Intelligence · no credits" },
+          { id: "cloud", title: "TextHalo Cloud", subtitle: "Hosted · uses credits" },
+          { id: "automatic", title: "Automatic", subtitle: "Prefer this Mac · Cloud when unavailable" },
+        ] as const).map(provider => <SelectionRow
+          key={provider.id}
+          selected={(value.provider ?? "local") === provider.id}
+          title={provider.title}
+          subtitle={provider.subtitle}
+          badge={(value.provider ?? "local") === provider.id ? "Selected" : undefined}
+          onSelect={() => onChange({ ...value, instruction: draft.current, provider: provider.id })}
+        />)}
+      </div>
       <p className="card-note">Hold the same Assistant shortcut to speak. Cloud fulfills your request using your TextHalo credit balance. Automatic uses Cloud when Apple Intelligence is unavailable at the start of a request.</p>
     </div>
     {value.provider && value.provider !== "local" && <div className="field">

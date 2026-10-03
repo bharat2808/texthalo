@@ -2,15 +2,15 @@ import { expect, test, type Page } from "@playwright/test";
 test("cloud Assistant preserves the voice flow and saves explicit cloud consent", async ({ page }) => {
   await boot(page, false, 3, false, "apple", { model: "unavailable", cloudConfigured: true, cloudSignedIn: true, cloudScreenInput: true, screen: true });
   await page.getByRole("button", { name: "Assistant", exact: true }).click();
-  await expect(page.getByLabel("Assistant model")).toHaveValue("local");
-  await page.getByLabel("Assistant model").selectOption("cloud");
+  await expect(page.getByRole("group", { name: "Assistant model" }).getByRole("button", { name: /^On this Mac/ })).toHaveAttribute("aria-pressed", "true");
+  await page.getByRole("group", { name: "Assistant model" }).getByRole("button", { name: /^TextHalo Cloud/ }).click();
   await expect(page.getByLabel("Enable cloud processing for Assistant")).not.toBeChecked();
   await page.getByLabel("Enable cloud processing for Assistant").check();
   await expect.poll(() => page.evaluate(() => (window as any).__state.settings.assistant.cloud_consent_version)).toBe(1);
   await expect.poll(() => page.evaluate(() => (window as any).__state.settings.assistant.provider)).toBe("cloud");
   await expect(page.getByText("Hold your shortcut and ask to write, edit, or read aloud.")).toBeVisible();
   await expect(page.getByText("On-device Assistant needs Apple Intelligence.", { exact: false })).toHaveCount(0);
-  await page.getByLabel("Assistant model").selectOption("local");
+  await page.getByRole("group", { name: "Assistant model" }).getByRole("button", { name: /^On this Mac/ }).press("Enter");
   await expect(page.getByText("On-device Assistant needs Apple Intelligence.", { exact: false })).toBeVisible();
 });
 test("hold keys can be assigned independently and duplicate holds are rejected", async ({page}) => {
