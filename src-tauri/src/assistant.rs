@@ -30,6 +30,8 @@ struct Inner {
     availability: Value,
     spoke: Option<u64>,
     speech_id: Option<u64>,
+    speech_feed: Option<tokio::sync::watch::Sender<(String, bool)>>,
+    speech_settings: Option<Settings>,
 }
 
 fn hold_configuration(settings: &Settings) -> Value {
@@ -121,6 +123,7 @@ fn send(app: &AppHandle, inner: &mut Inner, value: Value) -> Result<(), String> 
             let mut inner = state.inner.lock().unwrap();
             if inner.native.as_ref().map(|n| n.child.id()) == Some(pid) {
                 inner.native = None;
+                stop_assistant_speech(&app, &mut inner);
                 inner.job.cancel();
                 inner.status = json!({"phase":"error","message":"The native assistant stopped. Hold the shortcut again to retry."});
                 publish(&app, &inner.status);
@@ -139,25 +142,90 @@ struct Presentation {
     height: f64,
 }
 
-fn presentation(status: &Value) -> Presentation {
-    let show = !matches!(status["phase"].as_str(), Some("idle" | "canceled"))
-        && !matches!(status["action"].as_str(), Some("speak" | "applied"));
-    let compact = matches!(
-        status["phase"].as_str(),
-        Some("recording" | "processing" | "capturing_screen")
-    ) || matches!(
-        status["action"].as_str(),
-        Some("copied" | "undone")
-    );
-    let expanded =
-        status["text"].as_str().is_some_and(|s| !s.is_empty()) && status["action"] != "applied";
-    let height = if compact {
-        44.0
-    } else if expanded {
-        360.0
-    } else {
-        140.0
+#[derive(Debug, PartialEq)]
+enum NarrationOwnership { None, Current, Replaced }
+fn narration_ownership(owned: Option<u64>, current: u64) -> NarrationOwnership {
+    match owned {
+        None => NarrationOwnership::None,
+        Some(id) if id == current => NarrationOwnership::Current,
+        Some(_) => NarrationOwnership::Replaced,
+    }
+}
+
+fn audio_presentation(status: &Value, phase: &Phase, message: Option<&str>) -> Value {
+    let mut value = status.clone();
+    value["assistantSpeech"] = json!(true);
+    // Copy/Undo after a terminal speech failure owns this window too. Preserve
+    // its recovery result instead of redisplaying the old playback error.
+    if matches!(phase, Phase::Error) && status["phase"] == "result" && status["action"] != "speak" { return value; }
+    match phase {
+        Phase::Idle => { value["phase"] = json!("idle"); }
+        Phase::Error => {
+            value["phase"] = json!("error");
+            value["action"] = Value::Null;
+            value["message"] = json!(message.unwrap_or("Speech could not complete. The generated text is available to copy."));
+        }
+        _ => {
+            let generating = status["phase"] == "streaming";
+            value["phase"] = json!(if generating { "streaming" } else { "speaking" });
+            value["message"] = json!(match (generating, matches!(phase, Phase::Speaking)) {
+                (true, true) => "Speaking · generating…",
+                (true, false) => "Preparing voice · generating…",
+                (false, true) => "Speaking…",
+                (false, false) => "Preparing voice…",
+            });
+        }
+    }
+    value
+}
+
+/// Called after releasing the speech-job mutex. An assistant-owned narration uses
+/// the same preview window, rather than opening a second playback overlay.
+pub(crate) fn sync_speech(app: &AppHandle) -> bool {
+    let Some(state) = app.try_state::<AssistantState>() else { return false; };
+    let mut inner = state.inner.lock().unwrap();
+    // Read current speech only after locking the assistant. A tick snapshot taken
+    // earlier can predate a newly acquired narration lease and cancel that new job.
+    let (id, status) = {
+        let state = app.state::<AppState>();
+        let job = state.job.lock().unwrap();
+        (job.id, job.status.clone())
     };
+    match narration_ownership(inner.speech_id, id) {
+        NarrationOwnership::None => return false,
+        NarrationOwnership::Replaced => {
+            // Global Stop and another speech request invalidate the old lease.
+            // cancel_locked cannot stop the new job: it checks lease identity.
+            cancel_locked(app, &mut inner);
+            return false;
+        }
+        NarrationOwnership::Current => {}
+    }
+    let next = audio_presentation(&inner.status, &status.phase, status.message.as_deref());
+    if inner.status != next {
+        if matches!(status.phase, Phase::Idle | Phase::Error) {
+            inner.speech_feed = None;
+            if matches!(status.phase, Phase::Error) {
+                let id = inner.status["id"].as_u64().unwrap_or(0);
+                if inner.native.is_some() { let _ = send(app, &mut inner, json!({"command":"halt","id":id})); }
+            } else {
+                inner.job.cancel();
+                if inner.native.is_some() { let _ = send(app, &mut inner, json!({"command":"cancel","id":0})); }
+            }
+        }
+        inner.status = next;
+        publish(app, &inner.status);
+    }
+    true
+}
+
+fn presentation(status: &Value) -> Presentation {
+    let busy = matches!(status["phase"].as_str(), Some("recording" | "processing" | "capturing_screen" | "streaming" | "speaking"));
+    let show = !matches!(status["phase"].as_str(), Some("idle" | "canceled"))
+        && (busy || !matches!(status["action"].as_str(), Some("speak" | "applied")));
+    let expanded = status["text"].as_str().is_some_and(|s| !s.is_empty()) && status["action"] != "applied";
+    let compact = busy || matches!(status["action"].as_str(), Some("copied" | "undone"));
+    let height = if busy && expanded { 140.0 } else if compact { 44.0 } else if expanded { 360.0 } else { 140.0 };
     Presentation { show, compact, height }
 }
 
@@ -185,14 +253,15 @@ fn publish(app: &AppHandle, status: &Value) {
             }
         });
     }
+    let busy = matches!(status["phase"].as_str(), Some("recording" | "processing" | "capturing_screen" | "streaming" | "speaking"));
     let anchor = status.get("bounds").cloned();
     let app = app.clone();
     let _ = app.clone().run_on_main_thread(move || {
         if let Some(window) = app.get_webview_window("assistant") {
             if show {
-                let _ = window.set_focusable(!compact);
+                let _ = window.set_focusable(!compact && !busy);
                 if compact {
-                    crate::overlay::position(&window, false);
+                    crate::overlay::position_sized(&window, 270.0, height);
                 } else {
                     let _ = window.set_size(tauri::LogicalSize::new(380.0, height));
                     position_panel(&window, anchor.as_ref(), height);
@@ -285,6 +354,8 @@ fn receive(app: &AppHandle, mut event: Value) {
     if !inner.job.current(id) {
         return;
     }
+    if inner.status["phase"] == "error" && inner.status["assistantSpeech"] == true
+        && (event["phase"] == "streaming" || event["action"] == "speak") { return; }
     if event["phase"] == "transcript" {
         if let Some(text) = event["text"].as_str().filter(|t| !t.trim().is_empty()) {
             let now = std::time::SystemTime::now()
@@ -309,16 +380,41 @@ fn receive(app: &AppHandle, mut event: Value) {
         }
         return;
     }
+    if event["phase"] == "error" {
+        stop_assistant_speech(app, &mut inner);
+    }
     if event["phase"] == "canceled" {
         stop_assistant_speech(app, &mut inner);
         inner.job.cancel();
     } else if matches!(event["phase"].as_str(), Some("result" | "error")) {
         inner.job.finish(id);
     }
-    if event["phase"] == "result" && event["action"] == "speak" && inner.spoke != Some(id) {
+    if matches!(event["phase"].as_str(), Some("streaming" | "result")) && event["action"] == "speak" {
         if let Some(text) = event["text"].as_str().filter(|s| !s.trim().is_empty()) {
-            inner.spoke = Some(id);
-            inner.speech_id = Some(speak_generated(app, text.to_string()));
+            if inner.spoke != Some(id) {
+                let settings = inner.speech_settings.clone().unwrap_or_else(|| app.state::<AppState>().settings.lock().unwrap().clone());
+                let source = capture::SourceMetadata {
+                    app_name: event["source"].as_str().map(str::to_owned),
+                    window_title: event["windowTitle"].as_str().map(str::to_owned),
+                    ..Default::default()
+                };
+                let (speech_id, feed) = begin_generated_stream(app, settings, source);
+                inner.spoke = Some(id);
+                inner.speech_id = Some(speech_id);
+                inner.speech_feed = Some(feed);
+            }
+            if let Some(feed) = inner.speech_feed.as_ref() {
+                feed.send_replace((text.to_string(), event["phase"] == "result"));
+            }
+            // Retain the mailbox until cancellation/replacement: dropping its sender
+            // here can race the feeder reading the final snapshot.
+        }
+    }
+    if event["action"] == "speak" && matches!(event["phase"].as_str(), Some("streaming" | "result")) {
+        let state = app.state::<AppState>();
+        let job = state.job.lock().unwrap();
+        if inner.speech_id == Some(job.id) {
+            event = audio_presentation(&event, &job.status.phase, job.status.message.as_deref());
         }
     }
     event["hostedSpeech"] = json!(
@@ -329,8 +425,7 @@ fn receive(app: &AppHandle, mut event: Value) {
 }
 
 fn speak_generated(app: &AppHandle, text: String) -> u64 {
-    let mut settings = app.state::<AppState>().settings.lock().unwrap().clone();
-    settings.fish.enhance_text = false;
+    let settings = app.state::<AppState>().settings.lock().unwrap().clone();
     let speech_id = crate::begin_speech(app, Phase::Preparing);
     let app = app.clone();
     std::thread::spawn(move || {
@@ -346,6 +441,39 @@ fn speak_generated(app: &AppHandle, text: String) -> u64 {
     });
     speech_id
 }
+/// A watch mailbox coalesces draft snapshots while the bounded synthesis input is
+/// busy. The sidecar reader never waits on playback or holds its mutex for backpressure.
+fn begin_generated_stream(app: &AppHandle, settings: Settings, source: capture::SourceMetadata)
+    -> (u64, tokio::sync::watch::Sender<(String, bool)>) {
+    let speech_id = crate::begin_speech(app, Phase::Preparing);
+    let (feed, latest) = tokio::sync::watch::channel((String::new(), false));
+    let (tx, input) = crate::speech_input::channel();
+    let worker_app = app.clone();
+    std::thread::spawn(move || crate::run_speech_input(&worker_app, speech_id, settings, input, true, source));
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let cancelled = || {
+            let state = app.state::<AppState>();
+            let job = state.job.lock().unwrap();
+            !job.is_current(speech_id) || matches!(job.status.phase, Phase::Idle | Phase::Error)
+        };
+        if let Err(error) = crate::assistant_stream::forward_snapshots(latest, tx, cancelled) {
+            let state = app.state::<AppState>();
+            let mut job = state.job.lock().unwrap();
+            if job.is_current(speech_id) && !matches!(job.status.phase, Phase::Idle | Phase::Error) {
+                // Abort audible/queued output immediately; the overlay tick halts
+                // the native generator while preserving its copyable partial answer.
+                state.spoken.stop();
+                job.streaming = false;
+                let chars = job.status.chars;
+                job.set(Phase::Error, Some(error), chars);
+                let _ = app.emit("kiegen:status", &job.status);
+            }
+        }
+    });
+    (speech_id, feed)
+}
+
 fn cancel_speech_lease(
     ownership: &mut Option<u64>,
     speech: &mut crate::speech_job::SpeechJob,
@@ -359,6 +487,7 @@ fn cancel_speech_lease(
     false
 }
 fn stop_assistant_speech(app: &AppHandle, inner: &mut Inner) {
+    inner.speech_feed = None;
     let state = app.state::<AppState>();
     let mut speech = state.job.lock().unwrap();
     if cancel_speech_lease(&mut inner.speech_id, &mut speech) {
@@ -380,8 +509,11 @@ pub fn pressed(app: &AppHandle, mode: Mode, key: String, modifiers: String) {
         return;
     };
     // Prevent existing narration being captured as the user's request.
+    inner.speech_feed = None;
+    inner.speech_id = None;
     crate::stop_speaking(app.clone());
     let settings = app.state::<AppState>().settings.lock().unwrap().clone();
+    inner.speech_settings = Some(settings.clone());
     let mut command = configuration("start", id, &settings);
     command["mode"] = json!(mode);
     command["key"] = json!(key);
@@ -447,7 +579,8 @@ fn result_id(status: &Value, request_id: Option<u64>) -> Result<u64, String> {
     if request_id != Some(id) {
         return Err("This result is no longer current".into());
     }
-    if status["phase"] != "result" {
+    let recoverable_error = status["phase"] == "error" && status["text"].as_str().is_some_and(|s| !s.is_empty());
+    if status["phase"] != "result" && !recoverable_error {
         return Err("Wait for the current request or cancel it first.".into());
     }
     Ok(id)
@@ -500,6 +633,7 @@ pub fn assistant_control(
         let id = inner.job.press(Mode::Assistant).unwrap();
         inner.job.release(Mode::Assistant);
         let settings = app.state::<AppState>().settings.lock().unwrap().clone();
+        inner.speech_settings = Some(settings.clone());
         let mut value = configuration(&command, id, &settings);
         value["text"] = json!(text);
         inner.status = json!({"id":id,"phase":"processing","message":"Thinking on this Mac…"});
@@ -515,6 +649,7 @@ pub fn assistant_control(
                 .ok_or("No text to speak")?;
             let text = text.to_string();
             inner.speech_id = Some(speak_generated(&app, text));
+            inner.status["action"] = json!("speak");
             Ok(())
         }
         "copy" | "undo" | "screen" => {
@@ -543,6 +678,45 @@ pub fn assistant_control(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn stopped_or_replaced_narration_loses_only_its_own_overlay() {
+        assert_eq!(narration_ownership(Some(4), 4), NarrationOwnership::Current);
+        assert_eq!(narration_ownership(Some(4), 5), NarrationOwnership::Replaced);
+        assert_eq!(narration_ownership(None, 5), NarrationOwnership::None);
+    }
+    #[test]
+    fn recovery_copy_does_not_resurrect_the_speech_error() {
+        let copied = json!({"id":7,"phase":"result","action":"preview","text":"Partial answer", "message":"Copied."});
+        let recovery = audio_presentation(&copied, &Phase::Error, Some("Old speech error"));
+        assert_eq!(recovery["phase"], "result");
+        assert_eq!(recovery["message"], "Copied.");
+        assert_eq!(recovery["assistantSpeech"], true);
+    }
+    #[test]
+    fn owned_audio_uses_one_widget_through_generation_playback_and_completion() {
+        let streaming = json!({"id":7,"phase":"streaming","action":"speak","text":"Hello."});
+        let speaking = audio_presentation(&streaming, &Phase::Speaking, None);
+        assert_eq!(speaking["phase"], "streaming");
+        assert_eq!(speaking["message"], "Speaking · generating…");
+        let final_text = json!({"id":7,"phase":"result","action":"speak","text":"Hello."});
+        let playing = audio_presentation(&final_text, &Phase::Speaking, None);
+        assert_eq!(playing["phase"], "speaking");
+        assert_eq!(playing["text"], "Hello.");
+        assert!(presentation(&playing).show);
+        let done = audio_presentation(&playing, &Phase::Idle, None);
+        assert!(!presentation(&done).show);
+        let failed = audio_presentation(&streaming, &Phase::Error, Some("Network interrupted"));
+        assert_eq!(failed["phase"], "error");
+        assert_eq!(failed["text"], "Hello.");
+        assert!(presentation(&failed).show);
+    }
+    #[test]
+    fn live_preview_keeps_the_assistant_visible_without_a_focusable_result() {
+        let recording = presentation(&json!({"phase":"recording","text":"Hello there"}));
+        assert!(recording.show && recording.compact && recording.height == 140.0);
+        let audio = presentation(&json!({"phase":"streaming","action":"speak","text":"A narrated answer."}));
+        assert!(audio.show && audio.compact && audio.height == 140.0);
+    }
     #[test]
     fn generation_configuration_preserves_user_preferences_and_context_mode() {
         let mut settings = Settings::default();
@@ -573,6 +747,12 @@ mod tests {
         assert!(processing.show && processing.compact && processing.height == 44.0);
         let fallback = presentation(&json!({"phase":"result","text":"Keep this text","message":"Could not insert"}));
         assert!(fallback.show && !fallback.compact && fallback.height == 360.0);
+    }
+    #[test]
+    fn failed_partial_answer_can_be_copied_or_undone_but_empty_error_cannot() {
+        assert_eq!(result_id(&json!({"id":7,"phase":"error","text":"Partial answer"}), Some(7)).unwrap(), 7);
+        assert!(result_id(&json!({"id":7,"phase":"error"}), Some(7)).is_err());
+        assert!(result_id(&json!({"id":7,"phase":"error","text":"Partial"}), Some(6)).is_err());
     }
     #[test]
     fn stale_or_busy_results_cannot_be_undone_or_copied() {

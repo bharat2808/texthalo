@@ -25,3 +25,5 @@
 .assistant-settings > .field + .field, .assistant-settings > .field + button { margin-top:16px; }
 
 html:has(.assistant-panel), body:has(.assistant-panel), #root:has(.assistant-panel) { background: transparent !important; }
+
+.assistant-live { max-height:116px; overflow:hidden; }

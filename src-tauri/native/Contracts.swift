@@ -113,6 +113,13 @@ struct AssistantPrompt {
         END OF REFERENCE MATERIAL. Now answer USER REQUEST. Explain in your own words unless exact text was explicitly requested.
         """
     }
+    static func standaloneUserPrompt(request: String, previous: String) -> String {
+        """
+        USER REQUEST:\n\(request)
+        PREVIOUS OUTPUT (for follow-up edits):\n\(previous)
+        Answer USER REQUEST directly. Use PREVIOUS OUTPUT only when the request refers to it.
+        """
+    }
 }
 
 // A recognizer may finalize before key-up; only release authorizes delivering text.
@@ -154,4 +161,69 @@ struct TextEditReceipt {
     func permitsUndo(current: TargetSnapshot, committed: TargetSnapshot, sameElement: Bool, editable: Bool) -> Bool {
         committed.value == updatedValue && committed.permitsInsertion(current: current, sameElement: sameElement, editable: editable)
     }
+}
+
+enum TextInsertionPolicy {
+    static func permitsStreaming(ancestorRoles: [String], reachedWindow: Bool) -> Bool {
+        reachedWindow && !ancestorRoles.contains("AXWebArea")
+    }
+}
+
+// One request owns one original snapshot and one cumulative undo receipt.
+struct IncrementalTextEdit {
+    let original: TargetSnapshot
+    private(set) var stopped = false
+    private(set) var canFallback = true
+    private(set) var receipt: TextEditReceipt?
+    private var inserted = ""
+    private var expected: TargetSnapshot?
+    init(original: TargetSnapshot) { self.original = original }
+    mutating func next(_ text: String, current: TargetSnapshot?, sameElement: Bool, editable: Bool) -> String? {
+        guard !stopped else { return nil }
+        guard let current else { stopped = true; return nil }
+        guard original.length == 0, text.hasPrefix(inserted),
+              (expected ?? original).permitsInsertion(current: current, sameElement: sameElement, editable: editable) else {
+            stopped = true; return nil
+        }
+        return String(text.dropFirst(inserted.count))
+    }
+    mutating func commit(_ text: String, after: TargetSnapshot?, writeRejected: Bool = false) -> Bool {
+        if writeRejected && after == (expected ?? original) {
+            stopped = true
+            return false
+        }
+        // Call after dispatch, including failed/unreadable writes: never fall
+        // back to paste when an accessibility mutation may already have landed.
+        canFallback = false
+        guard let edit = TextEditReceipt(original: original, replacement: text),
+              let after, edit.acceptsCommit(after), after.length == 0,
+              after.location == original.location + text.utf16.count else { stopped = true; return false }
+        receipt = edit; expected = after; inserted = text
+        return true
+    }
+    var completeText: String { inserted }
+}
+
+@MainActor final class PreparedScreenContext {
+    let requestID: UInt64
+    private let task: Task<String, Error>
+    init(requestID: UInt64, windowID: UInt32, capture: @escaping @MainActor (UInt32) async throws -> String) {
+        self.requestID = requestID
+        task = Task {
+            try Task.checkCancellation()
+            let text = try await capture(windowID)
+            try Task.checkCancellation()
+            return text
+        }
+    }
+    func value(for requestID: UInt64) async throws -> String? {
+        guard self.requestID == requestID else { return nil }
+        let task = task
+        return try await withTaskCancellationHandler {
+            let text = try await task.value
+            try Task.checkCancellation()
+            return text
+        } onCancel: { task.cancel() }
+    }
+    func cancel() { task.cancel() }
 }

@@ -9,10 +9,14 @@ type Status = { id?: number; phase?: string; action?: string; message?: string; 
 export default function AssistantPanel() {
   const [status, setStatus] = useState<Status>({});
   const current = useRef(status);
+  const preview = useRef<HTMLDivElement>(null);
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
-  const busy = ["recording", "processing", "capturing_screen"].includes(status.phase ?? "");
+  const busy = ["recording", "processing", "capturing_screen", "streaming", "speaking"].includes(status.phase ?? "");
   const applied = status.action === "applied";
+  useEffect(() => {
+    if (busy && preview.current) preview.current.scrollTop = preview.current.scrollHeight;
+  }, [busy, status.text]);
   async function action(command: string) {
     setError(""); setPending(true);
     try { await invoke("assistant_control", { command, requestId: current.current.id }); }
@@ -39,27 +43,32 @@ export default function AssistantPanel() {
   }, []);
   if (applied) return null;
   const completed = ["applied", "copied", "undone"].includes(status.action ?? "");
+  const livePreview = busy && !!status.text;
+  const visibleText = busy && (status.text?.length ?? 0) > 2000 ? "…" + status.text!.slice(-2000) : status.text;
   if (busy || completed) {
     const label = status.phase === "recording" ? "Listening…"
       : status.phase === "capturing_screen" ? "Reading screen…"
       : status.message === "Thinking on this Mac…" ? "Generating…"
       : status.message || "Processing…";
-    return <main className={`overlay-root speech-overlay ${busy ? status.phase === "recording" ? "recording" : "preparing" : "completed"}`}>
+    return <main className={`overlay-root speech-overlay ${livePreview ? "with-transcript" : ""} ${busy ? status.phase === "recording" ? "recording" : status.phase === "speaking" ? "speaking" : "preparing" : "completed"}`}>
+      <div className="speech-status">
       {busy ? <div className="activity" aria-hidden="true">{[0,1,2,3,4].map(index => <i key={index} style={{animationDelay:`${index * -0.13}s`}} />)}</div> : <span aria-hidden="true">✓</span>}
       <span className="speech-label" role={error ? "alert" : "status"} title={error || status.message}>{error || label}</span>
       {applied && status.canUndo ? <button className="overlay-undo" disabled={pending} onClick={() => void action("undo")}>Undo</button>
         : <button aria-label={busy ? "Cancel" : "Dismiss"} title={busy ? "Cancel (Esc)" : "Dismiss"} onClick={() => void action("cancel")}><span /></button>}
+      </div>
+      {livePreview && <div ref={preview} className="speech-transcript" aria-label={status.phase === "recording" ? "Live transcript" : "Generated text"}>{visibleText}</div>}
     </main>;
   }
   return <main className="assistant-panel">
-    <header onMouseDown={event => void beginDrag(event)}><span className="assistant-eyebrow">TEXTHALO</span><button aria-label="Dismiss" onClick={() => void action("cancel")}>×</button></header>
+    <header onMouseDown={event => void beginDrag(event)}><span className="assistant-eyebrow">TEXTHALO</span><button aria-label={busy ? "Cancel" : "Dismiss"} onClick={() => void action("cancel")}>×</button></header>
     <div className="assistant-status-row"><span className={busy ? "assistant-indicator active" : "assistant-indicator"} aria-hidden="true" />
       <p role="status">{status.message || "Ready"}</p>
-      {applied && status.canUndo && <button disabled={pending} onClick={() => void action("undo")}>Undo</button>}
+      {!busy && status.canUndo && <button disabled={pending} onClick={() => void action("undo")}>Undo</button>}
     </div>
     {error && <p role="alert" className="assistant-error">{error}</p>}
-    {!busy && !applied && status.text && <><div className="assistant-result" aria-label="Generated text" tabIndex={0}>{status.text}</div>
-      <div className="assistant-actions"><button disabled={pending} onClick={() => void action("copy")}>Copy</button></div></>}
+    {!applied && status.text && <><div ref={preview} className={`assistant-result${busy ? " assistant-live" : ""}`} aria-label={status.phase === "recording" ? "Live transcript" : "Generated text"} tabIndex={busy ? undefined : 0}>{visibleText}</div>
+      {!busy && <div className="assistant-actions"><button disabled={pending} onClick={() => void action("copy")}>Copy</button></div>}</>}
     {busy && <span className="assistant-help">Esc to cancel</span>}
   </main>;
 }

@@ -31,7 +31,11 @@ enum ScreenText {
             try Task.checkCancellation()
             try VNImageRequestHandler(cgImage: image).perform([request])
             try Task.checkCancellation()
-            return (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }.joined(separator: "\n")
+            let text = (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }.joined(separator: "\n")
+            guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw NSError(domain: "TextHalo", code: 2, userInfo: [NSLocalizedDescriptionKey: "No readable text found. This build extracts text, not visual descriptions."])
+            }
+            return text
         }
         return try await withTaskCancellationHandler {
             try Task.checkCancellation()

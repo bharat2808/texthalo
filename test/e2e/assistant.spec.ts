@@ -79,3 +79,60 @@ test("fallback header drags the window without stealing button interactions", as
   await page.getByRole("button", {name:"Dismiss"}).dispatchEvent("mousedown", {button:0});
   expect(await page.evaluate(() => (window as any).__calls.filter((call: any) => call.command === "plugin:window|start_dragging").length)).toBe(1);
 });
+
+for (const phase of ["recording", "streaming", "speaking"]) {
+  test(`${phase} shows a capped live preview and request-owned cancellation`, async ({page}) => {
+    await page.setViewportSize({width:270,height:140});
+    await boot(page, "recording");
+    await expect(page.getByRole("status")).toContainText("Listening");
+    await page.evaluate(async ({phase}) => {
+      const {emit} = await import("/node_modules/@tauri-apps/api/event.js");
+      await emit("texthalo:assistant", {id:7, phase, action:"preview", text:"Live answer. ".repeat(500), message:"Working…"});
+    }, {phase});
+    const preview = page.getByLabel(phase === "recording" ? "Live transcript" : "Generated text");
+    await expect(preview).toBeVisible();
+    await expect(page.locator(".speech-overlay .speech-status")).toBeVisible();
+    await expect(page.locator(".assistant-panel")).toHaveCount(0);
+    const bar = await page.locator(".speech-status").boundingBox();
+    const textBox = await preview.boundingBox();
+    expect(textBox!.y).toBeGreaterThanOrEqual(bar!.y + bar!.height);
+    expect((await preview.textContent())!.length).toBeLessThanOrEqual(2001);
+    expect(await preview.evaluate(element => element.scrollTop + element.clientHeight >= element.scrollHeight - 1)).toBeTruthy();
+    await expect(page.getByRole("button", {name:"Copy", exact:true})).toHaveCount(0);
+    await page.getByRole("button", {name:"Cancel", exact:true}).click();
+    expect(await page.evaluate(() => (window as any).__calls.at(-1).args)).toEqual({command:"cancel",requestId:7});
+  });
+}
+
+test("streamed speech keeps one preview through playback and cancellation", async ({page}) => {
+  await boot(page, "recording");
+  await expect(page.getByRole("status")).toContainText("Listening");
+  for (const phase of ["streaming", "speaking"]) {
+    await page.evaluate(async ({phase}) => {
+      const {emit} = await import("/node_modules/@tauri-apps/api/event.js");
+      await emit("texthalo:assistant", {id:7, phase, action:"speak", text:"A spoken answer.", message:phase === "speaking" ? "Speaking…" : "Speaking · generating…"});
+    }, {phase});
+    await expect(page.getByLabel("Generated text")).toHaveText("A spoken answer.");
+    await expect(page.getByRole("status")).toContainText("Speaking");
+    await expect(page.getByRole("button", {name:"Copy", exact:true})).toHaveCount(0);
+    await expect(page.getByRole("button", {name:"Cancel", exact:true})).toBeVisible();
+  }
+  await page.keyboard.press("Escape");
+  expect(await page.evaluate(() => (window as any).__calls.at(-1).args)).toEqual({command:"cancel", requestId:7});
+});
+
+for (const phase of ["error", "result"]) {
+  test(`${phase} retains a partial answer with Copy and scoped Undo`, async ({page}) => {
+    await boot(page, "recording");
+    await expect(page.getByRole("status")).toContainText("Listening");
+    await page.evaluate(async ({phase}) => {
+      const {emit} = await import("/node_modules/@tauri-apps/api/event.js");
+      await emit("texthalo:assistant", {id:7, phase, action:"preview", text:"A partial answer.", canUndo:true, message:"Generation stopped."});
+    }, {phase});
+    await expect(page.getByLabel("Generated text")).toHaveText("A partial answer.");
+    await page.getByRole("button", {name:"Copy", exact:true}).click();
+    expect(await page.evaluate(() => (window as any).__calls.at(-1).args)).toEqual({command:"copy",requestId:7});
+    await page.getByRole("button", {name:"Undo", exact:true}).click();
+    expect(await page.evaluate(() => (window as any).__calls.at(-1).args)).toEqual({command:"undo",requestId:7});
+  });
+}

@@ -27,3 +27,9 @@ html:has(.overlay-root), body:has(.overlay-root), #root:has(.overlay-root) { mar
 .recovery-actions button:disabled { opacity: .5; cursor: wait; }
 
 .speech-overlay .overlay-undo { width: auto; padding: 0 8px; border-radius: 6px; background: #ffffff20; color: white; font: inherit; }
+
+/* Keep live words attached below the existing recording/playback status row. */
+.speech-overlay:has(.speech-status) { flex-direction:column; align-items:stretch; gap:0; padding:0; }
+.speech-status { display:flex; align-items:center; gap:12px; height:42px; min-height:42px; padding:0 12px; }
+.speech-overlay.with-transcript { height:140px; }
+.speech-transcript { padding:8px 12px 12px; margin:0; border-top:1px solid light-dark(rgba(0,0,0,.08),rgba(255,255,255,.10)); font-size:12px; line-height:18px; white-space:pre-wrap; overflow-wrap:anywhere; overflow:hidden; flex:1; min-height:0; user-select:text; }

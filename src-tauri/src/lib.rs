@@ -6,6 +6,7 @@
 
 mod assistant;
 mod assistant_job;
+mod assistant_stream;
 mod capture;
 pub mod chatterbox;
 pub mod config;
@@ -17,6 +18,7 @@ pub mod espeak;
 pub mod g2p;
 mod history;
 mod hosted;
+mod hosted_input;
 pub mod kokoro;
 pub mod lexicon;
 pub mod numbers;
@@ -24,6 +26,7 @@ mod overlay;
 mod pcm;
 mod shortcuts;
 mod speech;
+mod speech_input;
 mod speech_job;
 pub mod spoken;
 mod streaming;
@@ -315,6 +318,17 @@ fn job_status(
 
 /// Serialize synthesis per engine, keeping Stop and other engines independent. A canceled
 /// render may finish computing; only the current job is allowed to start playback.
+pub(crate) fn run_speech_input(
+    app: &AppHandle,
+    id: u64,
+    settings: Settings,
+    input: speech_input::SpeechInput,
+    archive: bool,
+    source: capture::SourceMetadata,
+) {
+    run_speech_input_inner(app, id, settings, input, false, archive, source);
+}
+
 fn run_speech(
     app: &AppHandle,
     id: u64,
@@ -324,12 +338,35 @@ fn run_speech(
     archive: bool,
     source: capture::SourceMetadata,
 ) {
+    run_speech_input_inner(
+        app,
+        id,
+        settings,
+        speech_input::SpeechInput::Complete(text),
+        truncated,
+        archive,
+        source,
+    );
+}
+
+fn run_speech_input_inner(
+    app: &AppHandle,
+    id: u64,
+    settings: Settings,
+    input: speech_input::SpeechInput,
+    truncated: bool,
+    archive: bool,
+    source: capture::SourceMetadata,
+) {
     let state = app.state::<AppState>();
     let _synthesis = state.synthesis.for_engine(settings.engine).lock().unwrap();
     if !state.job.lock().unwrap().is_current(id) {
         return;
     }
-    let chars = text.chars().count();
+    let chars = match &input {
+        speech_input::SpeechInput::Complete(text) => text.chars().count(),
+        _ => 0,
+    };
     job_status(app, id, Phase::Preparing, None, Some(chars));
     if let Some(reason) = selected_engine_refusal(&settings) {
         job_status(app, id, Phase::Error, Some(reason), Some(chars));
@@ -351,10 +388,10 @@ fn run_speech(
         let model_id = settings.fish.model_id.clone();
         let enhance = settings.fish.enhance_text;
         tauri::async_runtime::spawn(async move {
-            let result = hosted::stream_speech(
+            let result = hosted::stream_speech_input(
                 app.clone(),
                 id,
-                text.clone(),
+                input,
                 voice,
                 model_id,
                 enhance,
@@ -368,15 +405,16 @@ fn run_speech(
             let mut job = state.job.lock().unwrap();
             if job.is_current(id) {
                 job.streaming = false;
+                let chars = job.status.chars.unwrap_or(chars);
                 match result {
                     Ok(()) => job.set(
                         Phase::Idle,
                         Some("Hosted speech complete".into()),
-                        Some(text.chars().count()),
+                        Some(chars),
                     ),
                     Err(message) => {
                         state.spoken.stop();
-                        job.set(Phase::Error, Some(message), Some(text.chars().count()));
+                        job.set(Phase::Error, Some(message), Some(chars));
                     }
                 }
                 let _ = app.emit("kiegen:status", &job.status);
@@ -385,6 +423,21 @@ fn run_speech(
         return;
     }
     if settings.engine == config::Engine::Apple {
+        let text = match streaming::run_input(
+            input,
+            180,
+            240,
+            |_| Ok(()),
+            |_, _| Ok(()),
+            || !state.job.lock().unwrap().is_current(id),
+        ) {
+            Ok(text) => text,
+            Err(error) => {
+                job_status(app, id, Phase::Error, Some(error), Some(chars));
+                return;
+            }
+        };
+        let chars = text.chars().count();
         let archive_path = archive
             .then(|| history_dir(app).ok())
             .flatten()
@@ -457,9 +510,9 @@ fn run_speech(
     }
     let result = state
         .spoken
-        .stream_pcm(
+        .stream_pcm_input(
             &settings,
-            &text,
+            input,
             recorder.as_mut(),
             || !state.job.lock().unwrap().is_current(id),
             |player| {
@@ -474,14 +527,15 @@ fn run_speech(
                 Ok(())
             },
         )
-        .map(|(report, _, _)| report);
+        .map(|(report, _, _, text)| (report, text));
     let mut job = state.job.lock().unwrap();
     if !job.is_current(id) {
         return;
     }
     job.streaming = false;
     match result {
-        Ok(report) => {
+        Ok((report, text)) => {
+            let chars = text.chars().count();
             if let (Some(recorder), Some(dir)) = (recorder.take(), history_root.as_deref()) {
                 if let Some(path) = recorder.finish() {
                     let (engine, voice) = match settings.engine {

@@ -111,6 +111,8 @@ fn tick(app: &AppHandle) {
     let error = matches!(job.status.phase, Phase::Error);
     let visible = !matches!(job.status.phase, Phase::Idle);
     drop(job);
+    let owned = crate::assistant::sync_speech(app);
+    let visible = visible && !owned;
     let Some(window) = app.get_webview_window("speech-overlay") else {
         return;
     };
@@ -125,6 +127,10 @@ fn tick(app: &AppHandle) {
 pub(crate) fn position(window: &tauri::WebviewWindow, error: bool) {
     let width = if error { 430.0 } else { 270.0 };
     let height = if error { 190.0 } else { 44.0 };
+    position_sized(window, width, height);
+}
+
+pub(crate) fn position_sized(window: &tauri::WebviewWindow, width: f64, height: f64) {
     // AppKit coordinates are logical points with the origin at the bottom left.
     // Stay below the menu bar/notch so the label and Stop remain visible on every Mac.
     #[cfg(target_os = "macos")]

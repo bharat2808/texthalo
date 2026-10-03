@@ -45,6 +45,27 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
     let caretBounds: CGRect?
     var receipt: TextEditReceipt?
     var committed: TargetSnapshot?
+    var incremental: IncrementalTextEdit?
+    // Web editors expose AX text setters that can be no-ops or asynchronous.
+    // Resolve this once, before generation; never probe them with partial writes.
+    lazy var supportsStreamingInsertion: Bool = {
+        var current = element
+        var roles: [String] = []
+        for _ in 0..<64 {
+            guard let node = current,
+                  let role = attribute(node, kAXRoleAttribute as CFString) as? String else { break }
+            roles.append(role)
+            if role == "AXWebArea" || role == "AXWindow" {
+                return TextInsertionPolicy.permitsStreaming(ancestorRoles: roles, reachedWindow: role == "AXWindow")
+            }
+            guard let parent = attribute(node, kAXParentAttribute as CFString),
+                  CFGetTypeID(parent) == AXUIElementGetTypeID() else { break }
+            let next = unsafeBitCast(parent, to: AXUIElement.self)
+            guard !CFEqual(node, next) else { break }
+            current = next
+        }
+        return false
+    }()
     init() {
         application = NSWorkspace.shared.frontmostApplication
         let current = AXIsProcessTrusted() ? focusedElement() : nil
@@ -94,13 +115,35 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
         var settable = DarwinBoolean(false)
         return AXUIElementIsAttributeSettable(element, kAXSelectedTextAttribute as CFString, &settable) == .success && settable.boolValue
     }
+    func streamInsert(_ text: String) {
+        guard supportsStreamingInsertion, let original else { return }
+        if incremental == nil { incremental = IncrementalTextEdit(original: original) }
+        guard let application, !application.isTerminated, let element else { return }
+        let focused = focusedElement()
+        let same = NSWorkspace.shared.frontmostApplication == application && focused.map { CFEqual(element, $0) } == true
+        guard let suffix = incremental?.next(text, current: snapshot(element), sameElement: same, editable: editable), !suffix.isEmpty else { return }
+        // No clipboard, focus restoration, or selected-range mutation during streaming.
+        let status = AXUIElementSetAttributeValue(element, kAXSelectedTextAttribute as CFString, suffix as CFString)
+        let after = snapshot(element)
+        if incremental?.commit(text, after: after, writeRejected: status == .attributeUnsupported || status == .notImplemented || status == .illegalArgument) == true {
+            receipt = incremental?.receipt; committed = after
+        }
+    }
+    var hasStreamMutation: Bool { incremental?.canFallback == false }
+    func streamCompleted(_ text: String) -> Bool {
+        guard let incremental, !incremental.stopped, incremental.completeText == text,
+              let application, NSWorkspace.shared.frontmostApplication == application,
+              let element, let focused = focusedElement(), CFEqual(element, focused),
+              let committed, snapshot(element) == committed else { return false }
+        return true
+    }
     func insert(_ text: String, restoreClipboard: Bool) async -> Bool {
         guard let application, !application.isTerminated,
               NSWorkspace.shared.frontmostApplication == application,
               let element, let focused = focusedElement(), let original, let current = snapshot(element),
               original.permitsInsertion(current: current, sameElement: CFEqual(element, focused), editable: true),
               let edit = TextEditReceipt(original: original, replacement: text) else { return false }
-        if editable && AXUIElementSetAttributeValue(element, kAXSelectedTextAttribute as CFString, text as CFString) == .success {
+        if supportsStreamingInsertion && editable && AXUIElementSetAttributeValue(element, kAXSelectedTextAttribute as CFString, text as CFString) == .success {
             if let after = snapshot(element), edit.acceptsCommit(after) {
                 receipt = edit; committed = after
                 return true
@@ -189,6 +232,7 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
     var deadline: Task<Void, Never>?
     var heldTimer: Timer?
     var transcriptGate = TranscriptGate()
+    var screenPreparation: PreparedScreenContext?
     var screenProcess: Process?
     var recording = false
     var finishing = false
@@ -198,7 +242,8 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
     let screenLog = Logger(subsystem: "com.kiegen.app", category: "ScreenText")
 
     func event(_ phase: String, _ message: String = "", text: String = "", action: String = "preview") {
-        var event: [String: Any] = ["id": id, "phase": phase, "message": message, "text": text,
+        let visibleText = phase == "error" && text.isEmpty ? result : text
+        var event: [String: Any] = ["id": id, "phase": phase, "message": message, "text": visibleText,
             "action": action, "canInsert": target?.editable ?? false, "canUndo": target?.canUndo ?? false,
             "mode": request?.mode ?? "assistant",
             "source": target?.application?.localizedName ?? "", "context": context]
@@ -214,7 +259,8 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
         audioRequest?.endAudio()
         recording = false
     }
-    func cancel() {
+    func cancel(cancelScreen: Bool = true) {
+        if cancelScreen { screenPreparation?.cancel(); screenPreparation = nil }
         insertion?.cancel(); insertion = nil
         generation?.cancel(); generation = nil
         deadline?.cancel(); deadline = nil
@@ -294,6 +340,9 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
             let pane = command.command == "settings_microphone" ? "Privacy_Microphone" : command.command == "settings_speech" ? "Privacy_SpeechRecognition" : "Privacy_ScreenCapture"
             if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?" + pane) { NSWorkspace.shared.open(url) }
         case "diagnose": Task { await diagnose() }
+        case "halt":
+            guard command.id == id else { return }
+            cancel()
         case "cancel":
             if command.restore == true { restoreSourceIfAssistantFocused(explicit: true) }
             cancel(); id = command.id; target = nil; context = ""; result = ""; event("idle")
@@ -367,6 +416,8 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
                 if let response, response.isFinal {
                     let text = response.bestTranscription.formattedString
                     if let transcript = self.transcriptGate.recognized(text) { self.completeTranscript(transcript) }
+                } else if let response, self.recording {
+                    self.event("recording", "Listening… Release to transcribe.", text: response.bestTranscription.formattedString)
                 } else if let error {
                     self.cancel(); self.event("error", "Transcription failed: \(error.localizedDescription)")
                 }
@@ -380,6 +431,15 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
         engine = audioEngine
         do {
             try audioEngine.start(); recording = true
+            if command.mode == "assistant", command.usesScreenContext,
+               CGPreflightScreenCaptureAccess(), let windowID = target?.windowID {
+                // Capture the original window once while the user speaks. Its
+                // request-owned task survives key-up but never cancellation.
+                screenPreparation = PreparedScreenContext(requestID: currentID, windowID: windowID) { window in
+                    let image = try await ScreenText.capture(windowID: window)
+                    return try await ScreenText.recognize(image)
+                }
+            }
             event("recording", command.mode == "assistant" ? "Listening to your request… Release to ask." : "Listening… Release to transcribe.")
             // Carbon hotkeys report release; this checks physical state too, including modifiers released first.
             let code = keyCode(command.key ?? "")
@@ -411,10 +471,26 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
     func completeTranscript(_ text: String) {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let mode = request?.mode
-        cancel()
-        guard !text.isEmpty else { event("error", "No speech detected. Hold the shortcut and try again."); return }
+        cancel(cancelScreen: false)
+        guard !text.isEmpty else { cancel(); event("error", "No speech detected. Hold the shortcut and try again."); return }
         if mode == "assistant" {
-            if request?.usesScreenContext == true { captureScreen(region: false, prompt: text) }
+            if request?.usesScreenContext == true, let preparation = screenPreparation {
+                let currentID = id
+                event("capturing_screen", "Reading screen text locally…")
+                generation = Task {
+                    do {
+                        let screen = try await preparation.value(for: currentID)
+                        guard !Task.isCancelled, self.id == currentID else { return }
+                        self.screenPreparation = nil
+                        self.context = String(self.sourceReference(mode: self.request?.context, screenOCR: screen).prefix(10000))
+                        self.generate(text)
+                    } catch {
+                        guard !Task.isCancelled, self.id == currentID else { return }
+                        self.screenPreparation = nil
+                        self.event("error", "Could not read screen text: \(error.localizedDescription)")
+                    }
+                }
+            } else if request?.usesScreenContext == true { captureScreen(region: false, prompt: text) }
             else { generate(text) }
         }
         else {
@@ -464,7 +540,13 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
             defer { if self.id == currentID { self.deadline?.cancel(); self.deadline = nil; self.generation = nil } }
             do {
                 let reply = try await generateAssistantReply(request: prompt, preference: preference,
-                    reference: source, previous: previous, selection: selection)
+                    reference: source, previous: previous, selection: selection) { snapshot in
+                        guard !Task.isCancelled, self.id == currentID else { return }
+                        self.result = snapshot.text
+                        if snapshot.action == .preview { self.target?.streamInsert(snapshot.text) }
+                        self.event("streaming", snapshot.action == .clarify ? "Clarifying…" : "Generating…",
+                                   text: snapshot.text, action: snapshot.action == .speak ? "speak" : snapshot.action == .clarify ? "clarify" : "preview")
+                    }
                 guard !Task.isCancelled, self.id == currentID else { return }
                 let readOriginal = reply.action == .readSelection
                 let text = readOriginal ? selection : reply.text
@@ -472,6 +554,11 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
                 self.result = text
                 if reply.action == .speak || readOriginal { self.event("result", "Preparing narration…", text: text, action: "speak") }
                 else if reply.action == .clarify { self.event("result", "Hold Assistant again with more detail", text: text, action: "clarify") }
+                else if self.target?.hasStreamMutation == true {
+                    self.target?.streamInsert(text)
+                    if self.target?.streamCompleted(text) == true { self.event("result", "Text inserted", action: "applied") }
+                    else { self.event("result", "Could not safely finish inserting into the original field. Full answer available to copy.", text: text) }
+                }
                 else { self.insertResult() }
             } catch {
                 guard !Task.isCancelled, self.id == currentID else { return }

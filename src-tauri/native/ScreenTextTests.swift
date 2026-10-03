@@ -21,6 +21,15 @@ import AppKit
         }
         do { _ = try await canceled.value; assertionFailure("Canceled OCR must not return text") }
         catch is CancellationError {}
+        let blank = NSImage(size: NSSize(width: 300, height: 100))
+        blank.lockFocus()
+        NSColor.white.setFill()
+        NSBezierPath(rect: NSRect(x: 0, y: 0, width: 300, height: 100)).fill()
+        blank.unlockFocus()
+        var blankRect = NSRect(origin: .zero, size: blank.size)
+        let blankImage = blank.cgImage(forProposedRect: &blankRect, context: nil, hints: nil)!
+        do { _ = try await ScreenText.recognize(blankImage); assertionFailure("Blank screen OCR must report unreadable text instead of generating from metadata") }
+        catch { assert(error.localizedDescription.contains("No readable text found")) }
         print("Screen text recognition and cancellation passed")
     }
 }

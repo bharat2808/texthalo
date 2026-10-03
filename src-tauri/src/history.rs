@@ -62,6 +62,9 @@ impl ArchivedRecording {
             recorder.write(samples);
         }
     }
+    pub(crate) fn set_text(&mut self, text: String) {
+        self.text = text;
+    }
     pub fn complete(mut self) {
         self.partial = false;
     }
@@ -390,6 +393,22 @@ fn now_ms() -> u64 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn incremental_archive_records_complete_text_at_eof() {
+        let dir =
+            std::env::temp_dir().join(format!("incremental-history-{}", uuid::Uuid::new_v4()));
+        let mut recording =
+            super::ArchivedRecording::new(&dir, "Fish Audio", "voice", "", &Default::default())
+                .unwrap();
+        recording.write(&[0.25; 24]);
+        recording.set_text("First sentence. Final words".into());
+        recording.complete();
+        let entries = super::list(&dir).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].text, "First sentence. Final words");
+        assert!(!entries[0].partial);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
     #[test]
     fn interrupted_archive_preserves_received_audio_as_partial() {
         let dir = std::env::temp_dir().join(format!("partial-history-{}", uuid::Uuid::new_v4()));
