@@ -480,10 +480,11 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
                 generation = Task {
                     do {
                         let screen = try await preparation.value(for: currentID)
-                        guard !Task.isCancelled, self.id == currentID else { return }
+                        guard !Task.isCancelled, self.id == currentID, let screen else { return }
                         self.screenPreparation = nil
-                        self.context = String(self.sourceReference(mode: self.request?.context, screenOCR: screen).prefix(10000))
-                        self.generate(text)
+                        let screenText = String(screen.prefix(10000))
+                        self.context = String(self.sourceReference(mode: self.request?.context, screenOCR: screenText).prefix(10000))
+                        self.generate(text, screenText: screenText)
                     } catch {
                         guard !Task.isCancelled, self.id == currentID else { return }
                         self.screenPreparation = nil
@@ -520,7 +521,7 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
         AssistantPrompt.referenceContext(selectedText: target?.selection ?? "", screenOCR: screenOCR,
                                          source: target?.sourceContext, mode: mode)
     }
-    func generate(_ prompt: String) {
+    func generate(_ prompt: String, screenText: String = "") {
         guard #available(macOS 26.0, *) else { event("error", "Assistant requires macOS 26 or later."); return }
         guard SystemLanguageModel.default.isAvailable else { event("error", "Apple Intelligence is unavailable: \(SystemLanguageModel.default.availability)"); return }
         guard prompt.count <= 4000, context.count <= 10000 else { event("error", "Select a shorter passage or use a shorter request."); return }
@@ -540,7 +541,7 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
             defer { if self.id == currentID { self.deadline?.cancel(); self.deadline = nil; self.generation = nil } }
             do {
                 let reply = try await generateAssistantReply(request: prompt, preference: preference,
-                    reference: source, previous: previous, selection: selection) { snapshot in
+                    reference: source, previous: previous, selection: selection, screenText: screenText) { snapshot in
                         guard !Task.isCancelled, self.id == currentID else { return }
                         self.result = snapshot.text
                         if snapshot.action == .preview { self.target?.streamInsert(snapshot.text) }
@@ -610,8 +611,9 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
                 self.screenLog.info("OCR completed in \(Int((ProcessInfo.processInfo.systemUptime - captured) * 1000)) ms")
                 guard !Task.isCancelled, self.id == currentID else { return }
                 guard !text.isEmpty else { self.event("error", "No readable text found. This build extracts text, not visual descriptions."); return }
-                self.context = String(self.sourceReference(mode: self.request?.context, screenOCR: text).prefix(10000))
-                if let prompt { self.generate(prompt) }
+                let screenText = String(text.prefix(10000))
+                self.context = String(self.sourceReference(mode: self.request?.context, screenOCR: screenText).prefix(10000))
+                if let prompt { self.generate(prompt, screenText: screenText) }
                 else { self.event("result", "Screen text captured", text: self.result) }
             } catch { guard !Task.isCancelled, self.id == currentID else { return }; self.event("error", "Could not read screen text: \(error.localizedDescription)") }
         }
