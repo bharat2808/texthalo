@@ -2414,7 +2414,7 @@ function MainApp() {
           {shortcutControl("assistant")}
           <TaskReadiness mode="assistant" accessibilityPrompted={settings.accessibility_prompted} onAccessibility={enableAccessibility} />
           <Card title="Make it yours" icon={Icon.textCursor()}><AssistantSettings value={settings.assistant ?? defaultAssistantPreferences} onChange={assistant => void save({ assistant })} /></Card>
-          <p className="card-note"><strong>Privacy:</strong> Assistant processes your speech and screen context on this Mac. With a cloud voice, only the text to be spoken is sent to TextHalo and Fish Audio to generate speech. Local voices keep speech generation on your Mac too.</p>
+          <p className="card-note"><strong>Privacy:</strong> TextHalo captures your current window only while you use Assistant. Your request, selected text, screenshot, and generated answer stay on this Mac. If you choose a hosted voice, only the final words being spoken are sent to TextHalo and Fish Audio.</p>
         </div> : null}
 
         {tab === "shortcuts" ? (

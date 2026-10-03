@@ -36,12 +36,15 @@ export function serviceReadiness(input: Input): Record<string, string[]> {
     : a.model.includes("appleIntelligenceNotEnabled") ? "Turn on Apple Intelligence in System Settings."
     : a.model.includes("modelNotReady") ? "Apple Intelligence is still downloading or preparing."
     : "Apple Intelligence is unavailable on this Mac. Check its requirements in System Settings."];
+  const visualContext = a.imageInput === undefined ? ["Checking visual context support…"]
+    : a.imageInput && a.screen !== true
+      ? [a.screen === undefined ? "Checking Screen Recording access…" : "Allow Screen Recording to use Assistant."]
+      : [];
   return {
     voice: [...shortcut("speak", "Listen"), ...accessibility, ...secureInput,
       ...(input.engine?.can_speak ? [] : [input.engine?.status || "Checking the selected voice…"])],
     transcription: [...shortcut("transcribe", "Dictate"), ...voiceInput,
       ...(p.dictation_output === "insert" ? accessibility : []), ...secureInput],
-    assistant: [...shortcut("assistant", "Assistant"), ...voiceInput, ...accessibility, ...secureInput, ...model,
-      ...(a.screen !== true ? [a.screen === undefined ? "Checking Screen Recording access…" : "Allow Screen Recording to use Assistant."] : [])],
+    assistant: [...shortcut("assistant", "Assistant"), ...voiceInput, ...accessibility, ...secureInput, ...model, ...visualContext],
   };
 }

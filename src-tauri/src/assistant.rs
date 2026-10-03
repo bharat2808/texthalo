@@ -498,7 +498,7 @@ fn stop_assistant_speech(app: &AppHandle, inner: &mut Inner) {
 
 fn configuration(command: &str, id: u64, settings: &Settings) -> Value {
     json!({"command":command,"id":id,"language":settings.assistant.language,
-        "instruction":settings.assistant.instruction,"context":settings.assistant.context,
+        "instruction":settings.assistant.instruction,
         "output":settings.assistant.dictation_output,"restoreClipboard":settings.restore_clipboard})
 }
 
@@ -718,14 +718,13 @@ mod tests {
         assert!(audio.show && audio.compact && audio.height == 140.0);
     }
     #[test]
-    fn generation_configuration_preserves_user_preferences_and_context_mode() {
+    fn generation_configuration_preserves_user_preferences_without_a_context_mode() {
         let mut settings = Settings::default();
         settings.assistant.instruction = "Keep replies brief and friendly".into();
-        settings.assistant.context = "screen".into();
         for command in ["start", "ask"] {
             let payload = configuration(command, 12, &settings);
             assert_eq!(payload["instruction"], "Keep replies brief and friendly");
-            assert_eq!(payload["context"], "screen");
+            assert!(payload.get("context").is_none());
             assert_eq!(payload["id"], 12);
         }
     }

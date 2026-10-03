@@ -17,6 +17,8 @@ pub mod engines;
 pub mod espeak;
 pub mod g2p;
 mod history;
+#[cfg(target_os = "macos")]
+mod instance;
 mod hosted;
 mod hosted_input;
 pub mod kokoro;
@@ -1168,6 +1170,11 @@ fn install_tray(app: &AppHandle) -> tauri::Result<()> {
 }
 
 pub fn run() {
+    #[cfg(target_os = "macos")]
+    let _instance = match instance::acquire() {
+        Ok(guard) => guard,
+        Err(error) => { eprintln!("{error}"); return; }
+    };
     tauri::Builder::default()
         .on_window_event(|window, event| {
             // A menu-bar app keeps its settings window alive between visits. Destroying

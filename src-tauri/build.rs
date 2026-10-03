@@ -1,3 +1,45 @@
+struct SwiftToolchain {
+    compiler: String,
+    sdk: String,
+    sdk_major: u32,
+}
+
+fn xcrun_value(developer_dir: Option<&str>, args: &[&str]) -> Option<String> {
+    let mut command = std::process::Command::new("/usr/bin/xcrun");
+    if let Some(path) = developer_dir {
+        command.env("DEVELOPER_DIR", path);
+    }
+    let output = command.args(args).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8(output.stdout)
+        .ok()
+        .map(|value| value.trim().to_string())
+}
+
+fn swift_toolchain() -> SwiftToolchain {
+    let candidates = [None, Some("/Library/Developer/CommandLineTools")];
+    candidates
+        .into_iter()
+        .filter_map(|developer_dir| {
+            let compiler = xcrun_value(developer_dir, &["--find", "swiftc"])?;
+            let sdk = xcrun_value(developer_dir, &["--sdk", "macosx", "--show-sdk-path"])?;
+            let sdk_major = xcrun_value(developer_dir, &["--sdk", "macosx", "--show-sdk-version"])?
+                .split('.')
+                .next()?
+                .parse()
+                .ok()?;
+            Some(SwiftToolchain {
+                compiler,
+                sdk,
+                sdk_major,
+            })
+        })
+        .max_by_key(|candidate| candidate.sdk_major)
+        .expect("A macOS Swift toolchain is required to build the assistant")
+}
+
 fn build_assistant() {
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("macos") {
         return;
@@ -13,7 +55,7 @@ fn build_assistant() {
         "native/Contracts.swift",
         "native/HoldShortcuts.swift",
         "native/SpeechSupport.swift",
-        "native/ScreenText.swift",
+        "native/ScreenCapture.swift",
         "native/AssistantGeneration.swift",
         "native/Assistant.swift",
         "native/Info.plist",
@@ -21,32 +63,39 @@ fn build_assistant() {
         println!("cargo:rerun-if-changed={file}");
     }
     let output = format!("binaries/texthalo-assistant-{target}");
-    let status = std::process::Command::new("xcrun")
-        .args([
-            "swiftc",
-            "-parse-as-library",
-            "-O",
-            "-target",
-            &format!("{arch}-apple-macos14.0"),
-            "native/Contracts.swift",
-            "native/HoldShortcuts.swift",
-            "native/SpeechSupport.swift",
-            "native/ScreenText.swift",
-            "native/AssistantGeneration.swift",
-            "native/Assistant.swift",
-            "-o",
-            &output,
-            "-Xlinker",
-            "-sectcreate",
-            "-Xlinker",
-            "__TEXT",
-            "-Xlinker",
-            "__info_plist",
-            "-Xlinker",
-            "native/Info.plist",
-        ])
+    let deployment_target = format!("{arch}-apple-macos14.0");
+    let toolchain = swift_toolchain();
+    let mut args = vec![
+        "-parse-as-library",
+        "-O",
+        "-target",
+        &deployment_target,
+        "-sdk",
+        &toolchain.sdk,
+        "native/Contracts.swift",
+        "native/HoldShortcuts.swift",
+        "native/SpeechSupport.swift",
+        "native/ScreenCapture.swift",
+        "native/AssistantGeneration.swift",
+        "native/Assistant.swift",
+        "-o",
+        &output,
+        "-Xlinker",
+        "-sectcreate",
+        "-Xlinker",
+        "__TEXT",
+        "-Xlinker",
+        "__info_plist",
+        "-Xlinker",
+        "native/Info.plist",
+    ];
+    if toolchain.sdk_major >= 27 {
+        args.splice(0..0, ["-D", "FOUNDATION_MODELS_IMAGE_ATTACHMENTS"]);
+    }
+    let status = std::process::Command::new(&toolchain.compiler)
+        .args(args)
         .status()
-        .expect("Xcode with FoundationModels is required to build the assistant");
+        .expect("A Swift toolchain with FoundationModels is required to build the assistant");
     assert!(status.success(), "native assistant compilation failed");
     println!(
         "cargo:rustc-env=TEXTHALO_ASSISTANT_DEV_PATH={}/{}",

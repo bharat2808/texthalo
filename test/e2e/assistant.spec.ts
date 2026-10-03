@@ -80,7 +80,7 @@ test("fallback header drags the window without stealing button interactions", as
   expect(await page.evaluate(() => (window as any).__calls.filter((call: any) => call.command === "plugin:window|start_dragging").length)).toBe(1);
 });
 
-for (const phase of ["recording", "streaming", "speaking"]) {
+for (const phase of ["recording", "streaming", "speaking", "processing"]) {
   test(`${phase} shows a capped live preview and request-owned cancellation`, async ({page}) => {
     await page.setViewportSize({width:270,height:140});
     await boot(page, "recording");

@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-export type AssistantPreferences = { language: string; instruction: string; dictation_output: string; context: string };
-export const defaultAssistantPreferences: AssistantPreferences = { language: "en-US", instruction: "", dictation_output: "insert", context: "screen" };
-export type Availability = { model?: string; microphone?: number; recognition?: number; accessibility?: boolean; screen?: boolean; diagnostic?: string; holdError?: string };
+export type AssistantPreferences = { language: string; instruction: string; dictation_output: string };
+export const defaultAssistantPreferences: AssistantPreferences = { language: "en-US", instruction: "", dictation_output: "insert" };
+export type Availability = { model?: string; microphone?: number; recognition?: number; accessibility?: boolean; screen?: boolean; imageInput?: boolean; diagnostic?: string; holdError?: string };
 type Props = { value: AssistantPreferences; onChange: (value: AssistantPreferences) => void };
 export function useAvailability() {
   const [availability, setAvailability] = useState<Availability>({});
@@ -33,7 +33,7 @@ export function PermissionsSettings() {
     {([
       {name:"Microphone",key:"microphone",status:a.microphone,description:"Records while you hold Dictate or Assistant."},
       {name:"Speech Recognition",key:"speech",status:a.recognition === 1 ? 2 : a.recognition === 2 ? 1 : a.recognition,description:"Converts your voice into text on this Mac."},
-      {name:"Screen Recording",key:"screen",status:a.screen === undefined ? undefined : a.screen ? 3 : 0,description:"Required for Assistant. Screen text is read only when you choose window context."},
+      {name:"Screen Recording",key:"screen",status:a.screen === undefined ? undefined : a.screen ? 3 : 0,description:a.imageInput === false ? "Visual context needs a TextHalo build with native image input." : "Lets Assistant capture your current window when you make a request."},
     ]).map(p => <section className="permission-row" key={p.key}>
       <strong>{p.name}</strong><div className="card-note">{p.description}</div><p>{label(p.status)}</p>
       <div className="inline">
@@ -55,11 +55,7 @@ export default function AssistantSettings({ value, onChange }: Props) {
       <textarea id="assistant-instruction" rows={7} maxLength={2000} value={instruction} onChange={event => { draft.current = event.target.value; setInstruction(event.target.value); }} onBlur={() => { if (draft.current !== value.instruction) onChange({ ...value, instruction: draft.current }); }} placeholder="Use a warm tone. Keep writing concise. When I ask for a voiceover, write a script ready to read aloud." />
       <p className="card-note">Your preferences for every request. You can undo text edits.</p>
     </div>
-    <div className="field"><label className="field-label" htmlFor="assistant-context">Assistant context</label>
-      <select id="assistant-context" value={value.context} onChange={event => onChange({ ...value, instruction: draft.current, context: event.target.value })}>
-        <option value="selection">Selected text</option><option value="screen">Selected text and original window</option><option value="none">Only my spoken request</option>
-      </select><p className="card-note">Window context recognizes visible words locally with Apple Vision. It does not interpret images, colors, charts, or layout.</p>
-    </div>
+    <p className="card-note">Assistant automatically uses selected text and, when supported, a private snapshot of your original window.</p>
     <p className="card-note" role="status">Apple Intelligence: {availability.model ?? "Checking…"}</p>
     {error && <p role="alert">{error}</p>}
   </div>;
@@ -106,7 +102,7 @@ export function TaskReadiness({ mode, needsAccessibility = true, accessibilityPr
     // Speech Recognition's denied/restricted enum values are reversed from Microphone.
     { name: "Speech Recognition", key: "speech", status: a.recognition === 1 ? 2 : a.recognition === 2 ? 1 : a.recognition, required: true },
     { name: "Accessibility", key: "accessibility", status: a.accessibility === undefined ? undefined : a.accessibility ? 3 : 0, required: needsAccessibility },
-    ...(mode === "assistant" ? [{ name: "Screen Recording", key: "screen" as const, status: a.screen === undefined ? undefined : a.screen ? 3 : 0, required: true }] : []),
+    ...(mode === "assistant" ? [{ name: "Screen Recording", key: "screen" as const, status: a.screen === undefined ? undefined : a.screen ? 3 : 0, required: a.imageInput !== false }] : []),
   ];
   const missing = permissions.filter(permission => permission.required && permission.status !== 3);
   const checking = missing.some(permission => permission.status === undefined);
@@ -144,7 +140,7 @@ export function TaskReadiness({ mode, needsAccessibility = true, accessibilityPr
         const granted = permission.status === 3;
         const restricted = permission.status === 1;
         const settings = permission.status === 2 || (permission.key === "accessibility" && accessibilityPrompted) || (permission.key === "screen" && screenRequested);
-        const label = !permission.required ? permission.key === "screen" ? "Only for window context" : "Only for inserting text" : permission.status === undefined ? "Checking…" : granted ? "Allowed" : restricted ? "Restricted by macOS" : "Not allowed";
+        const label = !permission.required ? permission.key === "screen" ? "Visual context unavailable in this build" : "Only for inserting text" : permission.status === undefined ? "Checking…" : granted ? "Allowed" : restricted ? "Restricted by macOS" : "Not allowed";
         return <li key={permission.key}><div><span>{permission.name}</span><small>{label}</small></div>
           {permission.required && !granted && !restricted ? <button className="plain" disabled={pending !== null || permission.status === undefined} onClick={() => void request(permission)}>{pending === permission.key ? (permission.key === "microphone" || permission.key === "speech") && permission.status === 0 ? "Waiting for macOS…" : "Opening…" : settings ? `Open ${permission.name} Settings` : `Enable ${permission.name}`}</button> : null}
         </li>;

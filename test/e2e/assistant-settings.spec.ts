@@ -36,14 +36,14 @@ async function boot(page: Page, untrusted = false, speechStatus = 3, onboarding 
     const state = { settings: {
       accessibility_prompted:!untrusted, onboarding_completed:!onboarding, launch_at_login:false,
       shortcuts:{speak:"Alt+S",stop:"Alt+X",transcribe:"",assistant:""},
-      assistant:{language:"en-US",instruction:"",dictation_output:"insert",context:"selection"},
+      assistant:{language:"en-US",instruction:"",dictation_output:"insert"},
       engine,voice:null,rate:200,capture_mode:"copy_only",max_chars:10000,restore_clipboard:true,
       kokoro:{voice:"af_heart",quant:"q8",speed:1,keep_warm:false,idle_unload_minutes:5},
       chatterbox:{voice:"en",exaggeration:0.5,cfg_weight:0.5,ref_audio:null,keep_warm:false},
       fish:{voice_id:"",model_id:"fish-s21-pro",enhance_text:false,privacy_accepted:false}
     }, voices:[], engines:[{id:"apple",label:"Apple voices",summary:"",can_speak:true,status:"Ready",blocked_reason:null,needs_download:false,download_bytes:0,repo:"",voices:[],ref_voices:[],selected_voice:""}], trusted:!untrusted,secure_input:false,speaking:false,refused_shortcuts:[],system_language:"en_US",config_path:"/test/settings.json" };
     let entries = [{id:"1",createdAt:1700000000000,text:"Synthetic transcript",source:"Test editor"}];
-    Object.assign(window, {__availability:{model:"available",microphone:3,recognition:speechStatus,screen:false,accessibility:!untrusted,...availability},__calls:[],__state:state,__native:async (command:string,args:any) => {
+    Object.assign(window, {__availability:{model:"available",microphone:3,recognition:speechStatus,screen:false,imageInput:true,accessibility:!untrusted,...availability},__calls:[],__state:state,__native:async (command:string,args:any) => {
       (window as any).__calls.push({command,args});
       switch(command) {
         case "get_state": return structuredClone(state);
@@ -92,13 +92,13 @@ test("transcription history is separate and language changes persist",async({pag
   await expect(page.getByText("Synthetic transcript",{exact:true})).toHaveCount(0);
   await expect(page.getByText(/No transcripts yet/)).toBeVisible();
 });
-test("assistant instructions persist with window context and no chat launcher",async({page})=>{
+test("assistant instructions persist with automatic private context and no chat launcher",async({page})=>{
   await boot(page);
   await page.getByRole("button",{name:"Assistant",exact:true}).click();
   await page.getByLabel("Assistant instructions").fill("Write concise answers.");
-  await page.getByLabel("Assistant context").selectOption("screen");
+  await page.getByRole("heading", {name:"Assistant", exact:true}).click();
   await expect.poll(()=>page.evaluate(()=>(window as any).__state.settings.assistant.instruction)).toBe("Write concise answers.");
-  await expect.poll(()=>page.evaluate(()=>(window as any).__state.settings.assistant.context)).toBe("screen");
+  await expect(page.getByText(/automatically uses selected text/)).toBeVisible();
   await expect(page.getByRole("button",{name:"Open assistant",exact:true})).toHaveCount(0);
 });
 
@@ -335,13 +335,17 @@ test("section readiness only requires permissions needed by each feature", async
 });
 
 
-test("Assistant requires screen permission for every context and explains privacy", async ({page}) => {
+test("Assistant requires screen permission for native image context and explains privacy", async ({page}) => {
   await boot(page);
   await page.getByRole("navigation", {name:"Main"}).getByRole("button", {name:"Assistant", exact:true}).click();
-  for (const context of ["selection", "none", "screen"]) {
-    await page.getByLabel("Assistant context").selectOption(context);
-    await expect(page.getByRole("button", {name:"Enable Screen Recording", exact:true})).toBeVisible();
-    await expect(page.getByRole("button", {name:"Assistant status", exact:true})).toHaveAttribute("title", /Allow Screen Recording/);
-  }
-  await expect(page.getByText(/Assistant processes your speech and screen context on this Mac/)).toBeVisible();
+  await expect(page.getByRole("button", {name:"Enable Screen Recording", exact:true})).toBeVisible();
+  await expect(page.getByRole("button", {name:"Assistant status", exact:true})).toHaveAttribute("title", /Allow Screen Recording/);
+  await expect(page.getByText(/captures your current window only while you use Assistant/)).toBeVisible();
+});
+
+test("Assistant remains usable when this build has no native image input", async ({page}) => {
+  await boot(page, false, 3, false, "apple", {imageInput:false, screen:false});
+  await page.getByRole("navigation", {name:"Main"}).getByRole("button", {name:"Assistant", exact:true}).click();
+  await expect(page.getByText("Visual context unavailable in this build", {exact:true})).toBeVisible();
+  await expect(page.getByRole("button", {name:"Assistant status", exact:true})).not.toHaveAttribute("title", /Screen Recording/);
 });
