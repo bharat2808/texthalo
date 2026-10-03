@@ -11,6 +11,7 @@ fn build_assistant() {
     std::fs::create_dir_all("binaries").expect("create native binary directory");
     for file in [
         "native/Contracts.swift",
+        "native/HoldShortcuts.swift",
         "native/SpeechSupport.swift",
         "native/Assistant.swift",
         "native/Info.plist",
@@ -26,6 +27,7 @@ fn build_assistant() {
             "-target",
             &format!("{arch}-apple-macos14.0"),
             "native/Contracts.swift",
+            "native/HoldShortcuts.swift",
             "native/SpeechSupport.swift",
             "native/Assistant.swift",
             "-o",

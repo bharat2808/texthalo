@@ -1,4 +1,36 @@
 import { expect, test, type Page } from "@playwright/test";
+test("hold keys can be assigned independently and duplicate holds are rejected", async ({page}) => {
+  await boot(page);
+  await page.getByRole("button", {name:"Dictate", exact:true}).click();
+  await page.getByRole("button", {name:"Change shortcut", exact:true}).click();
+  await expect(page.getByRole("button", {name:"Hold Right Option", exact:true}).locator('[aria-hidden="true"]')).toHaveText("⌥");
+  await expect(page.getByRole("button", {name:"Hold Escape", exact:true}).locator('[aria-hidden="true"]')).toHaveText("⎋");
+  await expect(page.getByRole("button", {name:"Hold Fn", exact:true}).locator('[aria-hidden="true"]')).toHaveText("fn");
+  await page.getByRole("button", {name:"Hold Right Option", exact:true}).click();
+  await expect.poll(() => page.evaluate(() => (window as any).__state.settings.shortcuts.transcribe)).toBe("Hold:RightOption");
+  await expect(page.getByText("Hold Right Option", {exact:true})).toBeVisible();
+  await page.getByRole("button", {name:"Assistant", exact:true}).click();
+  await page.getByRole("button", {name:"Change shortcut", exact:true}).click();
+  await page.getByRole("button", {name:"Hold Right Option", exact:true}).click();
+  await expect(page.getByRole("alert")).toContainText("Already used by Dictate");
+  await page.getByRole("button", {name:"Hold Fn", exact:true}).click();
+  await expect.poll(() => page.evaluate(() => (window as any).__state.settings.shortcuts.assistant)).toBe("Hold:Fn");
+  await expect(page.getByText(/Globe key/)).toBeVisible();
+});
+test("shortcut recording distinguishes a quick modifier tap, a hold, and a combination", async ({page}) => {
+  await boot(page);
+  await page.getByRole("button", {name:"Dictate", exact:true}).click();
+  await page.getByRole("button", {name:"Change shortcut", exact:true}).click();
+  await page.keyboard.press("AltLeft");
+  await page.waitForTimeout(400);
+  expect(await page.evaluate(() => (window as any).__state.settings.shortcuts.transcribe)).toBe("");
+  await page.keyboard.down("AltLeft");
+  await expect.poll(() => page.evaluate(() => (window as any).__state.settings.shortcuts.transcribe)).toBe("Hold:LeftOption");
+  await page.keyboard.up("AltLeft");
+  await page.getByRole("button", {name:"Change shortcut", exact:true}).click();
+  await page.keyboard.press("Alt+k");
+  await expect.poll(() => page.evaluate(() => (window as any).__state.settings.shortcuts.transcribe)).toBe("Alt+K");
+});
 async function boot(page: Page, untrusted = false, speechStatus = 3, onboarding = false, engine = "apple", availability: Record<string, unknown> = {}) {
   await page.addInitScript(({untrusted,speechStatus,onboarding,engine,availability}) => {
     const state = { settings: {

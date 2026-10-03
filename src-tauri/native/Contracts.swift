@@ -1,5 +1,28 @@
 import Foundation
 
+// A pending hold cannot become active after another keyboard or mouse action.
+struct HoldTrigger {
+    enum Release { case none, tap, stop }
+    private var began: TimeInterval?
+    private var active = false
+    mutating func press(at time: TimeInterval) { if began == nil { began = time; active = false } }
+    mutating func activate(at time: TimeInterval) -> Bool {
+        guard let began, !active, time - began >= 0.35 else { return false }
+        active = true
+        return true
+    }
+    mutating func release() -> Release {
+        let result: Release = active ? .stop : began == nil ? .none : .tap
+        began = nil; active = false
+        return result
+    }
+    mutating func interrupt() -> Bool {
+        let wasActive = active
+        began = nil; active = false
+        return wasActive
+    }
+}
+
 struct TargetSnapshot: Equatable {
     let value: String
     let location: Int
@@ -34,6 +57,7 @@ struct Request: Decodable {
     var modifiers: String?
     var restore: Bool?
     var restoreClipboard: Bool?
+    var holdBindings: [String: String]?
     var usesScreenContext: Bool { context == "screen" }
 }
 

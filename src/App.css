@@ -893,6 +893,8 @@ button:focus-visible, summary:focus-visible, select:focus-visible, input:focus-v
 
 .shortcut-control { display: grid; gap: 7px; }
 .shortcut-control p { margin: 0; }
+.hold-key-button { display: inline-flex; align-items: center; gap: 7px; }
+.hold-key-symbol { display: inline-flex; align-items: center; justify-content: center; min-width: 23px; height: 23px; border: 1px solid var(--separator); border-bottom-width: 2px; border-radius: 4px; background: var(--control-bg); font-size: 15px; line-height: 1; }
 .shortcut-error { color: var(--danger); font-size: 12px; overflow-wrap: anywhere; }
 .listen-hero .shortcut-control { margin: 10px 0; }
 .feature-permissions { padding: 16px; border: 1px solid var(--separator); border-radius: var(--radius-card); background: color-mix(in srgb, var(--control-bg) 50%, transparent); }

@@ -1,6 +1,23 @@
 import Foundation
 @main struct ContractTests {
     static func main() {
+        var trigger = HoldTrigger()
+        trigger.press(at: 1)
+        assert(!trigger.activate(at: 1.349))
+        assert(trigger.release() == .tap, "Quick taps retain the normal key action")
+        trigger.press(at: 2)
+        assert(trigger.activate(at: 2.351))
+        assert(!trigger.activate(at: 3), "A held key starts only once")
+        assert(trigger.release() == .stop)
+        assert(trigger.release() == .none)
+        trigger.press(at: 4)
+        assert(!trigger.interrupt())
+        assert(!trigger.activate(at: 5), "Combinations and mouse actions cancel a pending hold")
+        assert(trigger.release() == .none)
+        trigger.press(at: 6)
+        assert(trigger.activate(at: 7))
+        assert(trigger.interrupt(), "Interrupting an active hold cancels recording")
+        assert(trigger.release() == .none)
         let saved = TargetSnapshot(value: "hello 🌍", location: 6, length: 2)
         assert(saved.permitsInsertion(current: saved, sameElement: true, editable: true))
         assert(!saved.permitsInsertion(current: saved, sameElement: false, editable: true))

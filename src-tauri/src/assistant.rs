@@ -23,12 +23,30 @@ pub struct AssistantState {
 }
 #[derive(Default)]
 struct Inner {
+    hold_error: String,
     native: Option<Native>,
     job: HoldJob,
     status: Value,
     availability: Value,
     spoke: Option<u64>,
     speech_id: Option<u64>,
+}
+
+fn hold_configuration(settings: &Settings) -> Value {
+    let mut bindings = serde_json::Map::new();
+    for (mode, key) in [("transcribe", &settings.shortcuts.transcribe), ("assistant", &settings.shortcuts.assistant)] {
+        if crate::shortcuts::is_hold(key) { bindings.insert(mode.into(), json!(key)); }
+    }
+    json!({"command":"hold_configure", "id":0, "holdBindings":bindings})
+}
+
+pub fn configure_holds(app: &AppHandle) -> Result<(), String> {
+    let value = hold_configuration(&app.state::<AppState>().settings.lock().unwrap());
+    let state = app.state::<AssistantState>();
+    let mut inner = state.inner.lock().unwrap();
+    // Do not launch a sidecar solely for an empty hold configuration.
+    if inner.native.is_none() && value["holdBindings"].as_object().is_some_and(|b| b.is_empty()) { return Ok(()); }
+    send(app, &mut inner, value)
 }
 
 pub fn setup(app: &AppHandle) -> tauri::Result<()> {
@@ -85,7 +103,9 @@ fn send(app: &AppHandle, inner: &mut Inner, value: Value) -> Result<(), String> 
             .stderr(Stdio::null())
             .spawn()
             .map_err(|e| format!("Could not start native assistant: {e}"))?;
-        let input = child.stdin.take().ok_or("Native input unavailable")?;
+        let mut input = child.stdin.take().ok_or("Native input unavailable")?;
+        let holds = hold_configuration(&app.state::<AppState>().settings.lock().unwrap());
+        writeln!(input, "{holds}").and_then(|_| input.flush()).map_err(|e| e.to_string())?;
         let output = child.stdout.take().ok_or("Native output unavailable")?;
         let pid = child.id();
         inner.native = Some(Native { child, input });
@@ -223,9 +243,38 @@ fn position_panel(window: &tauri::WebviewWindow, anchor: Option<&Value>, height:
 }
 
 fn receive(app: &AppHandle, mut event: Value) {
+    if matches!(event["phase"].as_str(), Some("hold_pressed" | "hold_released" | "hold_cancel")) {
+        let mode = match event["mode"].as_str() {
+            Some("transcribe") => Mode::Transcribe,
+            Some("assistant") => Mode::Assistant,
+            _ => return,
+        };
+        let configured = {
+            let state = app.state::<AppState>();
+            let settings = state.settings.lock().unwrap();
+            if mode == Mode::Transcribe { settings.shortcuts.transcribe.clone() } else { settings.shortcuts.assistant.clone() }
+        };
+        if !crate::shortcuts::is_hold(&configured) || event["key"] != configured { return; }
+        match event["phase"].as_str() {
+            Some("hold_pressed") => pressed(app, mode, configured, String::new()),
+            Some("hold_released") => released(app, mode),
+            _ => cancel(app),
+        }
+        return;
+    }
+    if event["phase"] == "hold_status" {
+        let state = app.state::<AssistantState>();
+        let mut inner = state.inner.lock().unwrap();
+        inner.hold_error = event["message"].as_str().unwrap_or("").to_string();
+        if !inner.availability.is_object() { inner.availability = json!({}); }
+        inner.availability["holdError"] = json!(inner.hold_error);
+        let _ = app.emit("texthalo:assistant-availability", &inner.availability);
+        return;
+    }
     let state = app.state::<AssistantState>();
     let mut inner = state.inner.lock().unwrap();
     if event["phase"] == "availability" {
+        event["holdError"] = json!(inner.hold_error);
         inner.availability = event.clone();
         let _ = app.emit("texthalo:assistant-availability", event);
         return;
@@ -431,6 +480,8 @@ pub fn assistant_control(
             | "settings_microphone"
             | "settings_speech"
             | "settings_screen"
+            | "hold_suspend"
+            | "hold_resume"
     ) {
         return send(&app, &mut inner, json!({"command":command,"id":0}));
     }
@@ -492,6 +543,16 @@ pub fn assistant_control(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn hold_configuration_includes_the_native_request_envelope() {
+        let mut settings = Settings::default();
+        settings.shortcuts.transcribe = "Hold:LeftOption".into();
+        settings.shortcuts.assistant = "Ctrl+D".into();
+        let payload = hold_configuration(&settings);
+        assert_eq!(payload["id"], json!(0), "Swift Request requires id even for configuration commands");
+        assert_eq!(payload["command"], "hold_configure");
+        assert_eq!(payload["holdBindings"], json!({"transcribe":"Hold:LeftOption"}));
+    }
     #[test]
     fn completed_insertion_closes_the_overlay() {
         let applied = presentation(&json!({"phase":"result","action":"applied","message":"Text inserted"}));

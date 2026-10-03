@@ -4,6 +4,14 @@ use std::{fs, path::Path, process::Command, time::Duration};
 
 const PARENT_ARGUMENT: &str = "--texthalo-dev-parent=";
 
+fn signing_identity(config: &serde_json::Value) -> Result<&str, &'static str> {
+    config["bundle"]["macOS"]["signingIdentity"]
+        .as_str()
+        .map(str::trim)
+        .filter(|identity| !identity.is_empty() && *identity != "-")
+        .ok_or("Configure bundle.macOS.signingIdentity to preserve TextHalo permissions in development")
+}
+
 fn inside_bundle(executable: &Path) -> bool {
     executable
         .parent()
@@ -57,13 +65,25 @@ pub fn launch() -> Result<bool, Box<dyn std::error::Error>> {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("icons/icon.icns"),
         contents.join("Resources/icon.icns"),
     )?;
-    // Ad-hoc signing needs no developer certificate and is only used for this dev bundle.
-    let signed = Command::new("/usr/bin/codesign")
-        .args(["--force", "--deep", "--sign", "-"])
+    // Match the installed app's signing identity and identifiers. Ad-hoc signing
+    // ties TCC grants to a build's hash, so every rebuild loses that identity.
+    let config: serde_json::Value = serde_json::from_str(include_str!("../tauri.conf.json"))?;
+    let identity = signing_identity(&config)?;
+    // Sign nested code first, then the containing bundle, as in release builds.
+    for path in [macos.join("texthalo-assistant"), bundle.clone()] {
+        let signed = Command::new("/usr/bin/codesign")
+            .args(["--force", "--sign", identity, "--timestamp=none"])
+            .arg(&path)
+            .status()?;
+        if !signed.success() {
+            return Err(format!("Could not sign {} with {identity}; check the signing certificate in Keychain", path.display()).into());
+        }
+    }
+    if !Command::new("/usr/bin/codesign")
+        .args(["--verify", "--deep", "--strict"])
         .arg(&bundle)
-        .status()?;
-    if !signed.success() {
-        return Err("Could not sign the TextHalo development bundle".into());
+        .status()?.success() {
+        return Err("TextHalo development signature verification failed".into());
     }
     let status = Command::new("/usr/bin/open")
         .args(["-n", "-W"])
@@ -81,6 +101,16 @@ pub fn launch() -> Result<bool, Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn development_uses_the_configured_release_identity() {
+        let config = serde_json::json!({"bundle":{"macOS":{"signingIdentity":"Developer ID Application: Test (TEAM)"}}});
+        assert_eq!(signing_identity(&config).unwrap(), "Developer ID Application: Test (TEAM)");
+        for identity in ["", "-", "   "] {
+            let config = serde_json::json!({"bundle":{"macOS":{"signingIdentity":identity}}});
+            assert!(signing_identity(&config).is_err());
+        }
+        assert!(signing_identity(&serde_json::json!({})).is_err());
+    }
     #[test]
     fn only_bundle_executables_skip_launch_services() {
         assert!(!inside_bundle(Path::new("/project/target/debug/kiegen")));

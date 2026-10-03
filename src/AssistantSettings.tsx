@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 export type AssistantPreferences = { language: string; instruction: string; dictation_output: string; context: string };
 export const defaultAssistantPreferences: AssistantPreferences = { language: "en-US", instruction: "", dictation_output: "insert", context: "screen" };
-export type Availability = { model?: string; microphone?: number; recognition?: number; accessibility?: boolean; screen?: boolean; diagnostic?: string };
+export type Availability = { model?: string; microphone?: number; recognition?: number; accessibility?: boolean; screen?: boolean; diagnostic?: string; holdError?: string };
 type Props = { value: AssistantPreferences; onChange: (value: AssistantPreferences) => void };
 export function useAvailability() {
   const [availability, setAvailability] = useState<Availability>({});

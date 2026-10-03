@@ -15,6 +15,9 @@ export function serviceReadiness(input: Input): Record<string, string[]> {
   const { availability: a, preferences: p } = input;
   const shortcut = (key: keyof Input["shortcuts"], label: string) => {
     const value = input.shortcuts[key];
+    if (value?.startsWith("Hold:") && (!input.trusted || a.holdError)) {
+      return [a.holdError || "Allow Accessibility to use hold keys."];
+    }
     return !value ? [`Set ${label === "Assistant" ? "an" : "a"} ${label} shortcut.`] : input.refused.includes(value)
       ? [`Choose another ${label} shortcut; this one is unavailable.`] : [];
   };

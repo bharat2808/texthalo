@@ -170,6 +170,7 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
 }
 
 @MainActor final class Assistant {
+    let holdShortcuts = HoldShortcuts()
     var id: UInt64 = 0
     var request: Request?
     var target: Target?
@@ -270,6 +271,9 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
             return
         }
         switch command.command {
+        case "hold_configure": holdShortcuts.configure(command.holdBindings ?? [:]); holdShortcuts.install()
+        case "hold_suspend": holdShortcuts.suspend(true)
+        case "hold_resume": holdShortcuts.suspend(false); holdShortcuts.install()
         case "status": availability()
         case "permissions": Task { await permissions() }
         case "permission_microphone": Task { _ = await AVCaptureDevice.requestAccess(for: .audio); availability() }
@@ -374,6 +378,7 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
             heldTimer = Timer.scheduledTimer(withTimeInterval: 0.04, repeats: true) { [weak self] _ in
                 Task { @MainActor in
                     guard let self, self.id == currentID, self.recording else { return }
+                    if command.key?.hasPrefix("Hold:") == true { return }
                     let flags = CGEventSource.flagsState(.combinedSessionState)
                     if (code.map { !CGEventSource.keyState(.combinedSessionState, key: $0) } ?? false)
                         || !flags.contains(required) { self.finishRecording() }
@@ -518,7 +523,8 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
     func installEscape() {
         if let monitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown, handler: { [weak self] event in
             if event.keyCode == 53 { Task { @MainActor in
-                guard let self, self.recording || self.finishing || self.generation != nil || self.target != nil || !self.result.isEmpty else { return }
+                guard let self, !self.holdShortcuts.reservesEscape,
+                      self.recording || self.finishing || self.generation != nil || self.target != nil || !self.result.isEmpty else { return }
                 self.restoreSourceIfAssistantFocused()
                 self.cancel(); self.target = nil; self.context = ""; self.result = ""; self.event("canceled", "Canceled")
             } }

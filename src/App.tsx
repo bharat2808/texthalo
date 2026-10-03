@@ -19,6 +19,9 @@ import "./App.css";
 type ShortcutRole = "speak" | "stop" | "transcribe" | "assistant";
 
 const shortcutLabels: Record<ShortcutRole, string> = { speak: "Listen", stop: "Stop", transcribe: "Dictate", assistant: "Assistant" };
+const holdKeys: Record<string, string> = { "Hold:Fn": "Hold Fn", "Hold:LeftOption": "Hold Left Option", "Hold:RightOption": "Hold Right Option", "Hold:Escape": "Hold Escape" };
+const holdKeySymbols: Record<string, string> = { "Hold:Fn": "fn", "Hold:LeftOption": "⌥", "Hold:RightOption": "⌥", "Hold:Escape": "⎋" };
+const shortcutLabel = (key: string) => holdKeys[key] ?? key;
 
 type CaptureMode = "ax_then_copy" | "ax_only" | "copy_only";
 
@@ -1203,6 +1206,11 @@ function MainApp() {
   const saveShortcut = useCallback(async (role: ShortcutRole, accelerator: string) => {
     const current = latestState.current;
     if (!current) return;
+    const duplicate = accelerator && (Object.keys(current.settings.shortcuts) as ShortcutRole[]).find(other => other !== role && current.settings.shortcuts[other]?.toLowerCase() === accelerator.toLowerCase());
+    if (duplicate) {
+      setShortcutFeedback({ role, error: true, message: `Already used by ${shortcutLabels[duplicate]}. Try another shortcut.` });
+      return;
+    }
     setRecording(null); setShortcutSaving(true);
     try {
       const saved = await save({ shortcuts: { ...current.settings.shortcuts, [role]: accelerator } });
@@ -1214,16 +1222,43 @@ function MainApp() {
 
   useEffect(() => { setRecording(null); setShortcutFeedback(null); }, [tab]);
 
+  useEffect(() => {
+    if (!recording) return;
+    // Keep an existing hold binding from starting dictation while choosing a key.
+    void invoke("assistant_control", {command:"hold_suspend"}).catch(() => {});
+    const blur = () => setRecording(null);
+    window.addEventListener("blur", blur);
+    return () => {
+      window.removeEventListener("blur", blur);
+      void invoke("assistant_control", {command:"hold_resume"}).catch(() => {});
+    };
+  }, [recording]);
+
   /* The same recorder serves feature screens, setup, and Settings. */
   useEffect(() => {
     if (!recording || !state) return;
     const shortcuts = state.settings.shortcuts;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let heldCode = "";
+    const clearHold = () => { clearTimeout(timer); timer = undefined; };
+    const onUp = (event: KeyboardEvent) => {
+      if (event.code !== heldCode) return;
+      clearHold(); heldCode = "";
+      if (event.key === "Escape") { setRecording(null); setShortcutFeedback(null); }
+    };
     const onKey = (event: KeyboardEvent) => {
       if (event.repeat) return;
+      clearHold();
       // Keep keyboard navigation and the Cancel button available while recording.
       if (!event.metaKey && !event.ctrlKey && !event.altKey &&
           (event.key === "Tab" || (event.target instanceof HTMLButtonElement && ["Enter", " "].includes(event.key)))) return;
       event.preventDefault();
+      const hold = ({Fn:"Hold:Fn",AltLeft:"Hold:LeftOption",AltRight:"Hold:RightOption",Escape:"Hold:Escape"} as Record<string,string>)[event.code];
+      if ((recording === "transcribe" || recording === "assistant") && hold && !event.metaKey && !event.ctrlKey && !event.shiftKey && (event.key === "Alt" || !event.altKey)) {
+        heldCode = event.code;
+        timer = setTimeout(() => { heldCode = ""; void saveShortcut(recording, hold); }, 350);
+        return;
+      }
       if (event.key === "Escape") {
         setRecording(null); setShortcutFeedback(null);
         return;
@@ -1238,7 +1273,9 @@ function MainApp() {
       void saveShortcut(recording, accelerator);
     };
     window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
+    window.addEventListener("keyup", onUp, true);
+    window.addEventListener("mousedown", clearHold, true);
+    return () => { clearHold(); window.removeEventListener("keydown", onKey, true); window.removeEventListener("keyup", onUp, true); window.removeEventListener("mousedown", clearHold, true); };
   }, [recording, saveShortcut, state]);
 
   const preview = useCallback(
@@ -1476,11 +1513,16 @@ function MainApp() {
 
   const shortcutControl = (role: ShortcutRole) => <div className="shortcut-control">
     <div className="task-shortcut">
-      <kbd aria-live="polite">{recording === role ? "Press a key combination…" : settings.shortcuts[role] || "No shortcut yet"}</kbd>
+      <kbd aria-live="polite">{recording === role ? "Press a key combination…" : shortcutLabel(settings.shortcuts[role]) || "No shortcut yet"}</kbd>
       <button className="plain" disabled={shortcutSaving} onClick={() => { setShortcutFeedback(null); setRecording(recording === role ? null : role); }}>{recording === role ? "Cancel" : "Change shortcut"}</button>
       {(role === "transcribe" || role === "assistant") && settings.shortcuts[role] && recording !== role ? <button className="text" disabled={shortcutSaving} onClick={() => void saveShortcut(role, "")}>Clear shortcut</button> : null}
     </div>
-    {recording === role ? <p className="card-note">Press your new shortcut. Esc to cancel.</p> : null}
+    {recording === role ? <>
+      {(role === "transcribe" || role === "assistant") && <div className="inline" style={{flexWrap:"wrap", marginTop:8}}>{Object.entries(holdKeys).map(([key,label]) => <button className="plain hold-key-button" key={key} disabled={shortcutSaving} onClick={() => void saveShortcut(role,key)}><span className="hold-key-symbol" aria-hidden="true">{holdKeySymbols[key]}</span>{label}</button>)}</div>}
+      <p className="card-note">{role === "transcribe" || role === "assistant" ? "Choose a hold key, hold one for a moment, or press a key combination. Tap Esc to cancel." : "Press your new shortcut. Esc to cancel."}</p>
+    </> : null}
+    {settings.shortcuts[role]?.startsWith("Hold:") && <p className="card-note">Hold for 0.35 seconds to speak. Release to finish.{settings.shortcuts[role] === "Hold:Escape" ? " Quick Escape taps take effect on release." : " Other keys or clicks cancel the hold."}{settings.shortcuts[role] === "Hold:Fn" ? " If the Globe key also opens emoji or dictation, change its action in macOS Keyboard settings." : ""}</p>}
+    {settings.shortcuts[role]?.startsWith("Hold:") && serviceAvailability.availability.holdError && <p role="alert" className="shortcut-error">{serviceAvailability.availability.holdError}</p>}
     {shortcutFeedback?.role === role ? <p className={shortcutFeedback.error ? "shortcut-error" : "card-note"} role={shortcutFeedback.error ? "alert" : "status"}>{shortcutFeedback.message}</p> : null}
   </div>;
 
@@ -1638,8 +1680,8 @@ function MainApp() {
             <div className="inline"><button className="primary-button" onClick={() => setTab("voice")}>Choose a voice</button><button className="plain" disabled={!activeEngine?.can_speak || state.speaking} onClick={() => preview(settings.engine === "apple" ? settings.voice : activeEngine?.selected_voice ?? null)}>Preview voice</button>{state.speaking ? <button className="plain" onClick={() => void invoke("stop_speaking").catch(cause => setError(String(cause)))}>Stop</button> : null}</div>
           </section>
           <div className="home-tasks">
-            <section className="task-card"><div className="service-heading"><h2>Dictate</h2>{readinessIcon("transcription", "Dictate")}</div><p>Speak and put your words into any text field.</p><kbd>{settings.shortcuts.transcribe || "Set up a shortcut"}</kbd><button className="plain" onClick={() => setTab("transcription")}>Set up dictation</button></section>
-            <section className="task-card"><div className="service-heading"><h2>Assistant</h2>{readinessIcon("assistant", "Assistant")}</div><p>Ask to write, edit, or read something aloud.</p><kbd>{settings.shortcuts.assistant || "Set up a shortcut"}</kbd><button className="plain" onClick={() => setTab("assistant")}>Set up Assistant</button></section>
+            <section className="task-card"><div className="service-heading"><h2>Dictate</h2>{readinessIcon("transcription", "Dictate")}</div><p>Speak and put your words into any text field.</p><kbd>{shortcutLabel(settings.shortcuts.transcribe) || "Set up a shortcut"}</kbd><button className="plain" onClick={() => setTab("transcription")}>Set up dictation</button></section>
+            <section className="task-card"><div className="service-heading"><h2>Assistant</h2>{readinessIcon("assistant", "Assistant")}</div><p>Ask to write, edit, or read something aloud.</p><kbd>{shortcutLabel(settings.shortcuts.assistant) || "Set up a shortcut"}</kbd><button className="plain" onClick={() => setTab("assistant")}>Set up Assistant</button></section>
           </div>
           <button className="text home-history" onClick={() => setTab("history")}>Open your history</button>
         </div> : null}

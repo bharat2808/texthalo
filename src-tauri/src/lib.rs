@@ -1216,6 +1216,9 @@ pub fn run() {
             }
             overlay::setup(&handle)?;
             assistant::setup(&handle)?;
+            if let Err(error) = assistant::configure_holds(&handle) {
+                eprintln!("[TextHalo] hold shortcut setup failed: {error}");
+            }
 
             // Show setup on a fresh install, and show permission guidance whenever access
             // is missing. Existing installs keep their saved onboarding state.
