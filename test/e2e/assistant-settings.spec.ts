@@ -51,6 +51,10 @@ async function boot(page: Page, untrusted = false, speechStatus = 3, onboarding 
         case "plugin:app|version": return "0.1.12";
         case "desktop_is_signed_in": return false;
         case "get_audio_history": return [];
+        case "generation_history": {
+          const run = {id:"audit-1",createdAt:1700000000000,source:"Chrome",status:"result",request:"Read this page",transcript:"Read this page",output:"The visible passage.",rawOutput:"1|The visible passage.",systemInstructions:"Synthetic system instructions",userPrompt:"Synthetic context then request",screenshot:"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aL1sAAAAASUVORK5CYII=",events:[{phase:"result",at:1700000000100,message:"Preparing narration"}]};
+          return args?.id ? run : [run];
+        }
         case "desktop_billing_plans": return {plans:[]};
         case "assistant_state": return {availability:structuredClone((window as any).__availability)};
         case "assistant_control": if ((window as any).__permissionError && args.command.startsWith("permission_")) throw new Error("Permission request failed"); return null;
@@ -69,6 +73,21 @@ async function boot(page: Page, untrusted = false, speechStatus = 3, onboarding 
   `}));
   await page.goto("/");
 }
+test("Assistant history exposes input output prompts and captured screenshot", async ({page}) => {
+  await boot(page);
+  await page.getByRole("navigation", {name:"Main"}).getByRole("button", {name:"History", exact:true}).click();
+  await page.getByRole("group", {name:"History type"}).getByRole("button", {name:"Assistant", exact:true}).click();
+  await page.getByRole("button", {name:"View run"}).click();
+  const record = page.getByRole("article", {name:"Generation record"});
+  await expect(record.getByText("The visible passage.", {exact:true})).toBeVisible();
+  await record.getByText("Captured screenshot", {exact:true}).click();
+  await expect(record.getByRole("img")).toBeVisible();
+  await record.getByText("System instructions", {exact:true}).click();
+  await expect(record.getByText("Synthetic system instructions", {exact:true})).toBeVisible();
+  await record.getByText("Model input", {exact:true}).click();
+  await expect(record.getByText("Synthetic context then request", {exact:true})).toBeVisible();
+});
+
 test("Home leads to tasks and Settings owns permissions", async ({page}) => {
   await boot(page);
   await expect(page.getByRole("heading",{name:"Home",exact:true})).toBeVisible();

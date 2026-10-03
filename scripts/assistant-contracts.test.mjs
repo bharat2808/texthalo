@@ -5,6 +5,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 
+test("generation history retains 50 complete private audit records", {skip:process.platform !== "darwin"}, () => {
+  const directory = mkdtempSync(join(tmpdir(), "texthalo-audit-tests-"));
+  try {
+    const binary = join(directory, "audit");
+    const compiled = spawnSync("xcrun", ["swiftc", "-parse-as-library", "src-tauri/native/GenerationHistory.swift", "src-tauri/native/GenerationHistoryTests.swift", "-o", binary], {encoding:"utf8",timeout:60000});
+    assert.equal(compiled.status, 0, compiled.stderr);
+    const result = spawnSync(binary, [], {encoding:"utf8",timeout:15000});
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+  } finally { rmSync(directory, {recursive:true,force:true}); }
+});
+
 test("native hold events preserve taps, combinations, and release lifecycle", {skip:process.platform !== "darwin"}, () => {
   const directory = mkdtempSync(join(tmpdir(), "texthalo-holds-"));
   try {
@@ -110,7 +121,7 @@ import Foundation
   }
 }`);
     const binary = join(directory, "events");
-    const sources = ["Contracts", "HoldShortcuts", "SpeechSupport", "ScreenCapture", "AssistantGeneration"].map(name => `src-tauri/native/${name}.swift`);
+    const sources = ["Contracts", "HoldShortcuts", "SpeechSupport", "ScreenCapture", "GenerationHistory", "AssistantGeneration"].map(name => `src-tauri/native/${name}.swift`);
     const compiled = spawnSync("xcrun", ["swiftc", "-parse-as-library", "-target", "arm64-apple-macos14.0", ...sources, source, main, "-o", binary], {encoding:"utf8", timeout:60000});
     assert.equal(compiled.status, 0, compiled.stderr);
     const result = spawnSync(binary, [], {encoding:"utf8", timeout:10000});

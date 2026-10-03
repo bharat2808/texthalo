@@ -1,6 +1,7 @@
 import { createPortal } from "react-dom";
 import { serviceReadiness } from "./serviceReadiness";
 import TranscriptionHistory from "./TranscriptionHistory";
+import GenerationHistory from "./GenerationHistory";
 import AssistantSettings, { PermissionsSettings, TranscriptionSettings, TaskReadiness, useAvailability, defaultAssistantPreferences, type AssistantPreferences } from "./AssistantSettings";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
@@ -620,7 +621,7 @@ function MainApp() {
   const [serviceTooltip, setServiceTooltip] = useState<{ id: string; x: number; y: number } | null>(null);
   const [state, setState] = useState<UiState | null>(null);
   const [appVersion, setAppVersion] = useState<string | null>(null);
-  const [historyView, setHistoryView] = useState<"audio" | "transcripts">("audio");
+  const [historyView, setHistoryView] = useState<"audio" | "transcripts" | "assistant">("audio");
   const [setupOpen, setSetupOpen] = useState(false);
   const [setupRevision, setSetupRevision] = useState(0);
   const accessibilityPromptStarted = useRef(false);
@@ -2414,7 +2415,7 @@ function MainApp() {
           {shortcutControl("assistant")}
           <TaskReadiness mode="assistant" accessibilityPrompted={settings.accessibility_prompted} onAccessibility={enableAccessibility} />
           <Card title="Make it yours" icon={Icon.textCursor()}><AssistantSettings value={settings.assistant ?? defaultAssistantPreferences} onChange={assistant => void save({ assistant })} /></Card>
-          <p className="card-note"><strong>Privacy:</strong> TextHalo captures your current window only while you use Assistant. Your request, selected text, screenshot, and generated answer stay on this Mac. If you choose a hosted voice, only the final words being spoken are sent to TextHalo and Fish Audio.</p>
+          <p className="card-note"><strong>Privacy:</strong> TextHalo captures your current window only while you use Assistant. Your latest 50 runs—including requests, selected text, screenshots, prompts, and answers—are saved locally in Assistant history. If you choose a hosted voice, only the final words being spoken are sent to TextHalo and Fish Audio.</p>
         </div> : null}
 
         {tab === "shortcuts" ? (
@@ -2534,8 +2535,9 @@ function MainApp() {
             <div className="section-nav history-tabs" role="group" aria-label="History type">
               <button aria-pressed={historyView === "audio"} className={historyView === "audio" ? "active" : ""} onClick={() => setHistoryView("audio")}>Audio</button>
               <button aria-pressed={historyView === "transcripts"} className={historyView === "transcripts" ? "active" : ""} onClick={() => setHistoryView("transcripts")}>Transcripts</button>
+              <button aria-pressed={historyView === "assistant"} className={historyView === "assistant" ? "active" : ""} onClick={() => setHistoryView("assistant")}>Assistant</button>
             </div>
-            {historyView === "transcripts" ? <><h1 className="pane-title">History</h1><TranscriptionHistory /></> : <>
+            {historyView === "assistant" ? <GenerationHistory /> : historyView === "transcripts" ? <><h1 className="pane-title">History</h1><TranscriptionHistory /></> : <>
             <div className="history-heading">
               <div>
                 <h1 className="pane-title">History</h1>

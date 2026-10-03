@@ -100,6 +100,7 @@ fn send(app: &AppHandle, inner: &mut Inner, value: Value) -> Result<(), String> 
         #[cfg(not(target_os = "macos"))]
         let path = std::path::PathBuf::from("texthalo-assistant");
         let mut child = Command::new(path)
+            .env("TEXTHALO_AUDIT_DIR", app.path().app_data_dir().map_err(|e| e.to_string())?.join("generation-history"))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -312,6 +313,11 @@ fn position_panel(window: &tauri::WebviewWindow, anchor: Option<&Value>, height:
 }
 
 fn receive(app: &AppHandle, mut event: Value) {
+    if event["phase"] == "audit_error" {
+        let _ = app.emit("texthalo:generation-history-error", &event["message"]);
+        eprintln!("Generation history could not be saved: {}", event["message"]);
+        return;
+    }
     if matches!(event["phase"].as_str(), Some("hold_pressed" | "hold_released" | "hold_cancel")) {
         let mode = match event["mode"].as_str() {
             Some("transcribe") => Mode::Transcribe,

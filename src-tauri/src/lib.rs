@@ -17,6 +17,7 @@ pub mod engines;
 pub mod espeak;
 pub mod g2p;
 mod history;
+mod generation_history;
 #[cfg(target_os = "macos")]
 mod instance;
 mod hosted;
@@ -1296,6 +1297,7 @@ pub fn run() {
             update_safety::record_update_failure,
             assistant::assistant_state,
             assistant::transcription_history,
+            generation_history::generation_history,
             assistant::assistant_control,
             get_state,
             get_speech_status,

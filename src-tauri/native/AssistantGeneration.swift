@@ -106,6 +106,7 @@ enum AssistantImageSupport {
 private func consumeAssistantStream(
     _ stream: LanguageModelSession.ResponseStream<String>,
     selection: String,
+    onRaw: @escaping @MainActor (String) -> Void,
     onSnapshot: @escaping @MainActor (AssistantReply) -> Void
 ) async throws -> AssistantReply {
     var decoder = AssistantMarkerDecoder()
@@ -113,6 +114,7 @@ private func consumeAssistantStream(
     for try await snapshot in stream {
         try Task.checkCancellation()
         final = snapshot.content
+        await onRaw(final)
         if let reply = try decoder.update(snapshot: final, selection: selection) {
             await onSnapshot(reply)
         }
@@ -132,6 +134,7 @@ func generateAssistantReply(
     previous: String,
     selection: String,
     screenImage: CGImage? = nil,
+    onRaw: @escaping @MainActor (String) -> Void = { _ in },
     onSnapshot: @escaping @MainActor (AssistantReply) -> Void = { _ in }
 ) async throws -> AssistantReply {
     let instructions = AssistantPrompt.systemInstructions(preference: preference,
@@ -149,6 +152,7 @@ func generateAssistantReply(
             }
             return try await consumeAssistantStream(session.streamResponse(to: prompt),
                                                     selection: selection,
+                                                    onRaw: onRaw,
                                                     onSnapshot: onSnapshot)
         }
         #endif
@@ -160,5 +164,6 @@ func generateAssistantReply(
 
     return try await consumeAssistantStream(session.streamResponse(to: promptText),
                                             selection: selection,
+                                            onRaw: onRaw,
                                             onSnapshot: onSnapshot)
 }

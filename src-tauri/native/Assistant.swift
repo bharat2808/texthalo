@@ -223,6 +223,7 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
     var target: Target?
     var context = ""
     var result = ""
+    var audit: GenerationHistory?
     var engine: AVAudioEngine?
     var audioRequest: SFSpeechAudioBufferRecognitionRequest?
     var recognition: SFSpeechRecognitionTask?
@@ -243,6 +244,7 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
 
     func event(_ phase: String, _ message: String = "", text: String = "", action: String = "preview") {
         let visibleText = phase == "error" && text.isEmpty ? result : text
+        audit?.update(phase: phase, message: message, text: visibleText, action: action)
         var event: [String: Any] = ["id": id, "phase": phase, "message": message, "text": visibleText,
             "action": action, "canInsert": target?.editable ?? false, "canUndo": target?.canUndo ?? false,
             "mode": request?.mode ?? "assistant",
@@ -251,6 +253,7 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
             event["bounds"] = ["x": bounds.origin.x, "y": bounds.origin.y, "width": bounds.width, "height": bounds.height]
         }
         emit(event)
+        if let error = audit?.error { emit(["id": id, "phase": "audit_error", "message": error]) }
     }
     func stopAudio() {
         heldTimer?.invalidate(); heldTimer = nil
@@ -317,6 +320,7 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
     func handle(_ command: Request) {
         let startsAssistant = command.command == "open" || command.command == "ask"
             || (command.command == "start" && command.mode == "assistant")
+        if startsAssistant && command.command != "open" { beginAudit(command, input: command.text ?? "") }
         if startsAssistant && AssistantImageSupport.isAvailable && !CGPreflightScreenCaptureAccess() {
             cancel(); id = command.id
             event("error", "Enable Screen Recording in TextHalo’s Assistant section, then try again.")
@@ -342,11 +346,15 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
         case "diagnose": Task { await diagnose() }
         case "halt":
             guard command.id == id else { return }
+            audit?.update(phase: "interrupted", message: "Generation halted by playback", text: result, action: "")
             cancel()
         case "cancel":
+            audit?.update(phase: "canceled", message: "Canceled", text: result, action: "")
             if command.restore == true { restoreSourceIfAssistantFocused(explicit: true) }
             cancel(); id = command.id; target = nil; context = ""; result = ""; screenImage = nil; event("idle")
         case "open":
+            audit?.update(phase: "interrupted", message: "Replaced by a new Assistant session", text: result, action: "")
+            audit = nil
             cancel(); id = command.id; request = command; result = ""; screenImage = nil
             let source = Target()
             target = source.application?.processIdentifier == getppid() ? nil : source
@@ -385,8 +393,13 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
         }
     }
     func start(_ command: Request) {
+        if command.mode != "assistant" {
+            audit?.update(phase: "interrupted", message: "Replaced by dictation", text: result, action: "")
+        }
         cancel(); id = command.id; request = command; result = ""; context = ""; screenImage = nil; target = Target()
         if command.mode == "assistant" { context = sourceReference() }
+        if command.mode == "assistant" { audit?.input(["source": target?.sourceContext.app ?? ""]) }
+        else { audit = nil }
         guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized,
               SFSpeechRecognizer.authorizationStatus() == .authorized else {
             event("error", "Enable Microphone and Speech Recognition in TextHalo’s Permissions section, then hold the shortcut again."); return
@@ -435,8 +448,11 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
                CGPreflightScreenCaptureAccess(), let windowID = target?.windowID {
                 // Capture the original window once while the user speaks. Its
                 // request-owned task survives key-up but never cancellation.
+                let requestAudit = audit
                 screenPreparation = PreparedScreenContext(requestID: currentID, windowID: windowID) { window in
-                    try await ScreenCapture.window(window)
+                    let image = try await ScreenCapture.window(window)
+                    requestAudit?.screenshot(image)
+                    return image
                 }
             }
             event("recording", command.mode == "assistant" ? "Listening to your request… Release to ask." : "Listening… Release to transcribe.")
@@ -473,6 +489,7 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
         cancel(cancelScreen: false)
         guard !text.isEmpty else { cancel(); event("error", "No speech detected. Hold the shortcut and try again."); return }
         if mode == "assistant" {
+            audit?.input(["transcript": text, "request": text])
             if AssistantImageSupport.isAvailable, let preparation = screenPreparation {
                 let currentID = id
                 event("capturing_screen", "Preparing visual context…")
@@ -517,6 +534,11 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
     func sourceReference() -> String {
         AssistantPrompt.referenceContext(selectedText: target?.selection ?? "", source: target?.sourceContext)
     }
+    func beginAudit(_ command: Request, input: String = "") {
+        audit?.update(phase: "interrupted", message: "Replaced by another request", text: result, action: "")
+        audit = GenerationHistory(requestID: command.id, source: target?.sourceContext.app ?? "")
+        audit?.input(["request": input, "inputType": command.command == "ask" ? "typed" : "speech"])
+    }
     func generate(_ prompt: String, screenImage: CGImage? = nil) {
         guard #available(macOS 26.0, *) else { event("error", "Assistant requires macOS 26 or later."); return }
         guard SystemLanguageModel.default.isAvailable else { event("error", "Apple Intelligence is unavailable: \(SystemLanguageModel.default.availability)"); return }
@@ -526,6 +548,12 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
         let previous = String(result.prefix(6000))
         let preference = String((request?.instruction ?? "").prefix(2000))
         let selection = target?.selection ?? ""
+        let audit = self.audit
+        audit?.input(["request": prompt, "selection": selection, "reference": source, "previousOutput": previous,
+                      "systemInstructions": AssistantPrompt.systemInstructions(preference: preference, hasSelection: !selection.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, hasImage: screenImage != nil),
+                      "userPrompt": AssistantPrompt.userPrompt(request: prompt, reference: source, previous: previous),
+                      "imageAttached": screenImage != nil, "attachmentLabel": "original-window"])
+        if let screenImage { audit?.screenshot(screenImage) }
         event("processing", "Thinking on this Mac…")
         deadline?.cancel()
         deadline = Task {
@@ -537,7 +565,8 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
             defer { if self.id == currentID { self.deadline?.cancel(); self.deadline = nil; self.generation = nil } }
             do {
                 let reply = try await generateAssistantReply(request: prompt, preference: preference,
-                    reference: source, previous: previous, selection: selection, screenImage: screenImage) { snapshot in
+                    reference: source, previous: previous, selection: selection, screenImage: screenImage,
+                    onRaw: { audit?.raw($0) }) { snapshot in
                         guard !Task.isCancelled, self.id == currentID else { return }
                         self.result = snapshot.text
                         if snapshot.action == .text { self.target?.streamInsert(snapshot.text) }
