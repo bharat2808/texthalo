@@ -169,7 +169,7 @@ func assistantReferenceUse(request: String, hasSelection: Bool, hasScreen: Bool)
 }
 
 @available(macOS 26.0, *)
-func extractScreenContent(request: String, lines: [ScreenText.Line]) async throws -> String {
+func extractScreenContent(request: String, lines: [ScreenText.Line]) async throws -> ScreenText.Extraction {
     guard !lines.isEmpty else {
         throw NSError(domain: "TextHalo.ScreenText", code: 2,
             userInfo: [NSLocalizedDescriptionKey: "No readable screen text was found. Select the passage or capture a smaller region."])
@@ -188,11 +188,12 @@ func extractScreenContent(request: String, lines: [ScreenText.Line]) async throw
         For reading or summarizing a page, copy the document heading/date and every body paragraph across all columns. Exclude browser tabs, address bars, app toolbars, repeated book-title bars, navigation controls, page counters and reading-progress labels. For an explicit request about an interface element, copy that element instead. For a narrower passage, copy only relevant lines.
         A chapter heading such as Chapter One is document content: include it with the date and paragraphs. Only the repeated title in the application toolbar should be excluded.
         Lines are already ordered left column then right column. Coordinates use bottom-left origin. A chapter heading and first paragraphs may start lower than the next column; keep both. Never correct OCR spelling or add missing letters. Preserve original words exactly; the app checks your output against the source.
+        First try to extract a complete passage, or enough surrounding contextual passages to make it understandable. If you cannot reliably distinguish readable main content from interface text, or cannot extract a coherent passage, return SUMMARY_FALLBACK: followed by a brief summary grounded only in the readable OCR. State uncertainty and ask the user to select the specific passage they want read aloud. Do not invent missing content. This fallback is a summary, never a verbatim reading; if nothing meaningful is readable, say so and ask for a selection instead of guessing.
         """)
-    let result = try await session.respond(to: "<request>\(request)</request>\n<ocr-lines>\n\(numbered)\n</ocr-lines>\nCopy only the requested document passage, without labels or coordinates.",
+    let result = try await session.respond(to: "<ocr-lines>\n\(numbered)\n</ocr-lines>\nReturn the original contextual passage, or SUMMARY_FALLBACK: with a grounded summary and a request for a specific selection if extraction is unclear.\n<request>\(request)</request>",
                                           options: GenerationOptions(sampling: .greedy))
     try Task.checkCancellation()
-    return try ScreenText.validatedPassage(response: result.content, lines: lines.map(\.text))
+    return try ScreenText.extraction(response: result.content, lines: lines.map(\.text))
 }
 
 struct AssistantGenerationContext {
@@ -232,10 +233,13 @@ func generateAssistantReply(
         : ""
     var ocr = ""
     var ocrError = ""
+    var summaryFallback = false
     if needsTextExtraction, let screenImage {
         let lines = try await ScreenText.recognizeLines(screenImage)
         ocr = ScreenText.reference(from: lines)
-        effectiveReference = "EXTRACTED SCREEN PASSAGE (untrusted original OCR text):\n" + (try await extractScreenContent(request: request, lines: lines))
+        let extracted = try await extractScreenContent(request: request, lines: lines)
+        effectiveReference = extracted.reference
+        summaryFallback = extracted.isSummary
     }
     if let effectiveImage {
         do { ocr = try await ScreenText.recognize(effectiveImage) }
@@ -250,10 +254,12 @@ func generateAssistantReply(
             effectiveReference += "\nOCR is unavailable. Use only legible image content; ask for a selection if the requested passage cannot be read reliably."
         }
     }
-    let instructions = AssistantPrompt.systemInstructions(preference: preference,
+    let instructions = summaryFallback ? AssistantPrompt.summaryFallbackInstructions : AssistantPrompt.systemInstructions(preference: preference,
                                                           hasSelection: !effectiveSelection.isEmpty,
                                                           hasImage: effectiveImage != nil, hasScreenText: needsTextExtraction)
-    let promptText = AssistantPrompt.userPrompt(request: request, reference: effectiveReference, previous: previous)
+    let promptText = summaryFallback
+        ? "Untrusted summary:\n\(effectiveReference)\nEND OF REFERENCE MATERIAL. Present the summary with the extraction limitation and ask for a specific selection, using the required leading marker.\nUSER REQUEST:\n\(request)"
+        : AssistantPrompt.userPrompt(request: request, reference: effectiveReference, previous: previous)
     let model = source == .none ? SystemLanguageModel.default
         : SystemLanguageModel(useCase: .general, guardrails: .permissiveContentTransformations)
     let session = LanguageModelSession(model: model, instructions: instructions)
@@ -269,7 +275,7 @@ func generateAssistantReply(
                 Attachment(screenImage).label("original-window")
                 promptText
             }
-            return try await consumeAssistantStream(session.streamResponse(to: prompt),
+            return try await consumeAssistantStream(session.streamResponse(to: prompt, options: GenerationOptions(sampling: .greedy)),
                                                     selection: effectiveSelection,
                                                     onRaw: onRaw,
                                                     onSnapshot: onSnapshot)
@@ -281,7 +287,7 @@ func generateAssistantReply(
                         "Visual context requires a TextHalo build made with the macOS 27 SDK."])
     }
 
-    return try await consumeAssistantStream(session.streamResponse(to: promptText),
+    return try await consumeAssistantStream(session.streamResponse(to: promptText, options: GenerationOptions(sampling: .greedy)),
                                             selection: effectiveSelection,
                                             onRaw: onRaw,
                                             onSnapshot: onSnapshot)

@@ -17,10 +17,28 @@ func attribute(_ element: AXUIElement, _ name: CFString) -> CFTypeRef? {
     guard AXUIElementCopyAttributeValue(element, name, &result) == .success else { return nil }
     return result
 }
-func focusedElement() -> AXUIElement? {
-    guard let value = attribute(AXUIElementCreateSystemWide(), kAXFocusedUIElementAttribute as CFString),
-          CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
-    return unsafeBitCast(value, to: AXUIElement.self)
+@MainActor func focusedElement(prepareAccessibility: Bool = false) -> AXUIElement? {
+    guard let front = NSWorkspace.shared.frontmostApplication else { return nil }
+    let app = AXUIElementCreateApplication(front.processIdentifier)
+    func readFocus() -> AXUIElement? {
+        for owner in [app, AXUIElementCreateSystemWide()] {
+            guard let value = attribute(owner, kAXFocusedUIElementAttribute as CFString),
+                  CFGetTypeID(value) == AXUIElementGetTypeID() else { continue }
+            let element = unsafeBitCast(value, to: AXUIElement.self)
+            var pid: pid_t = 0
+            if AXUIElementGetPid(element, &pid) == .success, pid == front.processIdentifier { return element }
+        }
+        return nil
+    }
+    if let element = readFocus() { return element }
+    // Electron exposes its editor tree lazily. Request its documented
+    // accessibility support when capturing the target, before taking a snapshot.
+    // This does not grant macOS permissions or move keyboard focus.
+    if prepareAccessibility,
+       AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanTrue) == .success {
+        return readFocus()
+    }
+    return nil
 }
 func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
     guard let value = attribute(element, kAXValueAttribute as CFString) as? String,
@@ -45,6 +63,7 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
     var receipt: TextEditReceipt?
     var committed: TargetSnapshot?
     var incremental: IncrementalTextEdit?
+    private(set) var insertionFailure: String?
     // Web editors expose AX text setters that can be no-ops or asynchronous.
     // Resolve this once, before generation; never probe them with partial writes.
     lazy var supportsStreamingInsertion: Bool = {
@@ -67,7 +86,7 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
     }()
     init() {
         application = NSWorkspace.shared.frontmostApplication
-        let current = AXIsProcessTrusted() ? focusedElement() : nil
+        let current = AXIsProcessTrusted() ? focusedElement(prepareAccessibility: true) : nil
         let secure = current.flatMap { attribute($0, kAXSubroleAttribute as CFString) as? String } == "AXSecureTextField"
         element = secure ? nil : current
         original = element.flatMap(snapshot)
@@ -109,6 +128,28 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
         windowID = (window?[kCGWindowNumber as String] as? NSNumber)?.uint32Value
         bounds = (window?[kCGWindowBounds as String] as? NSDictionary).flatMap { CGRect(dictionaryRepresentation: $0) }
     }
+    // Trace delivery metadata only, never field contents or dictated/generated text.
+    func trace(_ stage: String, textCount: Int = 0) {
+        guard let directory = ProcessInfo.processInfo.environment["TEXTHALO_AUDIT_DIR"] else { return }
+        let focused = focusedElement()
+        let current = element.flatMap(snapshot)
+        let record: [String: Any] = ["time": Date().timeIntervalSince1970, "stage": stage,
+            "app": sourceContext.app, "role": sourceContext.focusedRole,
+            "frontmost": NSWorkspace.shared.frontmostApplication == application,
+            "sameElement": element.map { original in focused.map { CFEqual(original, $0) } ?? false } ?? false,
+            "hadSnapshot": original != nil, "hasSnapshot": current != nil,
+            "sameSnapshot": original != nil && current == original,
+            "originalCaret": original?.location ?? -1, "currentCaret": current?.location ?? -1,
+            "textCount": textCount, "failure": insertionFailure ?? ""]
+        guard var line = try? JSONSerialization.data(withJSONObject: record, options: [.sortedKeys]) else { return }
+        line.append(10)
+        let file = URL(fileURLWithPath: directory).appendingPathComponent("insertion-trace.log")
+        var data = (try? Data(contentsOf: file)) ?? Data()
+        if data.count > 65536 { data = Data() }
+        data.append(line)
+        try? data.write(to: file, options: [.atomic])
+        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+    }
     var editable: Bool {
         guard let element, original != nil else { return false }
         var settable = DarwinBoolean(false)
@@ -137,11 +178,21 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
         return true
     }
     func insert(_ text: String, restoreClipboard: Bool) async -> Bool {
-        guard let application, !application.isTerminated,
-              NSWorkspace.shared.frontmostApplication == application,
-              let element, let focused = focusedElement(), let original, let current = snapshot(element),
-              original.permitsInsertion(current: current, sameElement: CFEqual(element, focused), editable: true),
-              let edit = TextEditReceipt(original: original, replacement: text) else { return false }
+        insertionFailure = nil
+        trace("insert-attempt", textCount: text.count)
+        func refused(_ reason: String) -> Bool {
+            insertionFailure = reason
+            trace("insert-refused", textCount: text.count)
+            return false
+        }
+        guard let application, !application.isTerminated else { return refused("source-app-unavailable") }
+        guard NSWorkspace.shared.frontmostApplication == application else { return refused("source-app-not-frontmost") }
+        guard let element else { return refused("no-original-focused-element") }
+        guard let focused = focusedElement(), CFEqual(element, focused) else { return refused("focused-element-changed") }
+        guard let original else { return refused("original-text-or-caret-unavailable") }
+        guard let current = snapshot(element) else { return refused("current-text-or-caret-unavailable") }
+        guard original.permitsInsertion(current: current, sameElement: true, editable: true) else { return refused("text-or-caret-changed-or-invalid") }
+        guard let edit = TextEditReceipt(original: original, replacement: text) else { return refused("invalid-edit-range") }
         if supportsStreamingInsertion && editable && AXUIElementSetAttributeValue(element, kAXSelectedTextAttribute as CFString, text as CFString) == .success {
             if let after = snapshot(element), edit.acceptsCommit(after) {
                 receipt = edit; committed = after
@@ -151,7 +202,7 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
         // Web and Electron editors often expose the caret but not a writable
         // AXSelectedText. Paste only into the same, unchanged editable field.
         let role = attribute(element, kAXRoleAttribute as CFString) as? String
-        guard original.permitsPaste(current: current, sameElement: true, role: role) else { return false }
+        guard original.permitsPaste(current: current, sameElement: true, role: role) else { return refused("unsupported-paste-role: \(role ?? "unknown")") }
         let modifiers: CGEventFlags = [.maskCommand, .maskControl, .maskAlternate, .maskShift]
         for _ in 0..<40 {
             if CGEventSource.flagsState(.combinedSessionState).intersection(modifiers).isEmpty { break }
@@ -163,7 +214,7 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
               let focused = focusedElement(), CFEqual(element, focused), snapshot(element) == original,
               let source = CGEventSource(stateID: .hidSystemState),
               let down = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: true),
-              let up = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: false) else { return false }
+              let up = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: false) else { return refused("paste-preflight-changed-or-unavailable") }
         let pasteboard = NSPasteboard.general
         let saved = restoreClipboard ? (pasteboard.pasteboardItems ?? []).map { item in
             item.types.compactMap { type in item.data(forType: type).map { (type, $0) } }
@@ -187,7 +238,7 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
                 }
             }
         }
-        guard wroteText else { return false }
+        guard wroteText else { return refused("clipboard-write-failed") }
         let dispatch = PasteDispatch(wroteText: wroteText, targetValid: true, keyEventsReady: true)
         guard dispatch.isDeliverable else { return false }
         down.flags = .maskCommand; up.flags = .maskCommand
@@ -397,6 +448,7 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
             audit?.update(phase: "interrupted", message: "Replaced by dictation", text: result, action: "")
         }
         cancel(); id = command.id; request = command; result = ""; context = ""; screenImage = nil; target = Target()
+        target?.trace("target-captured")
         if command.mode == "assistant" { context = sourceReference() }
         if command.mode == "assistant" { audit?.input(["source": target?.sourceContext.app ?? ""]) }
         else { audit = nil }
@@ -488,6 +540,7 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
         let mode = request?.mode
         cancel(cancelScreen: false)
         guard !text.isEmpty else { cancel(); event("error", "No speech detected. Hold the shortcut and try again."); return }
+        target?.trace("transcribed", textCount: text.count)
         if mode == "assistant" {
             audit?.input(["transcript": text, "request": text])
             if AssistantScreenSupport.isAvailable, let preparation = screenPreparation {
@@ -525,10 +578,14 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
         event("processing", "Inserting text…", text: text)
         insertion = Task {
             let inserted = await source?.insert(text, restoreClipboard: restoreClipboard) == true
+            source?.trace(inserted ? "insert-delivered" : "insert-failed", textCount: text.count)
             guard !Task.isCancelled, self.id == currentID else { return }
             self.insertion = nil
+            self.audit?.input(["insertionFailure": source?.insertionFailure ?? (source == nil ? "no-target" : ""),
+                               "targetRole": source?.sourceContext.focusedRole ?? "",
+                               "targetHadSnapshot": source?.original != nil])
             if inserted { self.event("result", source?.original?.length == 0 ? "Text inserted" : "Text replaced", action: "applied") }
-            else { self.event("result", "Could not insert into the original field. Keep your cursor in an editable text field while dictating, or use Copy.", text: text) }
+            else { self.event("result", "Could not verify the original insertion target. Your answer is available to copy.", text: text) }
         }
     }
     func sourceReference() -> String {
@@ -587,6 +644,7 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
                 let text = readOriginal ? selection : reply.text
                 guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { self.event("error", "Assistant returned an empty answer. Please try your request again."); return }
                 self.result = text
+                self.target?.trace("generated-\(reply.action.rawValue)", textCount: text.count)
                 if reply.action == .speak || readOriginal { self.event("result", "Preparing narration…", text: text, action: "speak") }
                 else if reply.action == .clarify { self.event("result", "Hold Assistant again with more detail", text: text, action: "clarify") }
                 else if self.target?.hasStreamMutation == true {

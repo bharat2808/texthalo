@@ -7,6 +7,8 @@ const host = process.env.TAURI_DEV_HOST;
 // https://vite.dev/config/
 export default defineConfig(() => ({
   plugins: [react()],
+  // Website test servers must not invalidate the desktop's optimized modules.
+  cacheDir: "node_modules/.vite-desktop",
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //

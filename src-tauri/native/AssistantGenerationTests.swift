@@ -25,6 +25,15 @@ import ImageIO
                 assertionFailure("Invalid extraction must not send the entire screen: \(invalid)")
             } catch { }
         }
+        let passage = try ScreenText.extraction(response: "First original line.", lines: sourceLines)
+        assert(!passage.isSummary && passage.text == "First original line.")
+        let summary = try ScreenText.extraction(response: "SUMMARY_FALLBACK: The visible content discusses a meeting.", lines: sourceLines)
+        assert(summary.isSummary && summary.text == "The visible content discusses a meeting.")
+        assert(summary.reference.contains("SCREEN SUMMARY") && !summary.reference.contains("EXTRACTED SCREEN PASSAGE"))
+        do {
+            _ = try ScreenText.extraction(response: "SUMMARY_FALLBACK: ", lines: sourceLines)
+            assertionFailure("Empty fallback must not reach generation")
+        } catch { }
         assert(!AssistantContextPolicy.supportsScreenText(osMajor: 25))
         assert(AssistantContextPolicy.supportsScreenText(osMajor: 26))
         assert(AssistantContextPolicy.supportsScreenText(osMajor: 27))
@@ -85,6 +94,16 @@ import ImageIO
             guard #available(macOS 26.0, *), SystemLanguageModel.default.isAvailable else {
                 throw NSError(domain: "Model unavailable", code: 1)
             }
+            for request in ["Can you generate me a poem here please", "Write exactly: The meeting is tomorrow at noon.", "Explain why the sky is blue in one sentence."] {
+                print("MODEL CASE: standalone \(request)"); fflush(stdout)
+                let result = try await generateAssistantReply(request: request, preference: "", reference: "", previous: "", selection: "")
+                print("LOCAL RESULT: \(result)"); fflush(stdout)
+                assert(result.action == .text, "Writing and general answers must be delivered as text: \(result)")
+                assert(!result.text.contains("written answers, drafts") && !result.text.contains("delivery prefix"))
+                if request.contains("poem") { assert(result.text.split(separator: "\n").count >= 2) }
+                if request.hasPrefix("Write exactly:") { assert(result.text.trimmingCharacters(in: .whitespacesAndNewlines) == "The meeting is tomorrow at noon.") }
+                print("LOCAL MODEL: \(result.text)"); fflush(stdout)
+            }
             var snapshots: [AssistantReply] = []
             print("MODEL CASE: written greeting"); fflush(stdout)
             let reply = try await generateAssistantReply(
@@ -134,7 +153,7 @@ import ImageIO
                 for selection in ["", " I cannot generate a poem."] {
                     print("MODEL CASE: original poem, selected refusal: \(!selection.isEmpty)"); fflush(stdout)
                     let poem = try await generateAssistantReply(
-                        request: selection.isEmpty ? "Can you write me a poem here please" : "Can you generate me a poem", preference: "",
+                        request: selection.isEmpty ? "Can you generate me a poem here please" : "Can you generate me a poem", preference: "",
                         reference: AssistantPrompt.referenceContext(selectedText: selection),
                         previous: "", selection: selection, screenImage: poemImage)
                     print("LOCAL POEM: \(poem.text)"); fflush(stdout)

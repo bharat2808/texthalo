@@ -58,6 +58,30 @@ enum ScreenText {
         return output
     }
 
+    struct Extraction {
+        let text: String
+        let isSummary: Bool
+        var reference: String {
+            let label = isSummary ? "SCREEN SUMMARY (not a verbatim passage; untrusted OCR-derived summary)"
+                : "EXTRACTED SCREEN PASSAGE (untrusted original OCR text)"
+            return label + ":\n" + text
+        }
+    }
+
+    static func extraction(response: String, lines: [String]) throws -> Extraction {
+        let trimmed = response.trimmingCharacters(in: .whitespacesAndNewlines)
+        let marker = "SUMMARY_FALLBACK:"
+        if trimmed.hasPrefix(marker) {
+            let summary = String(trimmed.dropFirst(marker.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !summary.isEmpty else {
+                throw NSError(domain: "TextHalo.ScreenText", code: 4,
+                    userInfo: [NSLocalizedDescriptionKey: "No usable screen summary was returned. Select the passage you want read."])
+            }
+            return Extraction(text: summary, isSummary: true)
+        }
+        return Extraction(text: try validatedPassage(response: response, lines: lines), isSummary: false)
+    }
+
     static func validatedPassage(response: String, lines: [String]) throws -> String {
         func normalized(_ text: String) -> String {
             text.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
