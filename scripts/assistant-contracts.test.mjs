@@ -70,7 +70,7 @@ test("single-stream generation strips model-owned action markers", {skip:process
     const compiler = useImageSdk ? cltSwift : "xcrun";
     const args = [...(useImageSdk ? [] : ["swiftc"]), "-parse-as-library", "-target", "arm64-apple-macos14.0",
       ...(useImageSdk ? ["-sdk", cltSdk, "-D", "FOUNDATION_MODELS_IMAGE_ATTACHMENTS"] : []),
-      "src-tauri/native/Contracts.swift", "src-tauri/native/AssistantGeneration.swift", "src-tauri/native/AssistantGenerationTests.swift", "-o", binary];
+      "src-tauri/native/Contracts.swift", "src-tauri/native/ScreenText.swift", "src-tauri/native/AssistantGeneration.swift", "src-tauri/native/AssistantGenerationTests.swift", "-o", binary];
     const compiled = spawnSync(compiler, args, {encoding:"utf8",timeout:useImageSdk ? 180000 : 60000});
     assert.equal(compiled.status, 0, compiled.stderr);
     const result = spawnSync(binary, [], {encoding:"utf8",timeout:process.env.TEXTHALO_TEST_LOCAL_MODEL === "1" ? 120000 : 15000});
@@ -121,7 +121,7 @@ import Foundation
   }
 }`);
     const binary = join(directory, "events");
-    const sources = ["Contracts", "HoldShortcuts", "SpeechSupport", "ScreenCapture", "GenerationHistory", "AssistantGeneration"].map(name => `src-tauri/native/${name}.swift`);
+    const sources = ["Contracts", "HoldShortcuts", "SpeechSupport", "ScreenCapture", "ScreenText", "GenerationHistory", "AssistantGeneration"].map(name => `src-tauri/native/${name}.swift`);
     const compiled = spawnSync("xcrun", ["swiftc", "-parse-as-library", "-target", "arm64-apple-macos14.0", ...sources, source, main, "-o", binary], {encoding:"utf8", timeout:60000});
     assert.equal(compiled.status, 0, compiled.stderr);
     const result = spawnSync(binary, [], {encoding:"utf8", timeout:10000});

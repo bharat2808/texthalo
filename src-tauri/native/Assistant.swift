@@ -569,7 +569,13 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
                 if let screenImage { audit?.screenshot(screenImage) }
                 let reply = try await generateAssistantReply(request: prompt, preference: preference,
                     reference: source, previous: previous, selection: selection, screenImage: screenImage,
-                    onRaw: { audit?.raw($0) }) { snapshot in
+                    onRaw: { audit?.raw($0) },
+                    onContext: { prepared in
+                        audit?.input(["reference": prepared.reference, "selection": prepared.selection,
+                                      "imageAttached": prepared.hasImage, "contextSource": prepared.source,
+                                      "ocr": prepared.ocr, "ocrError": prepared.ocrError,
+                                      "systemInstructions": prepared.instructions, "userPrompt": prepared.prompt])
+                    }) { snapshot in
                         guard !Task.isCancelled, self.id == currentID else { return }
                         self.result = snapshot.text
                         if snapshot.action == .text { self.target?.streamInsert(snapshot.text) }

@@ -5,6 +5,17 @@ import ImageIO
 
 @main struct AssistantGenerationTests {
     @MainActor static func main() async throws {
+        let lines = [ScreenText.Line(text: "Left text", bounds: CGRect(x: 0.1, y: 0.6, width: 0.3, height: 0.05)),
+                     ScreenText.Line(text: "Right text", bounds: CGRect(x: 0.6, y: 0.7, width: 0.3, height: 0.05))]
+        let positioned = ScreenText.reference(from: lines)
+        assert(positioned.contains("Left text") && positioned.contains("Right text"))
+        let bounded = ScreenText.reference(from: Array(repeating: lines[0], count: 1000), limit: 300)
+        assert(bounded.count <= 300 && !bounded.isEmpty)
+        assert(ScreenText.reference(from: []).isEmpty)
+        let left = (0..<5).map { ScreenText.Line(text: "L\($0)", bounds: CGRect(x: 0.1, y: 0.7 - Double($0) * 0.05, width: 0.3, height: 0.02)) }
+        let right = (0..<5).map { ScreenText.Line(text: "R\($0)", bounds: CGRect(x: 0.6, y: 0.8 - Double($0) * 0.05, width: 0.3, height: 0.02)) }
+        assert(ScreenText.ordered(Array((right + left).reversed())).map(\.text) == (left + right).map(\.text))
+        assert(ScreenText.ordered(Array(left.reversed())).map(\.text) == left.map(\.text))
         var decoder = AssistantMarkerDecoder()
         let partialMarker = try decoder.update(snapshot: "1", selection: "")
         assert(partialMarker == nil)
@@ -54,7 +65,8 @@ import ImageIO
         assert(instructions.contains("first two characters"))
         assert(instructions.contains("Selected text is available"))
         assert(instructions.contains("No screenshot is attached"))
-        assert(!instructions.localizedCaseInsensitiveContains("OCR"))
+        assert(!instructions.contains("Reading/transcription instructions"),
+               "Image transcription rules must not apply to a text-only request")
         print("Single-stream Assistant marker contracts passed")
 
         if ProcessInfo.processInfo.environment["TEXTHALO_TEST_LOCAL_MODEL"] == "1" {
