@@ -247,7 +247,9 @@ export function DesktopConnectPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [attempt] = useState(createDesktopHandoffAttempt);
-  const params = new URLSearchParams(typeof window === "undefined" ? "" : window.location.search);
+  const [browserReady, setBrowserReady] = useState(false);
+  useEffect(() => setBrowserReady(true), []);
+  const params = new URLSearchParams(browserReady ? window.location.search : "");
   const redirectUri = params.get("redirect_uri") ?? "";
   const state = params.get("state") ?? "";
   const codeChallenge = params.get("code_challenge") ?? "";
@@ -257,7 +259,7 @@ export function DesktopConnectPage() {
       return uri.protocol === "http:" && ["127.0.0.1", "localhost"].includes(uri.hostname) && Boolean(uri.port) && uri.pathname === "/desktop-auth-callback" && !uri.search && !uri.hash && /^[A-Za-z0-9_-]{32,128}$/.test(state) && /^[A-Za-z0-9_-]{43}$/.test(codeChallenge);
     } catch { return false; }
   })();
-  const returnTo = typeof window === "undefined" ? "/desktop-connect/" : `${window.location.pathname}${window.location.search}`;
+  const returnTo = browserReady ? `${window.location.pathname}${window.location.search}` : "/desktop-connect/";
 
   const accountEmail = session.data?.user?.email;
   const continueToApp = useCallback(async (retry = false) => {
@@ -292,7 +294,8 @@ export function DesktopConnectPage() {
   }, [validRequest, session.isPending, accountEmail, continueToApp]);
 
   return <div className="site-shell"><SiteHeader /><main className="section-wrap signin-page desktop-connect-page"><div className="signin-decoration" aria-hidden="true"><span className="ring-a" /><span className="ring-b" /><div className="privacy-center"><Mark /><span>TEXT HALO</span></div></div><section className="signin-panel"><div className="eyebrow"><span className="eyebrow-line" /> SECURE DESKTOP SIGN-IN</div><h1>Connect <em>TextHalo.</em></h1><p className="signin-intro">Use your TextHalo account in the Mac app. Your sign-in returns to the app through a one-time, short-lived code.</p>
-    {!validRequest ? <p className="billing-error" role="alert">This sign-in request is invalid. Start sign-in again from the TextHalo app.</p>
+    {!browserReady ? <p role="status">Checking your sign-in link…</p>
+      : !validRequest ? <p className="billing-error" role="alert">This sign-in request is invalid. Start sign-in again from the TextHalo app.</p>
       : session.isPending ? <p role="status">Checking your sign-in…</p>
       : !session.data?.user ? <><a className="button button-dark" href={`/sign-in/?returnTo=${encodeURIComponent(returnTo)}`}>Sign in to continue <span className="arrow">→</span></a><p className="signin-terms">New to TextHalo? <a href={`/sign-in/?mode=sign-up&returnTo=${encodeURIComponent(returnTo)}`}>Create an account</a></p></>
       : <div className="signed-in-card"><span className="signed-in-check" aria-hidden="true">✓</span><div><strong>Signed in as</strong><span>{session.data.user.email}</span></div>
