@@ -742,18 +742,6 @@ pub struct SpeechHistory {
     pub source: crate::capture::SourceMetadata,
 }
 
-pub async fn stream_speech(
-    app: AppHandle,
-    job_id: u64,
-    text: String,
-    voice_id: String,
-    model_id: String,
-    enhance: bool,
-    history: SpeechHistory,
-) -> Result<(), String> {
-    stream_speech_input(app, job_id, crate::speech_input::SpeechInput::Complete(text), voice_id, model_id, enhance, history).await
-}
-
 pub async fn stream_speech_input(
     app: AppHandle,
     job_id: u64,
@@ -879,6 +867,7 @@ async fn stream_speech_inner(
                                 socket.send(Message::Text(json!({"type":"finish_input","sequence":sequence}).to_string().into()))
                                     .await.map_err(|_| "Could not finish generated speech text.".to_string())?;
                             }
+                            #[cfg(test)]
                             Ok(SpeechEvent::Error(error)) => return Err(error),
                             Err(TryRecvError::Disconnected) => return Err("Generation ended before the answer was complete.".into()),
                             Err(TryRecvError::Empty) => {}

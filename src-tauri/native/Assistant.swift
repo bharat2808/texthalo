@@ -532,7 +532,7 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
         }
     }
     func sourceReference() -> String {
-        AssistantPrompt.referenceContext(selectedText: target?.selection ?? "", source: target?.sourceContext)
+        return AssistantPrompt.referenceContext(selectedText: target?.selection ?? "", source: target?.sourceContext)
     }
     func beginAudit(_ command: Request, input: String = "") {
         audit?.update(phase: "interrupted", message: "Replaced by another request", text: result, action: "")
@@ -544,16 +544,11 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
         guard SystemLanguageModel.default.isAvailable else { event("error", "Apple Intelligence is unavailable: \(SystemLanguageModel.default.availability)"); return }
         guard prompt.count <= 4000, context.count <= 10000 else { event("error", "Select a shorter passage or use a shorter request."); return }
         let currentID = id
-        let source = context
+        let originalSource = target?.sourceContext
         let previous = String(result.prefix(6000))
         let preference = String((request?.instruction ?? "").prefix(2000))
         let selection = target?.selection ?? ""
         let audit = self.audit
-        audit?.input(["request": prompt, "selection": selection, "reference": source, "previousOutput": previous,
-                      "systemInstructions": AssistantPrompt.systemInstructions(preference: preference, hasSelection: !selection.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, hasImage: screenImage != nil),
-                      "userPrompt": AssistantPrompt.userPrompt(request: prompt, reference: source, previous: previous),
-                      "imageAttached": screenImage != nil, "attachmentLabel": "original-window"])
-        if let screenImage { audit?.screenshot(screenImage) }
         event("processing", "Thinking on this Mac…")
         deadline?.cancel()
         deadline = Task {
@@ -564,6 +559,14 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
         generation = Task {
             defer { if self.id == currentID { self.deadline?.cancel(); self.deadline = nil; self.generation = nil } }
             do {
+                guard !Task.isCancelled, self.id == currentID else { return }
+                let source = AssistantPrompt.referenceContext(selectedText: selection, source: originalSource)
+                self.context = source
+                audit?.input(["request": prompt, "selection": selection, "reference": source, "previousOutput": previous,
+                              "systemInstructions": AssistantPrompt.systemInstructions(preference: preference, hasSelection: !selection.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, hasImage: screenImage != nil),
+                              "userPrompt": AssistantPrompt.userPrompt(request: prompt, reference: source, previous: previous),
+                              "imageAttached": screenImage != nil, "attachmentLabel": "original-window"])
+                if let screenImage { audit?.screenshot(screenImage) }
                 let reply = try await generateAssistantReply(request: prompt, preference: preference,
                     reference: source, previous: previous, selection: selection, screenImage: screenImage,
                     onRaw: { audit?.raw($0) }) { snapshot in

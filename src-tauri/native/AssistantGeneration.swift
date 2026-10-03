@@ -96,7 +96,11 @@ struct AssistantMarkerDecoder {
 enum AssistantImageSupport {
     static var isAvailable: Bool {
         #if FOUNDATION_MODELS_IMAGE_ATTACHMENTS
-        if #available(macOS 27.0, *) { return true }
+        if #available(macOS 27.0, *) {
+            return AssistantContextPolicy.usesVision(sdkSupportsImages: true,
+                osMajor: ProcessInfo.processInfo.operatingSystemVersion.majorVersion,
+                enabled: AssistantContextPolicy.visionEnabled)
+        }
         #endif
         return false
     }

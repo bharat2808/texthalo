@@ -5,6 +5,9 @@ pub const MAX_CHARS: usize = 20_000;
 pub enum SpeechEvent {
     Delta(String),
     Finish,
+    // Fault injection for consumer tests. Production generation failures stop
+    // the speech job directly through begin_generated_stream's error path.
+    #[cfg(test)]
     Error(String),
 }
 pub enum SpeechInput {

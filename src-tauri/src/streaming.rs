@@ -3,16 +3,19 @@ use std::sync::mpsc::{sync_channel, RecvTimeoutError};
 use std::time::Duration;
 
 /// Split at natural boundaries, with a short first phrase for early playback.
+#[cfg(test)]
 pub fn chatterbox_chunks(text: &str) -> Vec<String> {
     split(text, 100, 160, true)
 }
 
 /// Provisional Kokoro limits: preserve complete sentences up to the chunk budget.
 /// These are separate from Chatterbox's shorter synthesis budget.
+#[cfg(test)]
 pub fn kokoro_chunks(text: &str) -> Vec<String> {
     split(text, 180, 240, true)
 }
 
+#[cfg(test)]
 fn split(text: &str, first: usize, later: usize, natural: bool) -> Vec<String> {
     split_limit(text, first, later, natural, usize::MAX)
 }
@@ -100,6 +103,7 @@ fn split_limit(
     out
 }
 
+#[cfg(test)]
 pub fn run<T: Send, R, P, C>(
     chunks: Vec<String>,
     mut render: R,
@@ -571,6 +575,7 @@ fn drain_ready_input(
                 pending.push_str(&text);
             }
             Ok(SpeechEvent::Finish) => *finished = true,
+            #[cfg(test)]
             Ok(SpeechEvent::Error(error)) => return Err(error),
             Err(std::sync::mpsc::TryRecvError::Empty) => break,
             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
@@ -689,6 +694,7 @@ where
                             pending.push_str(&text);
                         }
                         Ok(SpeechEvent::Finish) => finished = true,
+                        #[cfg(test)]
                         Ok(SpeechEvent::Error(error)) => return Err(error),
                         Err(RecvTimeoutError::Timeout) => {}
                         Err(RecvTimeoutError::Disconnected) => {

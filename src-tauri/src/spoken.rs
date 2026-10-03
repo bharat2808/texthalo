@@ -264,6 +264,7 @@ impl Spoken {
 
     /// Feed one persistent native output queue while the producer synthesizes ahead.
     /// The caller starts the player under the speech-job lock, so Stop cannot race start.
+    #[cfg(test)]
     pub(crate) fn stream_pcm<C, P>(
         &self,
         settings: &Settings,

@@ -1,6 +1,7 @@
 import CoreGraphics
 import Foundation
 import FoundationModels
+import ImageIO
 
 @main struct AssistantGenerationTests {
     @MainActor static func main() async throws {
@@ -101,6 +102,21 @@ import FoundationModels
                                         bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
                 context.setFillColor(CGColor(red: 0.95, green: 0.05, blue: 0.05, alpha: 1))
                 context.fill(CGRect(x: 0, y: 0, width: 64, height: 64))
+                var poemImage = context.makeImage()!
+                if let path = ProcessInfo.processInfo.environment["TEXTHALO_TEST_CONTEXT_IMAGE"] {
+                    let source = CGImageSourceCreateWithURL(URL(fileURLWithPath: path) as CFURL, nil)!
+                    poemImage = CGImageSourceCreateImageAtIndex(source, 0, nil)!
+                }
+                for selection in ["", " I cannot generate a poem."] {
+                    print("MODEL CASE: original poem, selected refusal: \(!selection.isEmpty)"); fflush(stdout)
+                    let poem = try await generateAssistantReply(
+                        request: selection.isEmpty ? "Can you write me a poem here please" : "Can you generate me a poem", preference: "",
+                        reference: AssistantPrompt.referenceContext(selectedText: selection),
+                        previous: "", selection: selection, screenImage: poemImage)
+                    print("LOCAL POEM: \(poem.text)"); fflush(stdout)
+                    assert(poem.action == .text && poem.text.split(separator: "\n").count >= 3,
+                           "Original writing must produce a poem despite unrelated screen content or a selected refusal: \(poem)")
+                }
                 print("MODEL CASE: image attachment"); fflush(stdout)
                 var visualSnapshots: [AssistantReply] = []
                 let visual = try await generateAssistantReply(

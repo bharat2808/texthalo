@@ -61,6 +61,10 @@ import Foundation
         let insertion = TextEditReceipt(original: .init(value: "ab", location: 1, length: 0), replacement: "🌍")!
         assert(insertion.updatedValue == "a🌍b" && insertion.originalText.isEmpty && insertion.replacementLength == 2)
         assert(TextEditReceipt(original: invalid, replacement: "x") == nil)
+        assert(!AssistantContextPolicy.usesVision(sdkSupportsImages: true, osMajor: 27, enabled: false))
+        assert(AssistantContextPolicy.usesVision(sdkSupportsImages: true, osMajor: 27, enabled: true))
+        assert(!AssistantContextPolicy.usesVision(sdkSupportsImages: true, osMajor: 26, enabled: true))
+        assert(!AssistantContextPolicy.usesVision(sdkSupportsImages: false, osMajor: 27, enabled: true))
         let reference = AssistantPrompt.referenceContext(selectedText: "Selected sentence")
         assert(reference.contains("SELECTED TEXT:\nSelected sentence"))
         let instructions = AssistantPrompt.systemInstructions(preference: "Be concise", hasSelection: true, hasImage: true)
