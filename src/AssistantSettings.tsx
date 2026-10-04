@@ -1,4 +1,5 @@
 import SelectionRow from "./SelectionRow";
+import { localAssistantReason } from "./assistantAvailability";
 import type { ReactNode } from "react";
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
@@ -36,7 +37,7 @@ export function PermissionsSettings() {
     {([
       {name:"Microphone",key:"microphone",status:a.microphone,description:"Records while you hold Dictate or Assistant."},
       {name:"Speech Recognition",key:"speech",status:a.recognition === 1 ? 2 : a.recognition === 2 ? 1 : a.recognition,description:"Converts your voice into text on this Mac."},
-      {name:"Screen Recording",key:"screen",status:a.screen === undefined ? undefined : a.screen ? 3 : 0,description:a.imageInput === false && a.cloudScreenInput !== true ? "Visual context is unavailable in this build." : "Lets Assistant capture your current window when you make a request."},
+      {name:"Screen Recording",key:"screen",status:a.screen === undefined ? undefined : a.screen ? 3 : 0,description:a.imageInput === false && a.cloudScreenInput !== true ? "Screen context is unavailable on this Mac." : "Lets Assistant capture your current window when you make a request."},
     ]).map(p => <section className="permission-row" key={p.key}>
       <strong>{p.name}</strong><div className="card-note">{p.description}</div><p>{label(p.status)}</p>
       <div className="inline">
@@ -50,6 +51,9 @@ export function PermissionsSettings() {
 export default function AssistantSettings({ value, onChange, onSignIn, onCancelSignIn, signingIn, warningIcon, accountMark, signInError }: Props) {
   const {availability,error} = useAvailability();
   const [instruction, setInstruction] = useState(value.instruction);
+  const provider = value.provider ?? "local";
+  const localUnavailable = availability.model !== undefined && availability.model !== "available";
+  const usesCloud = provider === "cloud" || (provider === "automatic" && localUnavailable);
   // Preserve the draft when another control saves in the same event turn.
   const draft = useRef(value.instruction);
   useEffect(() => { draft.current = value.instruction; setInstruction(value.instruction); }, [value.instruction]);
@@ -57,18 +61,23 @@ export default function AssistantSettings({ value, onChange, onSignIn, onCancelS
     <div className="field"><span className="field-label" id="assistant-provider-label">Assistant model</span>
       <div className="row-stack" role="group" aria-labelledby="assistant-provider-label">
         {([
-          { id: "local", title: "On this Mac", subtitle: "Apple Intelligence · no credits" },
+          { id: "local", title: "On this Mac", subtitle: localAssistantReason(availability.model) },
           { id: "cloud", title: "TextHalo Cloud", subtitle: "Hosted · uses credits" },
-          { id: "automatic", title: "Automatic", subtitle: "Prefer this Mac · Cloud when unavailable" },
+          { id: "automatic", title: "Automatic", subtitle: availability.model === undefined ? "Checking which provider is available…" : localUnavailable ? "Will use TextHalo Cloud · uses credits" : "Will use Apple Intelligence · no credits" },
         ] as const).map(provider => <SelectionRow
           key={provider.id}
           selected={(value.provider ?? "local") === provider.id}
           title={provider.title}
           subtitle={provider.subtitle}
-          badge={(value.provider ?? "local") === provider.id ? "Selected" : undefined}
+          badge={provider.id === "local" && localUnavailable ? "Unavailable" : (value.provider ?? "local") === provider.id ? "Selected" : undefined}
+          disabled={provider.id === "local" && localUnavailable}
           onSelect={() => onChange({ ...value, instruction: draft.current, provider: provider.id })}
         />)}
       </div>
+      {provider === "local" && localUnavailable && <>
+        <div className="note-line warning">{warningIcon}<span>On-device Assistant is unavailable on this Mac.</span></div>
+        {availability.cloudConfigured && <div className="inline"><button className="plain" onClick={() => onChange({ ...value, instruction: draft.current, provider: "cloud" })}>Use Cloud Assistant</button></div>}
+      </>}
       <p className="card-note">Hold the same Assistant shortcut to speak. Cloud fulfills your request using your TextHalo credit balance. Automatic uses Cloud when Apple Intelligence is unavailable at the start of a request.</p>
     </div>
     {value.provider && value.provider !== "local" && <div className="field">
@@ -92,8 +101,7 @@ export default function AssistantSettings({ value, onChange, onSignIn, onCancelS
       <textarea id="assistant-instruction" rows={7} maxLength={2000} value={instruction} onChange={event => { draft.current = event.target.value; setInstruction(event.target.value); }} onBlur={() => { if (draft.current !== value.instruction) onChange({ ...value, instruction: draft.current }); }} placeholder="Use a warm tone. Keep writing concise. When I ask for a voiceover, write a script ready to read aloud." />
       <p className="card-note">Your preferences for every request. You can undo text edits.</p>
     </div>
-    <p className="card-note">Assistant automatically uses selected text and, when supported, a snapshot of your original window. Cloud receives extracted text, not the screenshot.</p>
-    <p className="card-note" role="status">Apple Intelligence: {availability.model ?? "Checking…"}</p>
+    <p className="card-note">{(usesCloud ? availability.cloudScreenInput : availability.imageInput) === false ? "Screen context is unavailable for the selected provider on this Mac. Assistant can still use your request and selected text." : "Assistant uses your selected text and, when supported, text from your original window. Cloud receives extracted text, not the screenshot."}</p>
     {error && <p role="alert">{error}</p>}
   </div>;
 }
@@ -178,13 +186,12 @@ export function TaskReadiness({ mode, needsAccessibility = true, accessibilityPr
         const granted = permission.status === 3;
         const restricted = permission.status === 1;
         const settings = permission.status === 2 || (permission.key === "accessibility" && accessibilityPrompted) || (permission.key === "screen" && screenRequested);
-        const label = !permission.required ? permission.key === "screen" ? "Visual context unavailable in this build" : "Only for inserting text" : permission.status === undefined ? "Checking…" : granted ? "Allowed" : restricted ? "Restricted by macOS" : "Not allowed";
+        const label = !permission.required ? permission.key === "screen" ? "Unavailable for the selected provider on this Mac" : "Only for inserting text" : permission.status === undefined ? "Checking…" : granted ? "Allowed" : restricted ? "Restricted by macOS" : "Not allowed";
         return <li key={permission.key}><div><span>{permission.name}</span><small>{label}</small></div>
           {permission.required && !granted && !restricted ? <button className="plain" disabled={pending !== null || permission.status === undefined} onClick={() => void request(permission)}>{pending === permission.key ? (permission.key === "microphone" || permission.key === "speech") && permission.status === 0 ? "Waiting for macOS…" : "Opening…" : settings ? `Open ${permission.name} Settings` : `Enable ${permission.name}`}</button> : null}
         </li>;
       })}
     </ul>
     {requestError || error ? <p className="shortcut-error" role="alert">{requestError || error}</p> : null}
-    {mode === "assistant" && (preferences.provider ?? "local") === "local" && a.model !== undefined && a.model !== "available" ? <div className="card-note">On-device Assistant needs Apple Intelligence. You can select TextHalo Cloud in Assistant model settings.<details><summary>Details</summary>{a.model}</details></div> : null}
   </section>;
 }

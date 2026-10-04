@@ -1,4 +1,5 @@
 import type { Availability, AssistantPreferences } from "./AssistantSettings";
+import { localAssistantReason } from "./assistantAvailability";
 
 type Input = {
   availability: Availability;
@@ -38,10 +39,7 @@ export function serviceReadiness(input: Input): Record<string, string[]> {
     ...(a.cloudConfigured ? [] : ["Cloud Assistant is not configured in this build."]),
     ...(a.cloudSignedIn ? [] : ["Sign in from Account to use Cloud Assistant."]),
   ];
-  const model = usesCloud ? cloud : a.model === "available" ? [] : [!a.model ? "Checking Apple Intelligence…"
-    : a.model.includes("appleIntelligenceNotEnabled") ? "Turn on Apple Intelligence in System Settings."
-    : a.model.includes("modelNotReady") ? "Apple Intelligence is still downloading or preparing."
-    : "Apple Intelligence is unavailable on this Mac. Check its requirements in System Settings."];
+  const model = usesCloud ? cloud : a.model === "available" ? [] : [localAssistantReason(a.model)];
   const screenInput = usesCloud ? a.cloudScreenInput ?? a.imageInput : a.imageInput;
   const visualContext = screenInput === undefined ? ["Checking visual context support…"]
     : screenInput && a.screen !== true
