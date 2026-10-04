@@ -4,9 +4,10 @@ import type { ReactNode } from "react";
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { groupRecognitionLanguages, type RecognitionLanguage } from "./recognitionLanguages";
 export type AssistantPreferences = { language: string; instruction: string; dictation_output: string; provider?: "local" | "cloud" | "automatic"; cloud_consent_version?: number | null };
 export const defaultAssistantPreferences: AssistantPreferences = { language: "en-US", instruction: "", dictation_output: "insert", provider: "local", cloud_consent_version: null };
-export type Availability = { model?: string; microphone?: number; recognition?: number; accessibility?: boolean; screen?: boolean; imageInput?: boolean; cloudScreenInput?: boolean; diagnostic?: string; holdError?: string; cloudConfigured?: boolean; cloudSignedIn?: boolean; provider?: string; effectiveProvider?: string };
+export type Availability = { model?: string; microphone?: number; recognition?: number; accessibility?: boolean; screen?: boolean; imageInput?: boolean; cloudScreenInput?: boolean; holdError?: string; cloudConfigured?: boolean; cloudSignedIn?: boolean; provider?: string; effectiveProvider?: string; speechLanguages?: RecognitionLanguage[] };
 type SettingsProps = { value: AssistantPreferences; onChange: (value: AssistantPreferences) => void };
 type Props = SettingsProps & { onSignIn: () => void; onCancelSignIn: () => void; signingIn: boolean; warningIcon: ReactNode; accountMark: string; signInError: string };
 export function useAvailability() {
@@ -26,7 +27,9 @@ export function useAvailability() {
       if (alive) await command("status");
     }).catch(cause => { if (alive) setError(String(cause)); });
     const poll = window.setInterval(() => { void command("status"); }, 3000);
-    return () => { alive = false; clearInterval(poll); void off.then(unlisten => unlisten()); };
+    const refresh = () => { void command("status"); };
+    window.addEventListener("focus", refresh);
+    return () => { alive = false; clearInterval(poll); window.removeEventListener("focus", refresh); void off.then(unlisten => unlisten()); };
   }, []);
   return { availability, error, command };
 }
@@ -107,21 +110,24 @@ export default function AssistantSettings({ value, onChange, onSignIn, onCancelS
   </div>;
 }
 export function TranscriptionSettings({value,onChange}: SettingsProps) {
-  const {availability,error,command} = useAvailability();
+  const {availability,error} = useAvailability();
+  const languages = availability.speechLanguages;
   return <div className="assistant-settings">
     <div className="field"><label className="field-label" htmlFor="recognition-language">Language</label>
       <select id="recognition-language" value={value.language} onChange={event => onChange({...value,language:event.target.value})}>
-        {[["en-US","English (US)"],["en-CA","English (Canada)"],["en-GB","English (UK)"],["fr-FR","French"],["de-DE","German"],["es-ES","Spanish"],["it-IT","Italian"],["pt-BR","Portuguese"],["ja-JP","Japanese"],["zh-CN","Chinese"],["hi-IN","Hindi"]].map(([code,label]) => <option key={code} value={code}>{label}</option>)}
-      </select><p className="card-note">Also used by Assistant. Availability depends on your Mac.</p>
+        {!languages?.some(language => language.code === value.language) && <option value={value.language}>{value.language}</option>}
+        {groupRecognitionLanguages(languages ?? [], navigator.language || "en").map(group => <optgroup key={group.name} label={group.name}>
+          {group.languages.map(language => <option key={language.code} value={language.code}>{language.name}</option>)}
+        </optgroup>)}
+      </select>
+      <p className="card-note">Also used by Assistant. Speech is transcribed on this Mac using macOS speech recognition.</p>
     </div>
     <div className="field"><label className="field-label" htmlFor="dictation-output">When I finish speaking</label>
       <select id="dictation-output" value={value.dictation_output} onChange={event => onChange({...value,dictation_output:event.target.value})}>
         <option value="insert">Insert into the current app</option><option value="copy">Copy to clipboard</option>
       </select>
     </div>
-    <button className="plain" onClick={() => void command("diagnose")}>Check dictation</button>
-    <p className="card-note">Checks speech recognition without recording you.</p>
-    {availability.diagnostic && <p role="status">{availability.diagnostic}</p>}{error && <p role="alert">{error}</p>}
+    {error && <p role="alert">{error}</p>}
   </div>;
 }
 

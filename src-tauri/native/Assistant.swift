@@ -303,8 +303,6 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
     var recording = false
     var finishing = false
     var monitors: [Any] = []
-    var diagnosticRunning = false
-    var diagnostic = ""
     let screenLog = Logger(subsystem: "com.kiegen.app", category: "ScreenCapture")
 
     func event(_ phase: String, _ message: String = "", text: String = "", action: String = "preview") {
@@ -344,12 +342,14 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
     func availability() {
         var model = "Requires macOS 26 or later and Apple Intelligence."
         if #available(macOS 26.0, *) { model = String(describing: SystemLanguageModel.default.availability) }
-        emit(["id": 0, "phase": "availability", "model": model,
+        let status: [String: Any] = ["id": 0, "phase": "availability", "model": model,
               "microphone": AVCaptureDevice.authorizationStatus(for: .audio).rawValue,
               "recognition": SFSpeechRecognizer.authorizationStatus().rawValue,
               "accessibility": AXIsProcessTrusted(), "screen": CGPreflightScreenCaptureAccess(),
               "imageInput": AssistantScreenSupport.isAvailable,
-              "cloudScreenInput": Self.supportsScreenContext(provider: .cloud), "diagnostic": diagnostic])
+              "cloudScreenInput": Self.supportsScreenContext(provider: .cloud),
+              "speechLanguages": recognitionLanguages()]
+        emit(status)
     }
     func permissions() async {
         // Only an explicit Settings button invokes this; never resume an old hold afterward.
@@ -358,31 +358,6 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
             SFSpeechRecognizer.requestAuthorization { continuation.resume(returning: $0) }
         }
         availability()
-    }
-    func diagnose() async {
-        guard !diagnosticRunning, !recording, !finishing else { return }
-        diagnosticRunning = true
-        diagnostic = "Testing local transcription with generated English audio…"
-        availability()
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        defer { diagnosticRunning = false; try? FileManager.default.removeItem(at: directory); availability() }
-        do {
-            _ = try localRecognizer(language: "en-US")
-            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
-            let audio = directory.appendingPathComponent("fixture.aiff")
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/say")
-            process.arguments = ["-v", "Samantha", "-o", audio.path, "The quick brown fox jumps over the lazy dog."]
-            try process.run()
-            await Task.detached { process.waitUntilExit() }.value
-            guard process.terminationStatus == 0 else { throw NSError(domain: "Could not generate test speech", code: 1) }
-            let recognition = FileRecognition()
-            let text = try await recognition.run(url: audio)
-            guard text.lowercased().contains("fox"), text.lowercased().contains("dog") else {
-                throw NSError(domain: "TextHalo", code: 4, userInfo: [NSLocalizedDescriptionKey: "The test audio was not transcribed correctly: \(text)"])
-            }
-            diagnostic = "Local transcription passed: \(text)"
-        } catch { diagnostic = "Local transcription test failed: \(error.localizedDescription)" }
     }
     func handle(_ command: Request) {
         let startsAssistant = command.command == "open" || command.command == "ask"
@@ -410,7 +385,6 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
         case "settings_microphone", "settings_speech", "settings_screen":
             let pane = command.command == "settings_microphone" ? "Privacy_Microphone" : command.command == "settings_speech" ? "Privacy_SpeechRecognition" : "Privacy_ScreenCapture"
             if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?" + pane) { NSWorkspace.shared.open(url) }
-        case "diagnose": Task { await diagnose() }
         case "halt":
             guard command.id == id else { return }
             audit?.update(phase: "interrupted", message: "Generation halted by playback", text: result, action: "")

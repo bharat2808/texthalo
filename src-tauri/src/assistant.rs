@@ -740,7 +740,6 @@ pub fn assistant_control(
         command.as_str(),
         "status"
             | "permissions"
-            | "diagnose"
             | "permission_microphone"
             | "permission_speech"
             | "permission_screen"
