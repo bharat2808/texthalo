@@ -159,8 +159,10 @@ mod tests {
         let model = std::env::var("WHISPER_TEST_MODEL").unwrap();
         let raw = std::fs::read(std::env::var("WHISPER_TEST_PCM").unwrap()).unwrap();
         let samples: Vec<_> = raw
-            .chunks_exact(4)
-            .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|b| f32::from_le_bytes(*b))
             .collect();
         let engine = Engine::load(Path::new(&model)).unwrap();
         let text = engine
