@@ -533,7 +533,7 @@ pub fn catalog_with(settings: &Settings, clips: Vec<crate::voices::VoiceClip>) -
             status: if !fish_configured {
                 "Backend not configured".to_string()
             } else if !fish_signed_in {
-                "Sign in to use cloud hosted voice".to_string()
+                "Sign in required".to_string()
             } else if !settings.fish.privacy_accepted {
                 "Review privacy details".to_string()
             } else if settings.fish.voice_id.is_empty() {
