@@ -11,6 +11,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # FoundationModels requires the macOS 26 SDK; macos-15 defaults to Xcode 16.
+      - name: select Xcode 26
+        run: sudo xcode-select -s /Applications/Xcode_26.3.app/Contents/Developer
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -57,6 +61,8 @@ jobs:
     needs: check
     steps:
       - uses: actions/checkout@v4
+      - name: select Xcode 26
+        run: sudo xcode-select -s /Applications/Xcode_26.3.app/Contents/Developer
       - uses: dtolnay/rust-toolchain@stable
       - uses: actions/setup-node@v4
         with:

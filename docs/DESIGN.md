@@ -283,7 +283,9 @@ If kiegen depends on *no* third-party Kokoro wrapper — neither the Rust crate 
 
 **And note the reference still needs espeak-ng**: `config.py` carries an `EspeakConfig { lib_path, data_path }`, and the repo ships `examples/with_espeak_data.py` / `with_espeak_lib.py`. The MIT wrapper is not a route around the G2P problem — it is the same problem with a friendlier licence in front of it.
 
-### Licence decision for kiegen: open source is the answer, *which* licence is the question
+### Licence decision for TextHalo
+
+**Current terms (October 4, 2026):** TextHalo source revisions expressly distributed under the [TextHalo Source Available License 1.0](../LICENSE-TEXTHALO.md) use those terms. The v0.1.12 release published October 2, 2026 and previously distributed Apache-licensed copies retain Apache-2.0. The comparison below records the earlier licensing decision.
 
 The project license applies to kiegen's original code. Every bundled dependency, model, and separately installed tool keeps its own license and required notices. The historical alternatives considered were:
 
@@ -296,14 +298,14 @@ The project license applies to kiegen's original code. Every bundled dependency,
 | engineering cost | ≈ zero | maintain the in-repo Rust G2P implementation |
 | downstream appeal | copyleft — fine for an end-user utility, unattractive to anyone embedding it in a closed product | permissive Apache-2.0 grant with explicit patent terms |
 
-**Decision: Option 2 — kiegen is licensed only under Apache-2.0.** The published `kokoro-tts` crate is **unusable as-is** (its unconditional `cc::Build` of `en_ipa.c` compiles espeak-derived C into the application), so kiegen owns its Rust G2P implementation. The app's licence does not relicense dependencies, models, or separately installed tools; each keeps its own terms. `say` stays as the bootstrap engine — it is a system binary invoked as a subprocess.
+**Historical decision: Option 2 — kiegen originally used Apache-2.0.** The published `kokoro-tts` crate is **unusable as-is** (its unconditional `cc::Build` of `en_ipa.c` compiles espeak-derived C into the application), so kiegen owns its Rust G2P implementation. The app's licence does not relicense dependencies, models, or separately installed tools; each keeps its own terms. `say` stays as the bootstrap engine — it is a system binary invoked as a subprocess.
 
 **Licence hygiene, mechanically enforced (so this cannot drift back in):**
 
 - **`cargo-deny` 0.20.2** (`EmbarkStudios/cargo-deny`) in CI with an explicit license allowlist and named exceptions for the reviewed MPL-2.0 dependencies. Unknown or unapproved licenses fail the check, which also excludes GPL, AGPL, SSPL, and other unlisted licenses. A policy in a document does not survive six months; a failing CI job does.
 - **No vendored espeak-ng, ever** — not the binary, not the data, not a git submodule, not "just for tests". Its absence from the repo is the whole point.
-- **Check every runtime dependency's own licence and redistribute its notices.** The project itself is Apache-2.0-only; dependencies remain under their upstream licences, including MIT, BSD, and Apache-2.0.
-- Keep a `NOTICE` file and an "Open-source licences" screen — the app-side obligation of Apache-2.0 is attribution, and it doubles as the required credit for Kokoro's two CC BY training corpora.
+- **Check every runtime dependency's own licence and redistribute its notices.** The project itself now uses LICENSE-TEXTHALO.md; dependencies remain under their upstream licences, including MIT, BSD, and Apache-2.0.
+- Keep a `NOTICE` file and an "Open-source licences" screen — the third-party Apache-2.0 components require attribution, and it doubles as the required credit for Kokoro's two CC BY training corpora.
 - Write the **ARPAbet → IPA table yourself** rather than copying it out of a crate of uncertain provenance. It is a small, standard mapping, and re-deriving it is an hour of work that removes the question entirely.
 
 The residual cost, stated plainly: the other five languages become an optional `brew install espeak-ng` path rather than a shipped feature, and English out-of-dictionary words have no fallback unless the user installs espeak-ng or you ship a pronunciation-override file. That is the price of keeping the repo clean, and it is affordable because English is what v1 ships.
@@ -351,7 +353,7 @@ Scaffolding for the spike lives in `/Users/home/.hermes/cache/scratch/kokoro_spi
 2. Chunk seams and prosody resets across sentence boundaries; cross-fade mitigates, does not eliminate.
 3. A resident model in a menu-bar utility is a real energy/RAM cost — measured at **478 MB peak RSS for fp32**, 578 MB for fp16, 245 MB for q8f16.
 4. The first-run 86–163 MB download sits awkwardly against a "no setup required" promise — mitigate with `say` as the immediate degraded engine plus a tray progress row.
-5. Multilingual coverage is out of v1 by decision, and espeak-ng stays an arm's-length optional subprocess — so the project remains licensed under Apache-2.0 regardless of what the user installs.
+5. Multilingual coverage is out of v1 by decision, and espeak-ng stays an arm's-length optional subprocess — the project license does not change the licenses of separately installed tools.
 
 ### The engine lineup after this change: `say`, Kokoro, and Chatterbox Multilingual
 
@@ -491,7 +493,7 @@ Explicitly *not* in v0: history, streaming word-highlight, per-app shortcuts, th
 
 ## 9. Open product questions for you
 
-1. ~~Is kiegen closed-source/commercial?~~ **Decided: open source, Apache-2.0 only** — with dependency licence checks in `cargo-deny` (§5).
+1. ~~Is kiegen closed-source/commercial?~~ **Current decision: source available under LICENSE-TEXTHALO.md; prior Apache-licensed releases retain their terms** — with independent dependency licence checks in `cargo-deny` (§5).
 2. ~~English-only for v1, or the full 9 languages?~~ **Decided: English only for v1.** Mandarin/Japanese remain reachable later; the other five (Spanish, French, Hindi, Italian, Portuguese) use an optional separately installed espeak-ng runtime. **Partly superseded:** a second engine — Chatterbox Multilingual — now offers 23 languages, none of them through espeak, so the "which languages" question is answered twice over: Kokoro's 9 codes, and Chatterbox's 23 for everything Kokoro cannot reach without GPL code (§5).
 3. Does the audio **play** and/or get **written to a file** by default? "Speak" vs "Speak to file" as separate chords is the plan.
 4. Should the user be able to configure **per-app** shortcuts/voices, or is one global chord enough for v1?

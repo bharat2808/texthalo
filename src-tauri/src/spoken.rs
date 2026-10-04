@@ -177,7 +177,8 @@ impl Spoken {
         rate: u32,
         archive_path: Option<&Path>,
     ) -> Result<Report, String> {
-        self.speech.speak(text, voice, rate, archive_path)?;
+        let normalized = crate::speech_input::normalize(text);
+        self.speech.speak(&normalized, voice, rate, archive_path)?;
         Ok(Report {
             chars: text.chars().count(),
             phonemes: 0,
@@ -211,6 +212,8 @@ impl Spoken {
         settings: &Settings,
         text: &str,
     ) -> Result<(Vec<f32>, Report, u32), String> {
+        let normalized = crate::speech_input::normalize(text);
+        let text = normalized.as_str();
         let (samples, phoneme_count, dropped, rate) = match settings.engine {
             Engine::Kokoro => {
                 let dir =
@@ -264,32 +267,48 @@ impl Spoken {
 
     /// Feed one persistent native output queue while the producer synthesizes ahead.
     /// The caller starts the player under the speech-job lock, so Stop cannot race start.
+    #[cfg(test)]
     pub(crate) fn stream_pcm<C, P>(
         &self,
         settings: &Settings,
         text: &str,
+        archive: Option<&mut crate::history::PcmRecorder>,
+        cancelled: C,
+        start: P,
+    ) -> Result<(Report, f64, f64), String>
+    where
+        C: Fn() -> bool + Sync,
+        P: FnMut(&Arc<crate::pcm::Player>) -> Result<(), String>,
+    {
+        self.stream_pcm_input(
+            settings,
+            crate::speech_input::SpeechInput::Complete(text.into()),
+            archive,
+            cancelled,
+            start,
+        )
+        .map(|(report, latency, underrun, _)| (report, latency, underrun))
+    }
+
+    pub(crate) fn stream_pcm_input<C, P>(
+        &self,
+        settings: &Settings,
+        input: crate::speech_input::SpeechInput,
         mut archive: Option<&mut crate::history::PcmRecorder>,
         cancelled: C,
         mut start: P,
-    ) -> Result<(Report, f64, f64), String>
+    ) -> Result<(Report, f64, f64, String), String>
     where
         C: Fn() -> bool + Sync,
         P: FnMut(&Arc<crate::pcm::Player>) -> Result<(), String>,
     {
         use std::time::{Duration, Instant};
         let began = Instant::now();
-        let chunks = match settings.engine {
-            Engine::Kokoro => crate::streaming::kokoro_chunks(text),
-            Engine::Chatterbox => crate::streaming::chatterbox_chunks(text),
-            Engine::Apple => return Err("PCM playback needs a local speech engine".into()),
-            Engine::Fish => return Err("Fish Audio uses its own hosted PCM stream.".into()),
+        let (first_chars, next_chars) = match settings.engine {
+            Engine::Kokoro => (180, 240),
+            Engine::Chatterbox => (100, 160),
+            _ => return Err("PCM playback needs a local speech engine".into()),
         };
-        if chunks.is_empty() {
-            return Err("nothing to say: the selection is empty".into());
-        }
-        let count = chunks.len();
-        let first_chars = chunks[0].chars().count().max(1);
-        let next_chars = chunks.get(1).map(|s| s.chars().count()).unwrap_or(0);
         let player = Arc::new(crate::pcm::Player::new()?);
         let mut total = Report {
             chars: 0,
@@ -299,16 +318,41 @@ impl Spoken {
         };
         let mut received = 0;
         let mut started = None;
+        let mut first_audio_at: Option<Instant> = None;
         let mut startup_target = 0.5;
         let mut peak_buffer = 0.0f64;
-        let result = crate::streaming::run(
-            chunks,
+        let result = crate::streaming::run_input(
+            input,
+            first_chars,
+            next_chars,
             |chunk| {
                 let now = Instant::now();
                 let audio = self.synthesize_audio(settings, chunk)?;
-                Ok((audio, now.elapsed().as_secs_f64()))
+                Ok((
+                    audio,
+                    now.elapsed().as_secs_f64(),
+                    chunk.chars().count().max(1),
+                ))
             },
-            |((samples, report, rate), generation_seconds)| {
+            |audio, stopped| {
+                let Some(((samples, report, rate), generation_seconds, chunk_chars)) = audio else {
+                    if started.is_none()
+                        && first_audio_at.is_some_and(|at| {
+                            crate::streaming::should_start(
+                                player.buffered_seconds(),
+                                startup_target,
+                                at.elapsed(),
+                                false,
+                            )
+                        })
+                    {
+                        start(&player)?;
+                        if !stopped() {
+                            started = Some(began.elapsed().as_secs_f64());
+                        }
+                    }
+                    return Ok(());
+                };
                 if rate != crate::pcm::SAMPLE_RATE as u32 {
                     return Err("The speech engine returned an unsupported sample rate".into());
                 }
@@ -316,29 +360,35 @@ impl Spoken {
                     // Estimate how long the next chunk needs from observed generation speed.
                     // Short opening sentences may wait for another chunk; normal sentences
                     // already contain more than this much audio and start immediately.
-                    startup_target = (generation_seconds * next_chars as f64 / first_chars as f64
+                    startup_target = (generation_seconds * next_chars as f64 / chunk_chars as f64
                         * 1.25)
                         .clamp(0.5, 3.0);
                 }
                 // Bound ahead-of-playback storage to eight seconds plus one model chunk.
-                while started.is_some() && player.buffered_seconds() >= 8.0 && !cancelled() {
+                while started.is_some() && player.buffered_seconds() >= 8.0 && !stopped() {
                     player.is_playing()?;
                     std::thread::sleep(Duration::from_millis(10));
                 }
-                if cancelled() {
+                if stopped() {
                     return Ok(());
                 }
                 if let Some(recorder) = archive.as_deref_mut() {
                     recorder.write(&samples);
                 }
                 received += 1;
-                player.push(samples, received == count);
+                first_audio_at.get_or_insert_with(Instant::now);
+                player.push(samples, false);
                 peak_buffer = peak_buffer.max(player.buffered_seconds());
                 if started.is_none()
-                    && (player.buffered_seconds() >= startup_target || received == count)
+                    && crate::streaming::should_start(
+                        player.buffered_seconds(),
+                        startup_target,
+                        first_audio_at.unwrap().elapsed(),
+                        false,
+                    )
                 {
                     start(&player)?;
-                    if !cancelled() {
+                    if !stopped() {
                         started = Some(began.elapsed().as_secs_f64());
                     }
                 }
@@ -354,11 +404,16 @@ impl Spoken {
             },
             &cancelled,
         );
-        let result = result.and_then(|()| {
+        let result = result.and_then(|text| {
+            player.push(Vec::new(), true);
+            if !cancelled() && started.is_none() && received > 0 {
+                start(&player)?;
+                started = Some(began.elapsed().as_secs_f64());
+            }
             while !cancelled() && player.is_playing()? {
                 std::thread::sleep(Duration::from_millis(10));
             }
-            Ok(())
+            Ok(text)
         });
         let underrun = player.underrun_seconds();
         player.stop();
@@ -366,7 +421,7 @@ impl Spoken {
         self.release_idle_models();
         let latency = started.unwrap_or(0.0);
         eprintln!("{:?} PCM: chunks={received} start={latency:.3}s audio={:.3}s underrun={underrun:.3}s startup_target={startup_target:.3}s peak_buffer={peak_buffer:.3}s", settings.engine, total.seconds);
-        result.map(|()| (total, latency, underrun))
+        result.map(|text| (total, latency, underrun, text))
     }
 
     /// Chatterbox's synthesis core: check the language and the clip, load (or reuse) the
@@ -755,6 +810,61 @@ mod tests {
         );
         assert!(spoken.kokoro.lock().unwrap().is_none());
         assert!(spoken.chatterbox.lock().unwrap().is_none());
+    }
+
+    #[test]
+    #[ignore = "needs installed Kokoro weights and plays incremental test audio"]
+    fn incremental_kokoro_starts_before_eof_and_saves_one_complete_recording() {
+        use crate::speech_input::{channel, SpeechEvent};
+        let settings = Settings {
+            engine: Engine::Kokoro,
+            ..Settings::default()
+        };
+        let spoken = Spoken::new();
+        let dir = std::env::temp_dir().join(format!("incremental-kokoro-{}", uuid::Uuid::new_v4()));
+        let mut recorder = crate::history::PcmRecorder::new(&dir).unwrap();
+        let (tx, input) = channel();
+        tx.send(SpeechEvent::Delta("“Hi!” ".into())).unwrap();
+        let began = std::time::Instant::now();
+        let mut starts = 0;
+        let (report, _, _, text) = spoken
+            .stream_pcm_input(
+                &settings,
+                input,
+                Some(&mut recorder),
+                || began.elapsed().as_secs() >= 45,
+                |player| {
+                    starts += 1;
+                    spoken.activate_pcm(player.clone());
+                    player.start()?;
+                    // Generation is held open until actual playback starts. Waiting for
+                    // EOF or a second chunk before starting would deadlock this fixture.
+                    tx.send(SpeechEvent::Delta("This is the final sentence".into()))
+                        .unwrap();
+                    tx.send(SpeechEvent::Finish).unwrap();
+                    Ok(())
+                },
+            )
+            .unwrap();
+        assert_eq!(starts, 1);
+        assert_eq!(text, "“Hi!” This is the final sentence");
+        assert!(report.seconds > 0.5);
+        assert!(!spoken.is_speaking());
+        assert!(spoken.pcm.lock().unwrap().is_none());
+        recorder
+            .save(
+                &dir,
+                "Kokoro",
+                &settings.kokoro.voice,
+                &text,
+                &Default::default(),
+            )
+            .unwrap();
+        let entries = crate::history::list(&dir).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].text, text);
+        assert!(!entries[0].partial);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

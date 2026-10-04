@@ -13,13 +13,14 @@ const vite = await createServer({
 });
 
 try {
+  const { DEMO_VIDEO } = await vite.ssrLoadModule("/src/demo.ts");
   const { SitePage, getSeoMetadata, getSitePaths } = await vite.ssrLoadModule("/src/pages.tsx");
   const shell = await readFile(resolve(outputDirectory, "index.html"), "utf8");
   const routes = getSitePaths();
 
   for (const pathname of routes) {
     const metadata = getSeoMetadata(pathname);
-    const image = `${siteUrl}/videos/texthalo-product-demo-poster.png`;
+    const image = `${siteUrl}${DEMO_VIDEO.poster}`;
     const headTags = [
       `<title>${escapeHtml(metadata.title)}</title>`,
       `<meta name="description" content="${escapeHtml(metadata.description)}" />`,
@@ -31,13 +32,13 @@ try {
       `<meta property="og:description" content="${escapeHtml(metadata.description)}" />`,
       `<meta property="og:url" content="${siteUrl}${metadata.path}" />`,
       `<meta property="og:image" content="${image}" />`,
-      `<meta property="og:image:alt" content="TextHalo app for listening to selected text on Mac" />`,
+      `<meta property="og:image:alt" content="TextHalo animated demo of Listen, Dictate, and Assistant" />`,
       ...(metadata.video ? [
         `<meta property="og:video" content="${metadata.video.contentUrl}" />`,
         `<meta property="og:video:secure_url" content="${metadata.video.contentUrl}" />`,
         `<meta property="og:video:type" content="video/mp4" />`,
-        `<meta property="og:video:width" content="960" />`,
-        `<meta property="og:video:height" content="540" />`,
+        `<meta property="og:video:width" content="${metadata.video.width}" />`,
+        `<meta property="og:video:height" content="${metadata.video.height}" />`,
       ] : []),
       `<meta name="twitter:card" content="summary_large_image" />`,
       `<meta name="twitter:title" content="${escapeHtml(metadata.title)}" />`,
@@ -78,7 +79,7 @@ try {
       <video:title>${xmlEscape(metadata.video.name)}</video:title>
       <video:description>${xmlEscape(metadata.video.description)}</video:description>
       <video:content_loc>${xmlEscape(metadata.video.contentUrl)}</video:content_loc>
-      <video:duration>15</video:duration>
+      <video:duration>${DEMO_VIDEO.durationSeconds}</video:duration>
       <video:publication_date>${metadata.video.uploadDate}</video:publication_date>
     </video:video>` : "";
     return `  <url><loc>${siteUrl}${pathname}</loc><lastmod>${lastmod}</lastmod>${videoEntry}</url>`;

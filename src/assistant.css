@@ -1,0 +1,29 @@
+.assistant-panel { border-radius: 13px; border: 1px solid var(--overlay-separator); color-scheme: dark; box-sizing: border-box; min-height: 100vh; padding: 12px; background:var(--overlay-window); color:var(--overlay-label); font: 13px/1.5 -apple-system,BlinkMacSystemFont,sans-serif; }
+.assistant-panel * { box-sizing: border-box; }
+.assistant-panel header { display:flex; gap:12px; align-items:center; user-select:none; }
+.assistant-panel header button { cursor:pointer; }
+.assistant-eyebrow { flex:1; font-size:10px; letter-spacing:.12em; opacity:.65; }
+.assistant-panel button { padding:5px 10px; border:1px solid var(--overlay-separator); border-radius:7px; background:var(--overlay-control); color:inherit; cursor:pointer; font:inherit; }
+.assistant-panel button:disabled { opacity:.45; cursor:default; }
+.assistant-panel button:focus-visible { outline:2px solid var(--overlay-accent); outline-offset:2px; }
+.assistant-status-row { display:flex; align-items:center; gap:12px; }
+.assistant-status-row p { flex:1; margin:10px 0; }
+.assistant-indicator { width:27px; height:7px; background:radial-gradient(circle, var(--overlay-accent) 3.5px, transparent 4px); flex-shrink:0; }
+.assistant-indicator.active { animation:assistant-pulse 1s ease-in-out infinite alternate; }
+@keyframes assistant-pulse { to { opacity:.35; } }
+@media (prefers-reduced-motion: reduce) { .assistant-indicator.active { animation:none; } }
+.assistant-help { font-size:11px; color:var(--overlay-secondary); margin-left:39px; }
+.assistant-error { color:#ff9c91; margin-left:39px; }
+.assistant-result { white-space:pre-wrap; overflow-wrap:anywhere; max-height:210px; overflow:auto; margin-left:39px; padding:8px 0; border-top:1px solid var(--overlay-separator); user-select:text; }
+.assistant-actions { display:flex; flex-wrap:wrap; gap:8px; margin:12px 0 0 39px; }
+.assistant-settings textarea { display:block; width:100%; box-sizing:border-box; margin:6px 0 10px; padding:10px; border:1px solid var(--border, #7775); border-radius:8px; background:transparent; color:inherit; font:inherit; resize:vertical; }
+.assistant-settings select { max-width:100%; padding:8px; }
+.transcript-text { white-space:pre-wrap; overflow-wrap:anywhere; max-height:180px; overflow:auto; user-select:text; }
+.permission-row { padding:12px 0; border-bottom:1px solid #8882; }
+.permission-row:last-child { border-bottom:0; }
+.assistant-settings > .field + .field, .assistant-settings > .field + button { margin-top:16px; }
+
+html:has(.assistant-panel), body:has(.assistant-panel), #root:has(.assistant-panel) { background: transparent !important; }
+
+.assistant-live { max-height:116px; overflow:hidden; }
+.assistant-provider-label { margin-left: 8px; font-size: 10px; opacity: .7; font-weight: 500; }

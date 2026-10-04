@@ -1,8 +1,8 @@
 html:has(.overlay-root), body:has(.overlay-root), #root:has(.overlay-root) { margin: 0; width: 100%; height: 100%; background: transparent !important; overflow: hidden; }
-.speech-overlay { box-sizing: border-box; display: flex; align-items: center; gap: 12px; height: 44px; padding: 0 13px; background: #080808; color: #fff; border-radius: 13px; border: 1px solid #ffffff18; font: 12px -apple-system, BlinkMacSystemFont, sans-serif; user-select: none; animation: appear 160ms ease-out; }
+.speech-overlay { box-sizing: border-box; display: flex; align-items: center; gap: 12px; height: 44px; padding: 0 13px; background: var(--overlay-window); color: var(--overlay-label); border-radius: 13px; border: 1px solid var(--overlay-separator); font: 12px -apple-system, BlinkMacSystemFont, sans-serif; user-select: none; animation: appear 160ms ease-out; }
 .speech-label { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .activity { display: flex; align-items: center; justify-content: center; gap: 3px; width: 27px; height: 22px; }
-.activity i { width: 3px; height: 17px; border-radius: 3px; background: white; animation: bars 850ms ease-in-out infinite alternate; }
+.activity i { width: 3px; height: 17px; border-radius: 3px; background: var(--overlay-accent); animation: bars 850ms ease-in-out infinite alternate; }
 .capturing .activity i, .preparing .activity i { height: 8px; animation-duration: 600ms; opacity: .7; }
 .error .activity { color: #ff6961; font-weight: 700; font-size: 20px; }
 .speech-overlay button { display: grid; place-items: center; width: 25px; height: 25px; padding: 0; border: 0; border-radius: 50%; background: #ee4545; cursor: pointer; }
@@ -14,14 +14,49 @@ html:has(.overlay-root), body:has(.overlay-root), #root:has(.overlay-root) { mar
 @media (prefers-reduced-motion: reduce) { .speech-overlay, .activity i { animation: none; } }
 
 .error-panel { height: 190px; flex-direction: column; align-items: stretch; gap: 10px; padding: 14px 16px; }
-.error-heading { display: flex; align-items: center; gap: 8px; }
+.error-panel.with-recovery { height: 360px; }
+.error-panel.with-recovery .error-reason { flex: 0 1 auto; max-height: 72px; }
+.error-panel .recovery-text { overflow: auto; flex: 1; }
+.error-heading { display: flex; align-items: center; gap: 12px; }
 .error-heading strong { flex: 1; font-size: 13px; }
 .error-panel .dismiss { background: #ffffff18; color: white; font-size: 20px; }
-.error-reason { margin: 0; line-height: 1.5; overflow: auto; flex: 1; user-select: text; }
-.recovery-error { margin: 0; color: #ff9690; max-height: 36px; overflow: auto; }
-.recovery-actions { display: flex; gap: 8px; }
+.error-reason { margin: 0; padding-left: 39px; line-height: 1.5; overflow: auto; flex: 1; user-select: text; }
+.recovery-error { margin: 0; padding-left: 39px; color: #ff9690; max-height: 36px; overflow: auto; }
+.recovery-actions { display: flex; flex-wrap: wrap; gap: 8px; padding-left: 39px; }
 .recovery-actions button { display: block; width: auto; height: 30px; padding: 0 12px; border-radius: 7px; background: white; color: #111; font: inherit; font-weight: 600; }
 .recovery-actions button:hover { background: #dedede; }
 .recovery-actions .secondary { background: #ffffff18; color: white; }
 .recovery-actions .secondary:hover { background: #ffffff30; }
 .recovery-actions button:disabled { opacity: .5; cursor: wait; }
+
+.speech-overlay .overlay-undo { width: auto; padding: 0 8px; border-radius: 6px; background: #ffffff20; color: white; font: inherit; }
+
+/* Keep live words attached below the existing recording/playback status row. */
+.speech-overlay:has(.speech-status) { flex-direction:column; align-items:stretch; gap:0; padding:0; }
+.speech-status { display:flex; align-items:center; gap:12px; height:42px; min-height:42px; padding:0 12px; }
+.speech-overlay.with-transcript { height:76px; }
+.speech-overlay.expanded-transcript { height:76px; }
+.speech-transcript { padding:8px 12px 12px 51px; margin:0; border-top:1px solid var(--overlay-separator); font-size:12px; line-height:18px; white-space:pre-wrap; overflow-wrap:anywhere; overflow:hidden; flex:1; min-height:0; user-select:text; }
+
+/* The floating widgets keep one dark surface in both macOS appearances. */
+.speech-overlay, .assistant-panel { --overlay-window:#111111; --overlay-control:#ffffff0f; --overlay-label:#f2f2f2; --overlay-secondary:#a3a3a3; --overlay-separator:#ffffff14; --overlay-accent:#0a84ff; color-scheme:dark; }
+.error-panel .speech-transcript { padding-left:39px; padding-right:0; }
+.overlay-grip { position:relative; flex:0 0 27px; width:27px; height:25px; }
+.overlay-grip-indicator { display:grid; place-items:center; height:100%; transition:opacity 120ms ease; }
+.speech-overlay .overlay-move, .assistant-panel .overlay-move { position:absolute; inset:0; display:grid; place-items:center; width:27px; height:25px; padding:0; border:0; border-radius:5px; background:transparent; color:var(--overlay-secondary); cursor:grab; opacity:0; transition:opacity 120ms ease; }
+.speech-overlay:hover .overlay-move, .speech-overlay:focus-within .overlay-move, .assistant-panel:hover .overlay-move, .assistant-panel:focus-within .overlay-move { opacity:1; }
+.speech-overlay:hover .overlay-grip-indicator, .speech-overlay:focus-within .overlay-grip-indicator, .assistant-panel:hover .overlay-grip-indicator, .assistant-panel:focus-within .overlay-grip-indicator { opacity:0; }
+.speech-overlay .overlay-move:hover, .assistant-panel .overlay-move:hover { background:#ffffff14; color:var(--overlay-label); }
+.speech-overlay .overlay-move:active, .assistant-panel .overlay-move:active { cursor:grabbing; }
+.overlay-move:focus-visible { outline:2px solid var(--overlay-accent); outline-offset:2px; }
+@media (prefers-reduced-motion: reduce) { .overlay-move, .overlay-grip-indicator { transition:none; } }
+
+.live-text-preview { position:relative; display:flex; flex:1; min-height:0; padding:7px 38px 7px 12px; border-top:1px solid var(--overlay-separator); }
+.live-text-viewport { flex:1; min-width:0; overflow:hidden; white-space:nowrap; font-size:12px; line-height:18px; user-select:text; scroll-behavior:smooth; scrollbar-width:none; }
+.live-text-preview:not(.expanded) .live-text-content { width:max-content; white-space:nowrap; }
+.live-text-viewport.has-overflow { mask-image:linear-gradient(to right, #0009, #000 2ch); }
+.live-text-preview.expanded .live-text-viewport { white-space:pre-wrap; overflow-wrap:anywhere; overflow:auto; mask-image:none; scrollbar-width:thin; }
+.speech-overlay .preview-expand { position:absolute; top:5px; right:9px; width:22px; height:22px; border-radius:5px; background:transparent; color:var(--overlay-secondary); opacity:1; }
+.speech-overlay .preview-expand:hover { background:#ffffff14; color:var(--overlay-label); }
+.speech-overlay .preview-expand:disabled { opacity:.4; cursor:wait; }
+@media (prefers-reduced-motion: reduce) { .live-text-viewport { scroll-behavior:auto; } }

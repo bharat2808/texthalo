@@ -79,10 +79,9 @@ pub fn request_accessibility() -> bool {
     platform::request_accessibility()
 }
 
-/// A copy-mode capture while secure input is on would leak nothing (the OS blocks it)
-/// but would also silently fail; detecting it lets us say something useful instead.
-pub fn secure_input_active() -> bool {
-    platform::secure_input_active()
+/// UI warnings describe the focused control, not another app's Secure Input flag.
+pub fn focused_password_field() -> bool {
+    platform::focused_password_field()
 }
 
 // ─────────────────────────────── macOS ───────────────────────────────
@@ -92,7 +91,8 @@ mod platform {
     use accessibility_sys::{
         kAXErrorSuccess, kAXFocusedUIElementAttribute, kAXSelectedTextAttribute,
         kAXTrustedCheckOptionPrompt, AXIsProcessTrusted, AXIsProcessTrustedWithOptions,
-        AXUIElementCopyAttributeValue, AXUIElementCreateSystemWide, AXUIElementRef,
+        AXUIElementCopyAttributeValue, AXUIElementCreateSystemWide, AXUIElementGetTypeID,
+        AXUIElementRef,
     };
     use core_foundation::base::{CFGetTypeID, CFRelease, CFTypeRef, TCFType};
     use core_foundation::boolean::CFBoolean;
@@ -214,6 +214,35 @@ mod platform {
             Some(value)
         } else {
             None
+        }
+    }
+
+    /// Inspect only the focused control's subrole for the readiness UI.
+    pub fn focused_password_field() -> bool {
+        if !is_trusted() {
+            return false;
+        }
+        unsafe {
+            let system_wide = AXUIElementCreateSystemWide();
+            if system_wide.is_null() {
+                return false;
+            }
+            let focused = copy_attribute(system_wide, kAXFocusedUIElementAttribute);
+            CFRelease(system_wide as CFTypeRef);
+            let Some(focused) = focused else { return false };
+            if CFGetTypeID(focused) != AXUIElementGetTypeID() {
+                CFRelease(focused);
+                return false;
+            }
+            // Read only the control's type, never its password value or selection.
+            let subrole = copy_attribute(focused as AXUIElementRef, "AXSubrole");
+            CFRelease(focused);
+            let Some(subrole) = subrole else { return false };
+            if CFGetTypeID(subrole) != CFString::type_id() {
+                CFRelease(subrole);
+                return false;
+            }
+            CFString::wrap_under_create_rule(subrole as CFStringRef) == "AXSecureTextField"
         }
     }
 
@@ -410,7 +439,7 @@ mod platform {
         false
     }
 
-    pub fn secure_input_active() -> bool {
+    pub fn focused_password_field() -> bool {
         false
     }
 

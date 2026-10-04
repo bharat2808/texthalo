@@ -1,0 +1,886 @@
+import AppKit
+import AVFoundation
+import Speech
+import ApplicationServices
+import FoundationModels
+import OSLog
+
+private let outputLock = NSLock()
+
+func emit(_ value: [String: Any]) {
+    guard let data = try? JSONSerialization.data(withJSONObject: value),
+          let line = String(data: data, encoding: .utf8) else { return }
+    outputLock.lock(); defer { outputLock.unlock() }
+    print(line)
+    fflush(stdout)
+}
+
+func attribute(_ element: AXUIElement, _ name: CFString) -> CFTypeRef? {
+    var result: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(element, name, &result) == .success else { return nil }
+    return result
+}
+@MainActor func focusedElement(prepareAccessibility: Bool = false) -> AXUIElement? {
+    guard let front = NSWorkspace.shared.frontmostApplication else { return nil }
+    let app = AXUIElementCreateApplication(front.processIdentifier)
+    func readFocus() -> AXUIElement? {
+        var owners = [app, AXUIElementCreateSystemWide()]
+        if let window = attribute(app, kAXFocusedWindowAttribute as CFString),
+           CFGetTypeID(window) == AXUIElementGetTypeID() {
+            owners.append(unsafeBitCast(window, to: AXUIElement.self))
+        }
+        for owner in owners {
+            guard let value = attribute(owner, kAXFocusedUIElementAttribute as CFString),
+                  CFGetTypeID(value) == AXUIElementGetTypeID() else { continue }
+            let element = unsafeBitCast(value, to: AXUIElement.self)
+            var pid: pid_t = 0
+            if AXUIElementGetPid(element, &pid) == .success, pid == front.processIdentifier { return element }
+        }
+        return nil
+    }
+    // Electron and native webviews can expose their editor trees lazily.
+    // Request Electron support when available, but retry native apps too.
+    // This does not grant macOS permissions or move keyboard focus.
+    return FocusCapture.resolve(prepare: prepareAccessibility,
+        sourceIsActive: { !front.isTerminated && NSWorkspace.shared.frontmostApplication?.processIdentifier == front.processIdentifier },
+        read: readFocus,
+        enable: { AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanTrue) == .success },
+        wait: { Thread.sleep(forTimeInterval: 0.02) })
+}
+func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
+    guard let value = attribute(element, kAXValueAttribute as CFString) as? String,
+          let raw = attribute(element, kAXSelectedTextRangeAttribute as CFString),
+          CFGetTypeID(raw) == AXValueGetTypeID() else { return nil }
+    let axValue = unsafeBitCast(raw, to: AXValue.self)
+    guard AXValueGetType(axValue) == .cfRange else { return nil }
+    var range = CFRange()
+    guard AXValueGetValue(axValue, .cfRange, &range) else { return nil }
+    return .init(value: value, location: range.location, length: range.length)
+}
+
+@MainActor final class Target {
+    let application: NSRunningApplication?
+    let element: AXUIElement?
+    let original: TargetSnapshot?
+    let selection: String
+    let sourceContext: AssistantSource
+    let windowID: CGWindowID?
+    let bounds: CGRect?
+    let caretBounds: CGRect?
+    var receipt: TextEditReceipt?
+    var committed: TargetSnapshot?
+    var incremental: IncrementalTextEdit?
+    private(set) var insertionFailure: String?
+    // Web editors expose AX text setters that can be no-ops or asynchronous.
+    // Resolve this once, before generation; never probe them with partial writes.
+    lazy var supportsStreamingInsertion: Bool = {
+        var current = element
+        var roles: [String] = []
+        for _ in 0..<64 {
+            guard let node = current,
+                  let role = attribute(node, kAXRoleAttribute as CFString) as? String else { break }
+            roles.append(role)
+            if role == "AXWebArea" || role == "AXWindow" {
+                return TextInsertionPolicy.permitsStreaming(ancestorRoles: roles, reachedWindow: role == "AXWindow")
+            }
+            guard let parent = attribute(node, kAXParentAttribute as CFString),
+                  CFGetTypeID(parent) == AXUIElementGetTypeID() else { break }
+            let next = unsafeBitCast(parent, to: AXUIElement.self)
+            guard !CFEqual(node, next) else { break }
+            current = next
+        }
+        return false
+    }()
+    init() {
+        application = NSWorkspace.shared.frontmostApplication
+        let current = AXIsProcessTrusted() ? focusedElement(prepareAccessibility: true) : nil
+        let secure = current.flatMap { attribute($0, kAXSubroleAttribute as CFString) as? String } == "AXSecureTextField"
+        element = secure ? nil : current
+        original = element.flatMap(snapshot)
+        var anchor: CGRect?
+        if let element, let original {
+            var range = CFRange(location: original.location, length: original.length)
+            if let rangeValue = AXValueCreate(.cfRange, &range) {
+                var raw: CFTypeRef?
+                if AXUIElementCopyParameterizedAttributeValue(element, kAXBoundsForRangeParameterizedAttribute as CFString, rangeValue, &raw) == .success,
+                   let raw, CFGetTypeID(raw) == AXValueGetTypeID() {
+                    var rect = CGRect.zero
+                    if AXValueGetValue(unsafeBitCast(raw, to: AXValue.self), .cgRect, &rect), rect.height > 0 { anchor = rect }
+                }
+            }
+        }
+        caretBounds = anchor
+        selection = secure ? "" : (element.flatMap { attribute($0, kAXSelectedTextAttribute as CFString) as? String } ?? "")
+        let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+        let sourcePID = application?.processIdentifier
+        let sourceWindows = windows.filter { ($0[kCGWindowOwnerPID as String] as? Int32) == sourcePID && ($0[kCGWindowLayer as String] as? Int) == 0 }
+        var focusedWindowTitle = ""
+        if let sourcePID, AXIsProcessTrusted(),
+           let rawWindow = attribute(AXUIElementCreateApplication(sourcePID), kAXFocusedWindowAttribute as CFString),
+           CFGetTypeID(rawWindow) == AXUIElementGetTypeID() {
+            let focusedWindow = unsafeBitCast(rawWindow, to: AXUIElement.self)
+            focusedWindowTitle = attribute(focusedWindow, kAXTitleAttribute as CFString) as? String ?? ""
+        }
+        let window = sourceWindows.first { !focusedWindowTitle.isEmpty && ($0[kCGWindowName as String] as? String) == focusedWindowTitle } ?? sourceWindows.first
+        let fieldLabel = element.flatMap { field in
+            [kAXTitleAttribute, kAXDescriptionAttribute, kAXPlaceholderValueAttribute].compactMap {
+                attribute(field, $0 as CFString) as? String
+            }.first(where: { !$0.isEmpty })
+        } ?? ""
+        sourceContext = AssistantSource(
+            app: application?.localizedName ?? "Unknown app",
+            windowTitle: String((focusedWindowTitle.isEmpty ? window?[kCGWindowName as String] as? String ?? "" : focusedWindowTitle).prefix(500)),
+            focusedRole: element.flatMap { attribute($0, kAXRoleAttribute as CFString) as? String } ?? "",
+            focusedLabel: String(fieldLabel.prefix(300)))
+        windowID = (window?[kCGWindowNumber as String] as? NSNumber)?.uint32Value
+        bounds = (window?[kCGWindowBounds as String] as? NSDictionary).flatMap { CGRect(dictionaryRepresentation: $0) }
+    }
+    // Trace delivery metadata only, never field contents or dictated/generated text.
+    func trace(_ stage: String, textCount: Int = 0) {
+        guard let directory = ProcessInfo.processInfo.environment["TEXTHALO_AUDIT_DIR"] else { return }
+        let focused = focusedElement()
+        let current = element.flatMap(snapshot)
+        let record: [String: Any] = ["time": Date().timeIntervalSince1970, "stage": stage,
+            "accessibilityTrusted": AXIsProcessTrusted(),
+            "app": sourceContext.app, "role": sourceContext.focusedRole,
+            "frontmost": NSWorkspace.shared.frontmostApplication == application,
+            "sameElement": element.map { original in focused.map { CFEqual(original, $0) } ?? false } ?? false,
+            "hadSnapshot": original != nil, "hasSnapshot": current != nil,
+            "sameSnapshot": original != nil && current == original,
+            "originalCaret": original?.location ?? -1, "currentCaret": current?.location ?? -1,
+            "textCount": textCount, "failure": insertionFailure ?? ""]
+        guard var line = try? JSONSerialization.data(withJSONObject: record, options: [.sortedKeys]) else { return }
+        line.append(10)
+        let file = URL(fileURLWithPath: directory).appendingPathComponent("insertion-trace.log")
+        var data = (try? Data(contentsOf: file)) ?? Data()
+        if data.count > 65536 { data = Data() }
+        data.append(line)
+        try? data.write(to: file, options: [.atomic])
+        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+    }
+    var editable: Bool {
+        guard let element, original != nil else { return false }
+        var settable = DarwinBoolean(false)
+        return AXUIElementIsAttributeSettable(element, kAXSelectedTextAttribute as CFString, &settable) == .success && settable.boolValue
+    }
+    func streamInsert(_ text: String) {
+        guard supportsStreamingInsertion, let original else { return }
+        if incremental == nil { incremental = IncrementalTextEdit(original: original) }
+        guard let application, !application.isTerminated, let element else { return }
+        let focused = focusedElement()
+        let same = NSWorkspace.shared.frontmostApplication == application && focused.map { CFEqual(element, $0) } == true
+        guard let suffix = incremental?.next(text, current: snapshot(element), sameElement: same, editable: editable), !suffix.isEmpty else { return }
+        // No clipboard, focus restoration, or selected-range mutation during streaming.
+        let status = AXUIElementSetAttributeValue(element, kAXSelectedTextAttribute as CFString, suffix as CFString)
+        let after = snapshot(element)
+        if incremental?.commit(text, after: after, writeRejected: status == .attributeUnsupported || status == .notImplemented || status == .illegalArgument) == true {
+            receipt = incremental?.receipt; committed = after
+        }
+    }
+    var hasStreamMutation: Bool { incremental?.canFallback == false }
+    func streamCompleted(_ text: String) -> Bool {
+        guard let incremental, !incremental.stopped, incremental.completeText == text,
+              let application, NSWorkspace.shared.frontmostApplication == application,
+              let element, let focused = focusedElement(), CFEqual(element, focused),
+              let committed, snapshot(element) == committed else { return false }
+        return true
+    }
+    func insert(_ text: String, restoreClipboard: Bool) async -> Bool {
+        insertionFailure = nil
+        trace("insert-attempt", textCount: text.count)
+        func refused(_ reason: String) -> Bool {
+            insertionFailure = reason
+            trace("insert-refused", textCount: text.count)
+            return false
+        }
+        guard let application, !application.isTerminated else { return refused("source-app-unavailable") }
+        guard NSWorkspace.shared.frontmostApplication == application else { return refused("source-app-not-frontmost") }
+        guard let element else { return refused("no-original-focused-element") }
+        guard let focused = focusedElement(), CFEqual(element, focused) else { return refused("focused-element-changed") }
+        guard let original else { return refused("original-text-or-caret-unavailable") }
+        guard let current = snapshot(element) else { return refused("current-text-or-caret-unavailable") }
+        guard original.permitsInsertion(current: current, sameElement: true, editable: true) else { return refused("text-or-caret-changed-or-invalid") }
+        guard let edit = TextEditReceipt(original: original, replacement: text) else { return refused("invalid-edit-range") }
+        if supportsStreamingInsertion && editable && AXUIElementSetAttributeValue(element, kAXSelectedTextAttribute as CFString, text as CFString) == .success {
+            if let after = snapshot(element), edit.acceptsCommit(after) {
+                receipt = edit; committed = after
+                return true
+            }
+        }
+        // Web and Electron editors often expose the caret but not a writable
+        // AXSelectedText. Paste only into the same, unchanged editable field.
+        let role = attribute(element, kAXRoleAttribute as CFString) as? String
+        guard original.permitsPaste(current: current, sameElement: true, role: role) else { return refused("unsupported-paste-role: \(role ?? "unknown")") }
+        let modifiers: CGEventFlags = [.maskCommand, .maskControl, .maskAlternate, .maskShift]
+        for _ in 0..<40 {
+            if CGEventSource.flagsState(.combinedSessionState).intersection(modifiers).isEmpty { break }
+            do { try await Task.sleep(for: .milliseconds(25)) } catch { return false }
+        }
+        guard !Task.isCancelled,
+              CGEventSource.flagsState(.combinedSessionState).intersection(modifiers).isEmpty,
+              NSWorkspace.shared.frontmostApplication == application,
+              let focused = focusedElement(), CFEqual(element, focused), snapshot(element) == original,
+              let source = CGEventSource(stateID: .hidSystemState),
+              let down = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: true),
+              let up = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: false) else { return refused("paste-preflight-changed-or-unavailable") }
+        let pasteboard = NSPasteboard.general
+        let saved = restoreClipboard ? (pasteboard.pasteboardItems ?? []).map { item in
+            item.types.compactMap { type in item.data(forType: type).map { (type, $0) } }
+        } : []
+        pasteboard.clearContents()
+        let wroteText = pasteboard.setString(text, forType: .string)
+        let changeCount = pasteboard.changeCount
+        defer {
+            if restoreClipboard {
+                // Let the receiving app consume the paste, and never overwrite a
+                // newer clipboard change made by the user or another app.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                    guard pasteboard.changeCount == changeCount else { return }
+                    pasteboard.clearContents()
+                    let items = saved.map { entries in
+                        let item = NSPasteboardItem()
+                        for (type, data) in entries { item.setData(data, forType: type) }
+                        return item
+                    }
+                    if !items.isEmpty { pasteboard.writeObjects(items) }
+                }
+            }
+        }
+        guard wroteText else { return refused("clipboard-write-failed") }
+        let dispatch = PasteDispatch(wroteText: wroteText, targetValid: true, keyEventsReady: true)
+        guard dispatch.isDeliverable else { return false }
+        down.flags = .maskCommand; up.flags = .maskCommand
+        down.post(tap: .cgSessionEventTap); up.post(tap: .cgSessionEventTap)
+        // Content-editable apps may accept paste without exposing their new
+        // value through Accessibility. Dispatch is the reliable boundary.
+        return true
+    }
+    var canUndo: Bool { receipt != nil && committed != nil }
+    func undo() -> Bool {
+        guard let application, !application.isTerminated, NSWorkspace.shared.frontmostApplication == application,
+              let element, let focused = focusedElement(), let current = snapshot(element),
+              let receipt, let committed,
+              receipt.permitsUndo(current: current, committed: committed, sameElement: CFEqual(element, focused), editable: editable) else { return false }
+        var range = CFRange(location: receipt.original.location, length: receipt.replacementLength)
+        guard let rangeValue = AXValueCreate(.cfRange, &range),
+              AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, rangeValue) == .success else { return false }
+        guard AXUIElementSetAttributeValue(element, kAXSelectedTextAttribute as CFString, receipt.originalText as CFString) == .success else {
+            var restore = CFRange(location: committed.location, length: committed.length)
+            if let value = AXValueCreate(.cfRange, &restore) { AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, value) }
+            return false
+        }
+        self.receipt = nil; self.committed = nil
+        return true
+    }
+
+}
+
+@MainActor final class Assistant {
+    let holdShortcuts = HoldShortcuts()
+    var id: UInt64 = 0
+    var request: Request?
+    var target: Target?
+    var context = ""
+    var result = ""
+    var audit: GenerationHistory?
+    var engine: AVAudioEngine?
+    var audioRequest: SFSpeechAudioBufferRecognitionRequest?
+    var recognition: SFSpeechRecognitionTask?
+    var generation: Task<Void, Never>?
+    var hostedResponse: HostedAssistantResponse?
+    var supportsScreenContext: Bool {
+        Self.supportsScreenContext(provider: request?.provider)
+    }
+    static func supportsScreenContext(provider: AssistantProvider?) -> Bool {
+        provider == .cloud
+            ? AssistantContextPolicy.supportsCloudScreenText(osMajor: ProcessInfo.processInfo.operatingSystemVersion.majorVersion)
+            : AssistantScreenSupport.isAvailable
+    }
+    var insertion: Task<Void, Never>?
+    var deadline: Task<Void, Never>?
+    var heldTimer: Timer?
+    var transcriptGate = TranscriptGate()
+    var screenPreparation: PreparedScreenContext?
+    var screenImage: CGImage?
+    var screenProcess: Process?
+    var whisperCapture: WhisperAudioCapture?
+    var whisperPreview = ""
+    var recording = false
+    var finishing = false
+    var monitors: [Any] = []
+    let screenLog = Logger(subsystem: "com.kiegen.app", category: "ScreenCapture")
+
+    func event(_ phase: String, _ message: String = "", text: String = "", action: String = "preview") {
+        let visibleText = phase == "error" && text.isEmpty ? result : text
+        audit?.update(phase: phase, message: message, text: visibleText, action: action)
+        var event: [String: Any] = ["id": id, "phase": phase, "message": message, "text": visibleText,
+            "action": action, "canInsert": target?.editable ?? false, "canUndo": target?.canUndo ?? false,
+            "mode": request?.mode ?? "assistant",
+            "source": target?.application?.localizedName ?? "", "context": context]
+        if let bounds = target?.caretBounds ?? target?.bounds {
+            event["bounds"] = ["x": bounds.origin.x, "y": bounds.origin.y, "width": bounds.width, "height": bounds.height]
+        }
+        emit(event)
+        if let error = audit?.error { emit(["id": id, "phase": "audit_error", "message": error]) }
+    }
+    func stopAudio() {
+        heldTimer?.invalidate(); heldTimer = nil
+        if let engine { engine.stop(); engine.inputNode.removeTap(onBus: 0) }
+        engine = nil
+        audioRequest?.endAudio()
+        recording = false
+    }
+    func cancel(cancelScreen: Bool = true) {
+        if request?.transcriptionEngine == "whisper", recording || finishing { emit(["id": id, "phase": "whisper_cancel"]) }
+        whisperCapture?.cancel(); whisperCapture = nil
+        if cancelScreen { screenPreparation?.cancel(); screenPreparation = nil }
+        insertion?.cancel(); insertion = nil
+        generation?.cancel(); generation = nil
+        hostedResponse = nil
+        deadline?.cancel(); deadline = nil
+        stopAudio()
+        recognition?.cancel(); recognition = nil
+        audioRequest = nil
+        finishing = false
+        transcriptGate = TranscriptGate()
+        if let process = screenProcess, process.isRunning { process.terminate() }
+        screenProcess = nil
+    }
+    func availability() {
+        var model = "Requires macOS 26 or later and Apple Intelligence."
+        if #available(macOS 26.0, *) { model = String(describing: SystemLanguageModel.default.availability) }
+        let status: [String: Any] = ["id": 0, "phase": "availability", "model": model,
+              "microphone": AVCaptureDevice.authorizationStatus(for: .audio).rawValue,
+              "recognition": SFSpeechRecognizer.authorizationStatus().rawValue,
+              "accessibility": AXIsProcessTrusted(), "screen": CGPreflightScreenCaptureAccess(),
+              "imageInput": AssistantScreenSupport.isAvailable,
+              "cloudScreenInput": Self.supportsScreenContext(provider: .cloud),
+              "speechLanguages": recognitionLanguages()]
+        emit(status)
+    }
+    func permissions() async {
+        // Only an explicit Settings button invokes this; never resume an old hold afterward.
+        _ = await AVCaptureDevice.requestAccess(for: .audio)
+        _ = await withCheckedContinuation { continuation in
+            SFSpeechRecognizer.requestAuthorization { continuation.resume(returning: $0) }
+        }
+        availability()
+    }
+    func handle(_ command: Request) {
+        let startsAssistant = command.command == "open" || command.command == "ask"
+            || (command.command == "start" && command.mode == "assistant")
+        if startsAssistant && command.command != "open" { beginAudit(command, input: command.text ?? "") }
+        if startsAssistant && Self.supportsScreenContext(provider: command.provider) && !CGPreflightScreenCaptureAccess() {
+            cancel(); id = command.id
+            event("error", "Enable Screen Recording in TextHalo’s Assistant section, then try again.")
+            return
+        }
+        switch command.command {
+        case "hold_configure": holdShortcuts.configure(command.holdBindings ?? [:]); holdShortcuts.install()
+        case "hold_suspend": holdShortcuts.suspend(true)
+        case "hold_resume": holdShortcuts.suspend(false); holdShortcuts.install()
+        case "status": availability()
+        case "permissions": Task { await permissions() }
+        case "permission_microphone": Task { _ = await AVCaptureDevice.requestAccess(for: .audio); availability() }
+        case "permission_speech": Task {
+            _ = await withCheckedContinuation { continuation in SFSpeechRecognizer.requestAuthorization { continuation.resume(returning: $0) } }
+            availability()
+        }
+        case "permission_screen":
+            if !CGPreflightScreenCaptureAccess() { _ = CGRequestScreenCaptureAccess() }
+            availability()
+        case "settings_microphone", "settings_speech", "settings_screen":
+            let pane = command.command == "settings_microphone" ? "Privacy_Microphone" : command.command == "settings_speech" ? "Privacy_SpeechRecognition" : "Privacy_ScreenCapture"
+            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?" + pane) { NSWorkspace.shared.open(url) }
+        case "whisper_partial":
+            guard command.id == id, recording, request?.transcriptionEngine == "whisper" else { return }
+            whisperPreview = command.text ?? ""
+            event("recording", "Listening… Release to transcribe.", text: whisperPreview)
+        case "whisper_result":
+            guard command.id == id, finishing, request?.transcriptionEngine == "whisper" else { return }
+            completeTranscript(command.text ?? "")
+        case "whisper_error":
+            guard command.id == id, recording || finishing, request?.transcriptionEngine == "whisper" else { return }
+            let recovery = whisperPreview
+            cancel(); result = recovery
+            event("error", command.text ?? "Whisper transcription failed.", text: recovery)
+        case "halt":
+            guard command.id == id else { return }
+            audit?.update(phase: "interrupted", message: "Generation halted by playback", text: result, action: "")
+            cancel()
+        case "cancel":
+            audit?.update(phase: "canceled", message: "Canceled", text: result, action: "")
+            if command.restore == true { restoreSourceIfAssistantFocused(explicit: true) }
+            cancel(); id = command.id; target = nil; context = ""; result = ""; screenImage = nil; event("idle")
+        case "open":
+            audit?.update(phase: "interrupted", message: "Replaced by a new Assistant session", text: result, action: "")
+            audit = nil
+            cancel(); id = command.id; request = command; result = ""; screenImage = nil
+            let source = Target()
+            target = source.application?.processIdentifier == getppid() ? nil : source
+            context = sourceReference()
+            event("result", "Hold your Assistant shortcut to speak a request.")
+        case "hosted_snapshot", "hosted_complete", "hosted_error": receiveHosted(command)
+        case "start": start(command)
+        case "stop": if command.id == id { finishRecording() }
+        case "ask":
+            guard let text = command.text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                id = command.id; event("error", "Enter a request first."); return
+            }
+            let retainedImage = screenImage
+            cancel(); id = command.id; request = command
+            context = sourceReference()
+            if let retainedImage { screenImage = nil; generate(text, screenImage: retainedImage) }
+            else if supportsScreenContext, target?.windowID != nil { captureScreen(region: false, prompt: text) }
+            else { generate(text) }
+        case "undo":
+            guard command.id == id, target?.canUndo == true else { return }
+            let currentID = id
+            if command.restore == true { restoreSourceIfAssistantFocused(explicit: true) }
+            Task {
+                if command.restore == true { try? await Task.sleep(for: .milliseconds(180)) }
+                guard self.id == currentID else { return }
+                if self.target?.undo() == true { self.event("result", "Change undone", action: "undone") }
+                else { self.target?.receipt = nil; self.target?.committed = nil; self.event("result", "The field changed. Undo is no longer available.", text: self.result, action: "undo_unavailable") }
+            }
+        case "copy":
+            guard command.id == id, !result.isEmpty else { return }
+            NSPasteboard.general.clearContents(); NSPasteboard.general.setString(result, forType: .string)
+            event("result", "Copied.", text: result)
+        case "screen":
+            guard command.id == id else { return }
+            captureScreen(region: command.context == "region")
+        default: emit(["id": command.id, "phase": "error", "message": "Unknown assistant command."])
+        }
+    }
+    func start(_ command: Request) {
+        if command.mode != "assistant" {
+            audit?.update(phase: "interrupted", message: "Replaced by dictation", text: result, action: "")
+        }
+        cancel(); id = command.id; request = command; result = ""; whisperPreview = ""; context = ""; screenImage = nil; target = Target()
+        target?.trace("target-captured")
+        if command.mode == "assistant" { context = sourceReference() }
+        if command.mode == "assistant" { audit?.input(["source": target?.sourceContext.app ?? ""]) }
+        else { audit = nil }
+        guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else {
+            event("error", "Enable Microphone in TextHalo’s Permissions section, then hold the shortcut again."); return
+        }
+        if command.transcriptionEngine != "whisper", SFSpeechRecognizer.authorizationStatus() != .authorized {
+            event("error", "Enable Speech Recognition in TextHalo’s Permissions section, then hold the shortcut again."); return
+        }
+        if command.output != "copy" || command.mode == "assistant" {
+            guard AXIsProcessTrusted() else {
+                event("error", "Enable Accessibility for TextHalo to insert text into your app."); return
+            }
+        }
+        event("processing", "Starting microphone…")
+        let usesWhisper = command.transcriptionEngine == "whisper"
+        var recognizer: SFSpeechRecognizer?
+        if !usesWhisper {
+            do { recognizer = try localRecognizer(language: command.language ?? "en-US") }
+            catch { event("error", error.localizedDescription); return }
+        }
+        if command.mode == "assistant", command.provider != .cloud {
+            guard #available(macOS 26.0, *) else { event("error", "Assistant requires macOS 26 or later."); return }
+            guard SystemLanguageModel.default.isAvailable else { event("error", "Apple Intelligence is unavailable: \(SystemLanguageModel.default.availability)"); return }
+            context = sourceReference()
+        }
+        let currentID = id
+        let bufferRequest = SFSpeechAudioBufferRecognitionRequest()
+        if let recognizer {
+            bufferRequest.requiresOnDeviceRecognition = true
+            bufferRequest.shouldReportPartialResults = true
+            audioRequest = bufferRequest
+            recognition = recognizer.recognitionTask(with: bufferRequest) { [weak self] response, error in
+                Task { @MainActor in
+                    guard let self, self.id == currentID, self.recording || self.finishing else { return }
+                    if let response {
+                        let transcription = response.bestTranscription
+                        let segments = transcription.segments
+                        let start = segments.first?.timestamp
+                        let end = segments.last.map { $0.timestamp + $0.duration }
+                        if let transcript = self.transcriptGate.recognized(transcription.formattedString,
+                            isFinal: response.isFinal, start: start, end: end,
+                            utteranceComplete: response.speechRecognitionMetadata != nil) {
+                            self.completeTranscript(transcript)
+                        } else if self.recording {
+                            self.event("recording", "Listening… Release to transcribe.", text: self.transcriptGate.text)
+                        }
+                    } else if let error {
+                        self.cancel(); self.event("error", "Transcription failed: \(error.localizedDescription)")
+                    }
+                }
+            }
+        }
+        let audioEngine = AVAudioEngine()
+        let input = audioEngine.inputNode
+        let format = input.outputFormat(forBus: 0)
+        guard format.sampleRate > 0, format.channelCount > 0 else { cancel(); event("error", "No microphone input is available."); return }
+        if usesWhisper {
+            do {
+                let capture = try WhisperAudioCapture(format: format, id: currentID)
+                whisperCapture = capture
+                input.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in capture.append(buffer) }
+            } catch { cancel(); event("error", error.localizedDescription); return }
+        } else {
+            input.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in bufferRequest.append(buffer) }
+        }
+        engine = audioEngine
+        do {
+            try audioEngine.start(); recording = true
+            if command.mode == "assistant", supportsScreenContext,
+               CGPreflightScreenCaptureAccess(), let windowID = target?.windowID {
+                // Capture the original window once while the user speaks. Its
+                // request-owned task survives key-up but never cancellation.
+                let requestAudit = audit
+                screenPreparation = PreparedScreenContext(requestID: currentID, windowID: windowID) { window in
+                    let image = try await ScreenCapture.window(window)
+                    requestAudit?.screenshot(image)
+                    return image
+                }
+            }
+            event("recording", command.mode == "assistant" ? "Listening to your request… Release to ask." : "Listening… Release to transcribe.")
+            // Carbon hotkeys report release; this checks physical state too, including modifiers released first.
+            let code = keyCode(command.key ?? "")
+            let required = requiredFlags(command.modifiers ?? "")
+            heldTimer = Timer.scheduledTimer(withTimeInterval: 0.04, repeats: true) { [weak self] _ in
+                Task { @MainActor in
+                    guard let self, self.id == currentID, self.recording else { return }
+                    if command.key?.hasPrefix("Hold:") == true { return }
+                    let flags = CGEventSource.flagsState(.combinedSessionState)
+                    if (code.map { !CGEventSource.keyState(.combinedSessionState, key: $0) } ?? false)
+                        || !flags.contains(required) { self.finishRecording() }
+                }
+            }
+            deadline = Task { try? await Task.sleep(for: .seconds(90)); guard !Task.isCancelled, self.id == currentID else { return }; self.cancel(); self.event("error", "Recording reached 90 seconds. Release and try a shorter recording.") }
+        } catch { cancel(); event("error", "Could not start microphone: \(error.localizedDescription)") }
+    }
+    func finishRecording() {
+        guard recording, !finishing else { return }
+        finishing = true; stopAudio(); event("processing", "Transcribing on this Mac…", text: whisperPreview)
+        if request?.transcriptionEngine == "whisper" {
+            whisperCapture?.finish()
+            deadline?.cancel()
+            let currentID = id
+            deadline = Task {
+                try? await Task.sleep(for: .seconds(120))
+                guard !Task.isCancelled, self.id == currentID, self.finishing else { return }
+                let recovery = self.whisperPreview
+                self.cancel(); self.result = recovery
+                self.event("error", "Transcription did not finish. Your preview is available to copy.", text: recovery)
+            }
+            return
+        }
+        if let transcript = transcriptGate.release() { completeTranscript(transcript); return }
+        deadline?.cancel()
+        let currentID = id
+        deadline = Task {
+            try? await Task.sleep(for: .seconds(12))
+            guard !Task.isCancelled, self.id == currentID, self.finishing else { return }
+            self.cancel(); self.event("error", "Transcription did not finish. Try a shorter recording.")
+        }
+    }
+    func completeTranscript(_ text: String) {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let mode = request?.mode
+        cancel(cancelScreen: false)
+        guard !text.isEmpty else { cancel(); event("error", "No speech detected. Hold the shortcut and try again."); return }
+        target?.trace("transcribed", textCount: text.count)
+        if mode == "assistant" {
+            audit?.input(["transcript": text, "request": text])
+            if supportsScreenContext, let preparation = screenPreparation {
+                let currentID = id
+                event("capturing_screen", "Preparing visual context…")
+                generation = Task {
+                    do {
+                        let image = try await preparation.value(for: currentID)
+                        guard !Task.isCancelled, self.id == currentID, let image else { return }
+                        self.screenPreparation = nil
+                        self.generate(text, screenImage: image)
+                    } catch {
+                        guard !Task.isCancelled, self.id == currentID else { return }
+                        self.screenPreparation = nil
+                        self.event("error", "Could not capture visual context: \(error.localizedDescription)")
+                    }
+                }
+            } else if supportsScreenContext, target?.windowID != nil { captureScreen(region: false, prompt: text) }
+            else { generate(text) }
+        }
+        else {
+            event("transcript", text: text)
+            result = text
+            if request?.output == "copy" {
+                NSPasteboard.general.clearContents(); NSPasteboard.general.setString(text, forType: .string)
+                event("result", "Transcript copied.", action: "copied")
+            } else { insertResult() }
+        }
+    }
+    func insertResult() {
+        let currentID = id
+        let text = result
+        let source = target
+        let restoreClipboard = request?.restoreClipboard ?? true
+        event("processing", "Inserting text…", text: text)
+        insertion = Task {
+            let inserted = await source?.insert(text, restoreClipboard: restoreClipboard) == true
+            source?.trace(inserted ? "insert-delivered" : "insert-failed", textCount: text.count)
+            guard !Task.isCancelled, self.id == currentID else { return }
+            self.insertion = nil
+            self.audit?.input(["insertionFailure": source?.insertionFailure ?? (source == nil ? "no-target" : ""),
+                               "targetRole": source?.sourceContext.focusedRole ?? "",
+                               "targetHadSnapshot": source?.original != nil])
+            if inserted { self.event("result", source?.original?.length == 0 ? "Text inserted" : "Text replaced", action: "applied") }
+            else { self.event("result", "Could not verify the original insertion target. Your answer is available to copy.", text: text) }
+        }
+    }
+    func sourceReference() -> String {
+        return AssistantPrompt.referenceContext(selectedText: target?.selection ?? "", source: target?.sourceContext)
+    }
+    func beginAudit(_ command: Request, input: String = "") {
+        audit?.update(phase: "interrupted", message: "Replaced by another request", text: result, action: "")
+        audit = GenerationHistory(requestID: command.id, source: target?.sourceContext.app ?? "")
+        audit?.input(["request": input, "inputType": command.command == "ask" ? "typed" : "speech",
+                      "provider": command.provider == .cloud ? "cloud" : "local",
+                      "model": command.provider == .cloud ? "assistant-standard" : "Apple Foundation Models (on-device)"])
+    }
+    func generate(_ prompt: String, screenImage: CGImage? = nil) {
+        if request?.provider == .cloud { generateHosted(prompt, screenImage: screenImage); return }
+        guard #available(macOS 26.0, *) else { event("error", "Assistant requires macOS 26 or later."); return }
+        guard SystemLanguageModel.default.isAvailable else { event("error", "Apple Intelligence is unavailable: \(SystemLanguageModel.default.availability)"); return }
+        guard prompt.count <= 4000, context.count <= 10000 else { event("error", "Select a shorter passage or use a shorter request."); return }
+        let currentID = id
+        let originalSource = target?.sourceContext
+        let previous = String(result.prefix(6000))
+        let preference = String((request?.instruction ?? "").prefix(2000))
+        let selection = target?.selection ?? ""
+        let audit = self.audit
+        event("processing", "Thinking on this Mac…")
+        deadline?.cancel()
+        deadline = Task {
+            try? await Task.sleep(for: .seconds(90))
+            guard !Task.isCancelled, self.id == currentID else { return }
+            self.cancel(); self.event("error", "Generation timed out. Try a shorter request.")
+        }
+        generation = Task {
+            defer { if self.id == currentID { self.deadline?.cancel(); self.deadline = nil; self.generation = nil } }
+            do {
+                guard !Task.isCancelled, self.id == currentID else { return }
+                let source = AssistantPrompt.referenceContext(selectedText: selection, source: originalSource)
+                self.context = source
+                audit?.input(["request": prompt, "selection": selection, "reference": source, "previousOutput": previous,
+                              "systemInstructions": AssistantPrompt.systemInstructions(preference: preference, hasSelection: !selection.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, hasImage: screenImage != nil),
+                              "userPrompt": AssistantPrompt.userPrompt(request: prompt, reference: source, previous: previous),
+                              "imageAttached": false, "screenCaptured": screenImage != nil, "attachmentLabel": "original-window"])
+                if let screenImage { audit?.screenshot(screenImage) }
+                let reply = try await generateAssistantReply(request: prompt, preference: preference,
+                    reference: source, previous: previous, selection: selection, screenImage: screenImage,
+                    onRaw: { audit?.raw($0) },
+                    onContext: { prepared in
+                        audit?.input(["reference": prepared.reference, "selection": prepared.selection,
+                                      "imageAttached": prepared.hasImage, "contextSource": prepared.source,
+                                      "ocr": prepared.ocr, "ocrError": prepared.ocrError,
+                                      "systemInstructions": prepared.instructions, "userPrompt": prepared.prompt])
+                    }) { snapshot in
+                        guard !Task.isCancelled, self.id == currentID else { return }
+                        self.deliverSnapshot(snapshot)
+                    }
+                guard !Task.isCancelled, self.id == currentID else { return }
+                self.deliverComplete(reply)
+            } catch {
+                guard !Task.isCancelled, self.id == currentID else { return }
+                self.event("error", "Assistant could not complete this request: \(error.localizedDescription)")
+            }
+        }
+    }
+    func deliverSnapshot(_ snapshot: AssistantReply) {
+        result = snapshot.text
+        if snapshot.action == .text { target?.streamInsert(snapshot.text) }
+        event("streaming", snapshot.action == .clarify ? "Clarifying…" : "Generating…",
+              text: snapshot.text, action: snapshot.action == .speak || snapshot.action == .readSelection ? "speak" : snapshot.action == .clarify ? "clarify" : "preview")
+    }
+    func deliverComplete(_ reply: AssistantReply) {
+        let text = reply.text
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            event("error", "Assistant returned an empty answer. Please try your request again."); return
+        }
+        result = text
+        target?.trace("generated-\(reply.action.rawValue)", textCount: text.count)
+        if reply.action == .speak || reply.action == .readSelection { event("result", "Preparing narration…", text: text, action: "speak") }
+        else if reply.action == .clarify { event("result", "Hold Assistant again with more detail", text: text, action: "clarify") }
+        else if target?.hasStreamMutation == true {
+            target?.streamInsert(text)
+            if target?.streamCompleted(text) == true { event("result", "Text inserted", action: "applied") }
+            else { event("result", "Could not safely finish inserting into the original field. Full answer available to copy.", text: text) }
+        }
+        else { insertResult() }
+    }
+    func generateHosted(_ prompt: String, screenImage: CGImage?) {
+        let selection = target?.selection ?? ""
+        guard prompt.count <= 4000, selection.count <= 10000 else {
+            event("error", "Select a shorter passage or use a shorter request."); return
+        }
+        let currentID = id
+        let previous = String(result.prefix(6000))
+        let preference = String((request?.instruction ?? "").prefix(2000))
+        let source = target?.sourceContext ?? AssistantSource(app: "", windowTitle: "", focusedRole: "", focusedLabel: "")
+        hostedResponse = HostedAssistantResponse(id: currentID, selection: selection)
+        event("processing", "Thinking with Cloud…")
+        deadline?.cancel()
+        deadline = Task {
+            try? await Task.sleep(for: .seconds(90))
+            guard !Task.isCancelled, self.id == currentID else { return }
+            self.cancel(); self.event("error", "Generation timed out. Try a shorter request.")
+        }
+        generation = Task {
+            defer { if self.id == currentID { self.generation = nil } }
+            do {
+                // Vision OCR runs entirely on this Mac; no model-based context
+                // classification or extraction, and no pixels enter the protocol.
+                var screenText = ""
+                if let screenImage {
+                    screenText = ScreenText.reference(from: try await ScreenText.recognizeLines(screenImage), limit: 6000)
+                        .replacingOccurrences(of: "[OCR truncated; consult the image for remaining content]",
+                                              with: "[OCR truncated]")
+                }
+                guard !Task.isCancelled, self.id == currentID, self.hostedResponse != nil else { return }
+                self.audit?.input(["request": prompt, "selection": selection, "previousOutput": previous,
+                                   "provider": "cloud", "model": "assistant-standard", "ocr": screenText, "imageAttached": false])
+                var input: [String: Any] = ["id": currentID, "phase": "generation_input", "request": prompt,
+                      "preferences": preference, "selection": selection,
+                      "source": ["app": source.app, "windowTitle": source.windowTitle,
+                                 "focusedRole": source.focusedRole, "focusedLabel": source.focusedLabel],
+                      "previousOutput": previous, "screenText": screenText]
+                if let auditID = self.audit?.auditID { input["auditId"] = auditID }
+                emit(input)
+            } catch {
+                guard !Task.isCancelled, self.id == currentID else { return }
+                self.hostedResponse = nil; self.deadline?.cancel(); self.deadline = nil
+                self.event("error", "Could not read screen context: \(error.localizedDescription)")
+            }
+        }
+    }
+    func receiveHosted(_ command: Request) {
+        guard command.id == id, request?.provider == .cloud,
+              var response = hostedResponse, !response.terminal else { return }
+        if command.command == "hosted_error" {
+            hostedResponse = nil; deadline?.cancel(); deadline = nil
+            // Keep only previously validated partial text. Error frames cannot
+            // introduce content, change an action, insert, or trigger narration.
+            result = response.last?.text ?? ""
+            event("error", command.message ?? "Cloud Assistant could not complete this request.")
+            return
+        }
+        do {
+            let complete = command.command == "hosted_complete"
+            let reply = try response.receive(id: command.id, action: command.action, text: command.text, complete: complete)
+            hostedResponse = response
+            if complete { deadline?.cancel(); deadline = nil }
+            guard let reply else { return }
+            if complete { deliverComplete(reply) } else { deliverSnapshot(reply) }
+        } catch {
+            hostedResponse = nil; deadline?.cancel(); deadline = nil
+            event("error", "Cloud Assistant returned an invalid response. Please try again.")
+        }
+    }
+    func captureScreen(region: Bool, prompt: String? = nil) {
+        guard supportsScreenContext else {
+            event("error", "Screen context requires macOS 26 or later."); return
+        }
+        guard CGPreflightScreenCaptureAccess() else {
+            event("error", "Enable Screen Recording in TextHalo’s Permissions section, then hold Assistant again."); return
+        }
+        let currentID = id
+        let window = target?.windowID
+        guard region || window != nil else { event("error", "No original window is available. Select text or try again from the source window."); return }
+        event("capturing_screen", "Capturing your window…")
+        generation = Task {
+            defer { if self.id == currentID { self.screenProcess = nil } }
+            do {
+                let started = ProcessInfo.processInfo.systemUptime
+                let image: CGImage
+                if region {
+                    // Preserve explicit region selection; normal window capture
+                    // never launches the screenshot command or writes an image.
+                    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+                    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+                    defer { try? FileManager.default.removeItem(at: directory) }
+                    let file = directory.appendingPathComponent("screen.png")
+                    let process = Process()
+                    self.screenProcess = process
+                    process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+                    process.arguments = ["-x", "-i", "-s", "-T", "0", file.path]
+                    try Task.checkCancellation()
+                    try process.run()
+                    image = try await Task.detached {
+                        process.waitUntilExit()
+                        guard process.terminationStatus == 0,
+                              let source = CGImageSourceCreateWithURL(file as CFURL, nil),
+                              let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else { throw NSError(domain: "Capture canceled", code: 1) }
+                        return image
+                    }.value
+                } else {
+                    image = try await ScreenCapture.window(window!)
+                }
+                guard !Task.isCancelled, self.id == currentID else { return }
+                self.screenLog.info("Capture completed in \(Int((ProcessInfo.processInfo.systemUptime - started) * 1000)) ms")
+                guard !Task.isCancelled, self.id == currentID else { return }
+                if let prompt { self.generate(prompt, screenImage: image) }
+                else { self.screenImage = image; self.event("result", "Visual context captured", text: self.result) }
+            } catch { guard !Task.isCancelled, self.id == currentID else { return }; self.event("error", "Could not capture visual context: \(error.localizedDescription)") }
+        }
+    }
+    func restoreSourceIfAssistantFocused(explicit: Bool = false) {
+        guard let front = NSWorkspace.shared.frontmostApplication,
+              front.processIdentifier == getppid(), let source = target?.application,
+              source != front, !source.isTerminated else { return }
+        if !explicit {
+            let appElement = AXUIElementCreateApplication(front.processIdentifier)
+            guard let window = attribute(appElement, kAXFocusedWindowAttribute as CFString), CFGetTypeID(window) == AXUIElementGetTypeID(),
+                  attribute(unsafeBitCast(window, to: AXUIElement.self), kAXTitleAttribute as CFString) as? String == "TextHalo Assistant" else { return }
+        }
+        source.activate(options: [])
+    }
+    func installEscape() {
+        if let monitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown, handler: { [weak self] event in
+            if event.keyCode == 53 { Task { @MainActor in
+                guard let self, !self.holdShortcuts.reservesEscape,
+                      self.recording || self.finishing || self.generation != nil || self.hostedResponse != nil || self.target != nil || !self.result.isEmpty else { return }
+                self.restoreSourceIfAssistantFocused()
+                self.cancel(); self.target = nil; self.context = ""; self.result = ""; self.event("canceled", "Canceled")
+            } }
+        }) { monitors.append(monitor) }
+    }
+}
+
+func requiredFlags(_ names: String) -> CGEventFlags {
+    var flags: CGEventFlags = []
+    let names = names.lowercased()
+    if names.contains("super") || names.contains("meta") { flags.insert(.maskCommand) }
+    if names.contains("control") { flags.insert(.maskControl) }
+    if names.contains("alt") { flags.insert(.maskAlternate) }
+    if names.contains("shift") { flags.insert(.maskShift) }
+    return flags
+}
+func keyCode(_ name: String) -> CGKeyCode? {
+    let names = ["KeyA":0,"KeyS":1,"KeyD":2,"KeyF":3,"KeyH":4,"KeyG":5,"KeyZ":6,"KeyX":7,"KeyC":8,"KeyV":9,"KeyB":11,"KeyQ":12,"KeyW":13,"KeyE":14,"KeyR":15,"KeyY":16,"KeyT":17,"Digit1":18,"Digit2":19,"Digit3":20,"Digit4":21,"Digit6":22,"Digit5":23,"Equal":24,"Digit9":25,"Digit7":26,"Minus":27,"Digit8":28,"Digit0":29,"BracketRight":30,"KeyO":31,"KeyU":32,"BracketLeft":33,"KeyI":34,"KeyP":35,"Enter":36,"KeyL":37,"KeyJ":38,"Quote":39,"KeyK":40,"Semicolon":41,"Backslash":42,"Comma":43,"Slash":44,"KeyN":45,"KeyM":46,"Period":47,"Tab":48,"Space":49,"Backquote":50,"Backspace":51,"Escape":53,"F1":122,"F2":120,"F3":99,"F4":118,"F5":96,"F6":97,"F7":98,"F8":100,"F9":101,"F10":109,"F11":103,"F12":111,"ArrowLeft":123,"ArrowRight":124,"ArrowDown":125,"ArrowUp":126]
+    return names[name].map(CGKeyCode.init)
+}
+
+@main struct Main {
+    @MainActor static func main() {
+        let app = NSApplication.shared
+        app.setActivationPolicy(.prohibited)
+        let assistant = Assistant()
+        assistant.installEscape()
+        DispatchQueue.global().async {
+            while let line = readLine() {
+                guard line.utf8.count < 100_000, let data = line.data(using: .utf8), let request = try? JSONDecoder().decode(Request.self, from: data) else {
+                    emit(["id": 0, "phase": "error", "message": "Invalid native request."]); continue
+                }
+                DispatchQueue.main.async { assistant.handle(request) }
+            }
+            DispatchQueue.main.async { assistant.cancel(); exit(0) }
+        }
+        app.run()
+    }
+}

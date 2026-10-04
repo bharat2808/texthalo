@@ -13,6 +13,8 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
 pub enum Action {
     Speak,
     Stop,
+    Transcribe,
+    Assistant,
 }
 
 #[derive(Debug, Clone)]
@@ -28,19 +30,47 @@ pub fn parse(accelerator: &str) -> Result<Shortcut, String> {
         .map_err(|e| format!("`{accelerator}` is not a valid shortcut ({e})"))
 }
 
+pub fn is_hold(accelerator: &str) -> bool {
+    matches!(
+        accelerator,
+        "Hold:Fn" | "Hold:LeftOption" | "Hold:RightOption" | "Hold:Escape"
+    )
+}
+
 /// Validate the whole set before touching the OS: parse errors and collisions are
 /// reported to the user rather than silently dropping a chord.
 pub fn bindings(settings: &Settings) -> Result<Vec<Binding>, String> {
     let mut out: Vec<Binding> = Vec::new();
+    let mut holds = Vec::new();
 
     for (accelerator, action) in [
         (&settings.shortcuts.speak, Action::Speak),
         (&settings.shortcuts.stop, Action::Stop),
+        (&settings.shortcuts.transcribe, Action::Transcribe),
+        (&settings.shortcuts.assistant, Action::Assistant),
     ] {
         if accelerator.trim().is_empty() {
             continue;
         }
+        if is_hold(accelerator) {
+            if !matches!(action, Action::Transcribe | Action::Assistant) {
+                return Err("Hold keys are available for Dictate and Assistant.".into());
+            }
+            if holds.contains(&accelerator) {
+                return Err(format!(
+                    "`{accelerator}` is already bound to another action"
+                ));
+            }
+            holds.push(accelerator);
+            continue;
+        }
         let shortcut = parse(accelerator)?;
+        if shortcut.to_string() == "Escape"
+            && (settings.shortcuts.transcribe == "Hold:Escape"
+                || settings.shortcuts.assistant == "Hold:Escape")
+        {
+            return Err("Escape is already used as a hold key.".into());
+        }
         if let Some(previous) = out.iter().find(|b| b.shortcut == shortcut) {
             return Err(format!(
                 "`{accelerator}` is already bound to {:?}",
@@ -77,6 +107,13 @@ pub fn apply(app: &AppHandle) -> Result<Vec<String>, String> {
         .filter(|b| !refused.contains(&b.shortcut.to_string()))
         .collect();
 
+    if app
+        .try_state::<crate::assistant::AssistantState>()
+        .is_some()
+    {
+        crate::assistant::configure_holds(app)?;
+    }
+
     Ok(refused)
 }
 
@@ -95,6 +132,37 @@ pub fn action_for(app: &AppHandle, shortcut: &Shortcut) -> Option<Action> {
 mod tests {
     use super::*;
     use crate::config::Settings;
+
+    #[test]
+    fn native_holds_are_validated_without_registering_carbon_shortcuts() {
+        let mut settings = Settings::default();
+        settings.shortcuts.transcribe = "Hold:Fn".into();
+        settings.shortcuts.assistant = "Hold:RightOption".into();
+        assert_eq!(bindings(&settings).unwrap().len(), 2);
+        settings.shortcuts.assistant = "Hold:Fn".into();
+        assert!(bindings(&settings).unwrap_err().contains("already bound"));
+        settings.shortcuts.assistant = "Hold:Unknown".into();
+        assert!(bindings(&settings).is_err());
+        settings.shortcuts.assistant = "Hold:Escape".into();
+        settings.shortcuts.speak = "Escape".into();
+        assert!(bindings(&settings).is_err());
+        settings.shortcuts.speak = "Hold:LeftOption".into();
+        assert!(bindings(&settings).is_err());
+    }
+
+    #[test]
+    fn hold_shortcuts_are_optional_and_share_collision_validation() {
+        let mut settings: Settings =
+            serde_json::from_str(r#"{"shortcuts":{"speak":"Cmd+Shift+S","stop":"Cmd+Shift+X"}}"#)
+                .unwrap();
+        assert!(settings.shortcuts.transcribe.is_empty());
+        assert!(settings.shortcuts.assistant.is_empty());
+        settings.shortcuts.transcribe = "Cmd+Shift+D".into();
+        settings.shortcuts.assistant = "Cmd+Shift+A".into();
+        assert_eq!(bindings(&settings).unwrap().len(), 4);
+        settings.shortcuts.assistant = settings.shortcuts.transcribe.clone();
+        assert!(bindings(&settings).is_err());
+    }
 
     /// The shipped defaults must actually parse: a typo here means a silently
     /// hotkey-less app on first launch.

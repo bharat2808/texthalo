@@ -126,7 +126,7 @@ fn write_credentials(credentials: &DesktopCredentials) -> Result<(), String> {
         Some(credentials.clone());
     Ok(())
 }
-async fn access_token(force_refresh: bool) -> Result<String, String> {
+pub(crate) async fn access_token(force_refresh: bool) -> Result<String, String> {
     let _guard = TOKEN_LOCK.lock().await;
     let mut credentials = read_credentials()?;
     if force_refresh || credentials.expires_at <= unix_now().saturating_add(45) {
@@ -175,6 +175,7 @@ fn unix_now() -> u64 {
 }
 pub fn clear_token() -> Result<(), String> {
     let app = secure_storage_app()?;
+    crate::assistant::cancel(app);
     app.secure_storage()
         .remove_item(app.clone(), storage_request(None))
         .map_err(|_| "Could not remove the saved sign-in from secure storage.".to_string())?;
@@ -228,7 +229,7 @@ async fn request(
         "Could not reach the TextHalo service. Check your internet connection.".to_string()
     })
 }
-async fn json_request(
+pub(crate) async fn json_request(
     method: reqwest::Method,
     path: &str,
     body: Option<Value>,
@@ -426,7 +427,8 @@ async fn exchange_desktop_code(
 }
 
 #[tauri::command]
-pub async fn desktop_sign_out() -> Result<(), String> {
+pub async fn desktop_sign_out(app: AppHandle) -> Result<(), String> {
+    crate::assistant::cancel(&app);
     if let Ok(credentials) = read_credentials() {
         let _ = reqwest::Client::new()
             .post(format!("{}/v1/desktop/sessions/revoke", origin()?))
@@ -438,6 +440,9 @@ pub async fn desktop_sign_out() -> Result<(), String> {
 }
 #[tauri::command]
 pub async fn desktop_account() -> Result<Value, String> {
+    if let Ok(app) = secure_storage_app() {
+        tauri::async_runtime::spawn(crate::hosted_assistant::recover(app.clone()));
+    }
     json_request(reqwest::Method::GET, "/v1/account", None).await
 }
 #[tauri::command]
@@ -698,6 +703,8 @@ enum StreamEvent {
     Ready {
         #[serde(rename = "sessionId")]
         session_id: String,
+        #[serde(rename = "inputMode")]
+        input_mode: Option<String>,
     },
     AwaitingPlayback {
         #[serde(rename = "nextChunkIndex")]
@@ -707,6 +714,8 @@ enum StreamEvent {
     },
     Finished {
         status: String,
+        #[serde(default, rename = "creditLimited")]
+        credit_limited: bool,
         #[serde(rename = "availableCredits")]
         _available_credits: Option<u64>,
     },
@@ -731,6 +740,8 @@ struct StreamStart<'a> {
     model_id: &'a str,
     #[serde(rename = "enhanceText")]
     enhance_text: bool,
+    #[serde(rename = "inputMode", skip_serializing_if = "Option::is_none")]
+    input_mode: Option<&'static str>,
 }
 
 pub struct SpeechHistory {
@@ -738,10 +749,10 @@ pub struct SpeechHistory {
     pub source: crate::capture::SourceMetadata,
 }
 
-pub async fn stream_speech(
+pub async fn stream_speech_input(
     app: AppHandle,
     job_id: u64,
-    text: String,
+    input: crate::speech_input::SpeechInput,
     voice_id: String,
     model_id: String,
     enhance: bool,
@@ -756,7 +767,7 @@ pub async fn stream_speech(
     tokio::select! {
         biased;
         _ = cancelled => Ok(()),
-        result = stream_speech_inner(app, job_id, text, voice_id, model_id, enhance, history) => result,
+        result = stream_speech_inner(app, job_id, input, voice_id, model_id, enhance, history) => result,
     }
 }
 
@@ -765,7 +776,7 @@ pub async fn stream_speech(
 async fn stream_speech_inner(
     app: AppHandle,
     job_id: u64,
-    text: String,
+    input: crate::speech_input::SpeechInput,
     voice_id: String,
     model_id: String,
     enhance: bool,
@@ -775,6 +786,19 @@ async fn stream_speech_inner(
         enabled: archive,
         source,
     } = history;
+    use crate::speech_input::{SpeechEvent, SpeechInput};
+    use std::sync::mpsc::TryRecvError;
+    let (mut upload, input) = match input {
+        SpeechInput::Complete(text) => {
+            let text = crate::speech_input::normalize(&text);
+            let mut upload = crate::hosted_input::Upload::default();
+            upload.append(&text)?;
+            upload.finish()?;
+            (upload, None)
+        }
+        SpeechInput::Stream(receiver) => (crate::hosted_input::Upload::default(), Some(receiver)),
+    };
+    let incremental = input.is_some();
     let token = access_token(false).await?;
     let base = origin()?;
     let url = base
@@ -791,10 +815,11 @@ async fn stream_speech_inner(
         kind: "start",
         token: &token,
         key: uuid::Uuid::new_v4().to_string(),
-        text: &text,
+        text: &upload.text,
         voice_id: &voice_id,
         model_id: &model_id,
         enhance_text: enhance,
+        input_mode: incremental.then_some("incremental"),
     };
     socket
         .send(Message::Text(
@@ -809,24 +834,66 @@ async fn stream_speech_inner(
     if !app_state.job.lock().unwrap().is_current(job_id) {
         return Ok(());
     }
-    app_state.spoken.activate_pcm(player.clone());
     let history_root = archive.then(|| crate::history_dir(&app).ok()).flatten();
     // One recorder for the entire request, across all provider chunks.
     let mut recorder = history_root.as_deref().and_then(|dir| {
-        crate::history::ArchivedRecording::new(dir, "Fish Audio", &voice_id, &text, &source).ok()
+        crate::history::ArchivedRecording::new(dir, "Fish Audio", &voice_id, &upload.text, &source)
+            .ok()
     });
     let mut buffer = Vec::<u8>::new();
-    let mut received = 0u64;
+    let mut ready = false;
+    let mut pending_ack: Option<(u64, u64)> = None;
+    let mut tick = tokio::time::interval(Duration::from_millis(20));
     let mut is_started = false;
     let mut finished = false;
-    while let Some(message) = socket.next().await {
+    let mut credit_limited = false;
+    loop {
+        // Poll the bounded native input without blocking the async socket reader.
+        // The same tick grants playback lookahead; neither direction waits on the other.
+        let message = tokio::select! {
+            message = socket.next() => match message { Some(message) => message, None => break },
+            _ = tick.tick(), if (incremental && ready && !upload.finished) || pending_ack.is_some() => {
+                if let Some((index, bytes)) = pending_ack {
+                    let played = player.played_audio_bytes();
+                    if bytes.saturating_sub(played) <= 96_000 {
+                        socket.send(Message::Text(json!({"type":"continue","nextChunkIndex":index,"playedAudioBytes":played.min(bytes)}).to_string().into()))
+                            .await.map_err(|_| "Could not continue the live speech stream.".to_string())?;
+                        pending_ack = None;
+                    }
+                }
+                if ready && !upload.finished {
+                    if let Some(input) = input.as_ref() {
+                        match input.try_recv() {
+                            Ok(SpeechEvent::Delta(delta)) => {
+                                let delta = crate::speech_input::normalize(&delta);
+                                let sequence = upload.append(&delta)?;
+                                socket.send(Message::Text(json!({"type":"append_text","sequence":sequence,"text":delta}).to_string().into()))
+                                    .await.map_err(|_| "Could not send generated speech text.".to_string())?;
+                                if let Some(recorder) = recorder.as_mut() { recorder.set_text(upload.text.clone()); }
+                                let mut job = app_state.job.lock().unwrap();
+                                if job.is_current(job_id) { job.status.chars = Some(upload.text.chars().count()); }
+                            }
+                            Ok(SpeechEvent::Finish) => {
+                                let sequence = upload.finish()?;
+                                socket.send(Message::Text(json!({"type":"finish_input","sequence":sequence}).to_string().into()))
+                                    .await.map_err(|_| "Could not finish generated speech text.".to_string())?;
+                            }
+                            #[cfg(test)]
+                            Ok(SpeechEvent::Error(error)) => return Err(error),
+                            Err(TryRecvError::Disconnected) => return Err("Generation ended before the answer was complete.".into()),
+                            Err(TryRecvError::Empty) => {}
+                        }
+                    }
+                }
+                continue;
+            }
+        };
         if !app_state.job.lock().unwrap().is_current(job_id) {
             let _ = socket.close(None).await;
             return Ok(());
         }
         match message.map_err(|_| "The live speech connection was interrupted.".to_string())? {
             Message::Binary(bytes) => {
-                received = received.saturating_add(bytes.len() as u64);
                 buffer.extend_from_slice(&bytes);
                 let even = buffer.len() & !1;
                 let samples = buffer[..even]
@@ -840,16 +907,21 @@ async fn stream_speech_inner(
                     if let Some(recorder) = recorder.as_mut() {
                         recorder.write(&samples);
                     }
+                    let mut job = app_state.job.lock().unwrap();
+                    if !job.is_current(job_id) {
+                        return Ok(());
+                    }
                     player.push(samples, false);
                     if !is_started {
+                        app_state.spoken.activate_pcm(player.clone());
                         player.start()?;
                         is_started = true;
-                        let chars = text.chars().count();
-                        let mut job = app_state.job.lock().unwrap();
-                        if job.is_current(job_id) {
-                            job.set(crate::Phase::Speaking, None, Some(chars));
-                            let _ = app.emit("kiegen:status", &job.status);
-                        }
+                        job.set(
+                            crate::Phase::Speaking,
+                            None,
+                            Some(upload.text.chars().count()),
+                        );
+                        let _ = app.emit("kiegen:status", &job.status);
                     }
                 }
             }
@@ -858,7 +930,17 @@ async fn stream_speech_inner(
                 match serde_json::from_value::<StreamEvent>(value.clone())
                     .unwrap_or(StreamEvent::Other)
                 {
-                    StreamEvent::Ready { session_id } => {
+                    StreamEvent::Ready {
+                        session_id,
+                        input_mode,
+                    } => {
+                        if incremental && input_mode.as_deref() != Some("incremental") {
+                            return Err(
+                                "This speech server does not support streamed assistant text yet."
+                                    .into(),
+                            );
+                        }
+                        ready = true;
                         let mut job = app_state.job.lock().unwrap();
                         if job.is_current(job_id) {
                             job.set(
@@ -867,7 +949,7 @@ async fn stream_speech_inner(
                                     "Connected · {}",
                                     &session_id[..8.min(session_id.len())]
                                 )),
-                                Some(text.chars().count()),
+                                Some(upload.text.chars().count()),
                             );
                             let _ = app.emit("kiegen:status", &job.status);
                         }
@@ -876,22 +958,22 @@ async fn stream_speech_inner(
                         next_chunk_index,
                         audio_bytes_sent,
                     } => {
-                        while player.played_audio_bytes() < audio_bytes_sent
-                            && app_state.job.lock().unwrap().is_current(job_id)
-                        {
-                            tokio::time::sleep(Duration::from_millis(30)).await;
+                        if pending_ack.is_some() {
+                            return Err(
+                                "The speech server sent overlapping playback requests.".into()
+                            );
                         }
-                        if !app_state.job.lock().unwrap().is_current(job_id) {
-                            let _ = socket.close(None).await;
-                            return Ok(());
-                        }
-                        let played = player.played_audio_bytes();
-                        socket.send(Message::Text(json!({"type":"continue","nextChunkIndex":next_chunk_index,"playedAudioBytes":played}).to_string().into())).await.map_err(|_|"Could not continue the live speech stream.".to_string())?;
+                        pending_ack = Some((next_chunk_index, audio_bytes_sent));
                     }
-                    StreamEvent::Finished { status, .. } => {
-                        if status != "completed" {
+                    StreamEvent::Finished {
+                        status,
+                        credit_limited: limited,
+                        ..
+                    } => {
+                        if status != "completed" || (!upload.finished && !limited) {
                             return Err("The live speech request did not complete.".into());
                         }
+                        credit_limited = limited;
                         finished = true;
                         break;
                     }
@@ -918,6 +1000,12 @@ async fn stream_speech_inner(
     player.push(Vec::new(), true);
     while player.is_playing()? && app_state.job.lock().unwrap().is_current(job_id) {
         tokio::time::sleep(Duration::from_millis(40)).await;
+    }
+    if credit_limited && app_state.job.lock().unwrap().is_current(job_id) {
+        return Err(api_error(
+            reqwest::StatusCode::PAYMENT_REQUIRED,
+            &json!({"error":"insufficient_credits"}),
+        ));
     }
     if app_state.job.lock().unwrap().is_current(job_id) {
         if let Some(recorder) = recorder {

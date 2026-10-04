@@ -29,6 +29,8 @@ pub enum CaptureMode {
 pub struct Shortcuts {
     pub speak: String,
     pub stop: String,
+    pub transcribe: String,
+    pub assistant: String,
 }
 
 impl Default for Shortcuts {
@@ -36,6 +38,8 @@ impl Default for Shortcuts {
         Self {
             speak: "Cmd+Shift+S".to_string(),
             stop: "Cmd+Shift+X".to_string(),
+            transcribe: String::new(),
+            assistant: String::new(),
         }
     }
 }
@@ -135,6 +139,31 @@ impl Default for ChatterboxSettings {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
+pub struct AssistantSettings {
+    pub transcription_engine: String,
+    pub whisper_model: String,
+    pub language: String,
+    pub instruction: String,
+    pub dictation_output: String,
+    pub provider: String,
+    pub cloud_consent_version: Option<u32>,
+}
+impl Default for AssistantSettings {
+    fn default() -> Self {
+        Self {
+            transcription_engine: "whisper".into(),
+            whisper_model: "small".into(),
+            language: "en-US".into(),
+            instruction: String::new(),
+            dictation_output: "insert".into(),
+            provider: "local".into(),
+            cloud_consent_version: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Settings {
     /// Whether the macOS Accessibility prompt has been requested on a previous launch.
     pub accessibility_prompted: bool,
@@ -144,6 +173,7 @@ pub struct Settings {
     /// Whether TextHalo should register as a macOS login item.
     pub launch_at_login: bool,
     pub shortcuts: Shortcuts,
+    pub assistant: AssistantSettings,
     /// Which engine speaks. Apple unless the user opts into a local model.
     pub engine: Engine,
     pub kokoro: KokoroSettings,
@@ -187,6 +217,7 @@ impl Default for Settings {
             onboarding_completed: false,
             launch_at_login: false,
             shortcuts: Shortcuts::default(),
+            assistant: AssistantSettings::default(),
             engine: Engine::default(),
             kokoro: KokoroSettings::default(),
             chatterbox: ChatterboxSettings::default(),
@@ -223,7 +254,14 @@ pub fn load(app: &AppHandle) -> Settings {
 fn parse_settings(raw: &str) -> Result<Settings, serde_json::Error> {
     let value: serde_json::Value = serde_json::from_str(raw)?;
     let has_onboarding_state = value.get("onboarding_completed").is_some();
+    let has_transcription_engine = value
+        .get("assistant")
+        .and_then(|a| a.get("transcription_engine"))
+        .is_some();
     let mut settings: Settings = serde_json::from_value(value)?;
+    if !has_transcription_engine {
+        settings.assistant.transcription_engine = "apple".into();
+    }
     if !has_onboarding_state {
         settings.onboarding_completed = true;
     }
@@ -243,6 +281,29 @@ pub fn save(app: &AppHandle, settings: &Settings) -> Result<(), String> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn transcription_defaults_and_migration() {
+        assert_eq!(
+            Settings::default().assistant.transcription_engine,
+            "whisper"
+        );
+        assert_eq!(Settings::default().assistant.whisper_model, "small");
+        assert_eq!(
+            parse_settings(r#"{"assistant":{"language":"hi-IN"}}"#)
+                .unwrap()
+                .assistant
+                .transcription_engine,
+            "apple"
+        );
+        let saved = serde_json::to_string(&Settings::default()).unwrap();
+        assert_eq!(
+            parse_settings(&saved)
+                .unwrap()
+                .assistant
+                .transcription_engine,
+            "whisper"
+        );
+    }
     /// The default must stay Apple. If this ever flips, a fresh install starts by asking
     /// the user for a 325 MB (or 2 GB) download before it can say a word.
     #[test]
@@ -347,6 +408,26 @@ mod tests {
     fn legacy_settings_are_migrated_without_showing_onboarding() {
         let settings = parse_settings(r#"{"accessibility_prompted": true}"#).unwrap();
         assert!(settings.onboarding_completed);
+    }
+
+    #[test]
+    fn legacy_assistant_remains_local_without_cloud_consent() {
+        let settings: Settings =
+            serde_json::from_str(r#"{"assistant":{"language":"fr-FR"}}"#).unwrap();
+        assert_eq!(settings.assistant.provider, "local");
+        assert_eq!(settings.assistant.cloud_consent_version, None);
+        assert_eq!(settings.assistant.language, "fr-FR");
+    }
+
+    #[test]
+    fn assistant_cloud_choice_and_consent_round_trip() {
+        let mut settings = Settings::default();
+        settings.assistant.provider = "cloud".into();
+        settings.assistant.cloud_consent_version = Some(1);
+        let loaded: Settings =
+            serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+        assert_eq!(loaded.assistant.provider, "cloud");
+        assert_eq!(loaded.assistant.cloud_consent_version, Some(1));
     }
 
     #[test]

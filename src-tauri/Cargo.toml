@@ -4,7 +4,8 @@ version = "0.1.12"
 description = "Speak any selected text, from anywhere in macOS"
 authors = ["bharat2808 <vermabhrat642@gmail.com>"]
 edition = "2021"
-license = "Apache-2.0"
+license-file = "../LICENSE-TEXTHALO.md"
+publish = false
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -31,6 +32,9 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "mul
 tokio = { version = "1", features = ["time", "sync", "fs", "net", "io-util", "macros"] }
 tokio-tungstenite = { version = "0.26", features = ["connect", "rustls-tls-webpki-roots"] }
 futures-util = "0.3"
+whisper-rs = { version = "=0.16.0", default-features = false }
+sha2 = "0.10"
+base64 = "0.22"
 url = "2"
 uuid = { version = "1", features = ["v4"] }
 tauri-plugin-updater = "2"
@@ -39,7 +43,7 @@ tauri-plugin-secure-storage = "1.5.0"
 tauri-plugin-autostart = "2"
 
 # Selection capture + synthetic key events.
-# Invariant: dependencies are compatible with distributing kiegen under Apache-2.0. No GPL.
+# Invariant: dependency licenses remain independent of TextHalo’s source-available terms. No GPL.
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = "0.25.0"
 core-foundation = "0.10.1"
@@ -51,8 +55,7 @@ libc = "0.2"
 # Weight downloads. Both are already in the tree via `ort-sys`, so declaring them adds no
 # crates; `default-features` matches what ort-sys already enabled (`rustls`, `gzip`).
 ureq = "3.4"
-sha2 = "0.10"
-base64 = "0.22"
+whisper-rs = { version = "=0.16.0", default-features = false, features = ["metal"] }
 # ONNX Runtime bindings for the opt-in Kokoro engine. `download-binaries` vendors the
 # runtime at build time so the engine works out of the box; switching to `load-dynamic`
 # would keep the base bundle small and move the runtime onto Kokoro's install path.

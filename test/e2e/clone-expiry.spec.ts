@@ -60,7 +60,7 @@ async function openDesktop(page: Page, failExpiredList = false) {
     ` });
   });
   await page.goto("/");
-  await page.getByRole("button", { name: "Voice", exact: true }).click();
+  await page.getByRole("button", { name: "Voices", exact: true }).click();
   const clone = page.getByRole("button", { name: /My test voice/ });
   await expect(clone).toBeVisible();
   await expect(clone).not.toHaveAttribute("aria-disabled", "true");

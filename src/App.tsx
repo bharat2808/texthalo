@@ -1,3 +1,10 @@
+import TranscriptionSource from "./TranscriptionSource";
+import Row from "./SelectionRow";
+import { createPortal } from "react-dom";
+import { serviceReadiness } from "./serviceReadiness";
+import TranscriptionHistory from "./TranscriptionHistory";
+import GenerationHistory from "./GenerationHistory";
+import AssistantSettings, { PermissionsSettings, TranscriptionSettings, TaskReadiness, useAvailability, defaultAssistantPreferences, type AssistantPreferences } from "./AssistantSettings";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
@@ -7,10 +14,18 @@ import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import SetupWizard, { type SetupPlansResponse } from "./SetupWizard";
+import textHaloLicense from "../LICENSE-TEXTHALO.md?raw";
 import appLogo from "../src-tauri/icons/icon.png";
 import "./App.css";
 
 /* ── types mirroring the Rust side ─────────────────────────────────── */
+
+type ShortcutRole = "speak" | "stop" | "transcribe" | "assistant";
+
+const shortcutLabels: Record<ShortcutRole, string> = { speak: "Listen", stop: "Stop", transcribe: "Dictate", assistant: "Assistant" };
+const holdKeys: Record<string, string> = { "Hold:Fn": "Hold Fn", "Hold:LeftOption": "Hold Left Option", "Hold:RightOption": "Hold Right Option", "Hold:Escape": "Hold Escape" };
+const holdKeySymbols: Record<string, string> = { "Hold:Fn": "fn", "Hold:LeftOption": "⌥", "Hold:RightOption": "⌥", "Hold:Escape": "⎋" };
+const shortcutLabel = (key: string) => holdKeys[key] ?? key;
 
 type CaptureMode = "ax_then_copy" | "ax_only" | "copy_only";
 
@@ -127,7 +142,8 @@ type Settings = {
   accessibility_prompted: boolean;
   onboarding_completed: boolean;
   launch_at_login: boolean;
-  shortcuts: { speak: string; stop: string };
+  shortcuts: { speak: string; stop: string; transcribe: string; assistant: string };
+  assistant: AssistantPreferences;
   engine: EngineId;
   kokoro: KokoroSettings;
   chatterbox: ChatterboxSettings;
@@ -144,7 +160,7 @@ type UiState = {
   voices: Voice[];
   engines: EngineInfo[];
   trusted: boolean;
-  secure_input: boolean;
+  focused_password_field: boolean;
   speaking: boolean;
   refused_shortcuts: string[];
   system_language: string;
@@ -154,7 +170,7 @@ type UiState = {
 type Phase = "idle" | "capturing" | "preparing" | "speaking" | "error";
 type Status = { phase: Phase; message?: string | null; chars?: number | null };
 
-type Tab = "general" | "voice" | "account" | "shortcuts" | "capture" | "history";
+type Tab = "home" | "general" | "voice" | "account" | "shortcuts" | "capture" | "history" | "permissions" | "transcription" | "assistant";
 
 /* ── icons (16×16, currentColor) ───────────────────────────────────── */
 
@@ -276,6 +292,18 @@ export default function App() {
 }
 
 const Icon = {
+  sparkles: () => (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="m6 3 1.5 4.5L12 9l-4.5 1.5L6 15l-1.5-4.5L0 9l4.5-1.5L6 3Z" transform="translate(1 -1) scale(.9)" />
+      <path d="M12.5 1v4M10.5 3h4" />
+    </svg>
+  ),
+  person: () => (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" aria-hidden="true">
+      <circle cx="8" cy="4.75" r="2.75" />
+      <path d="M2.5 14v-1a5.5 4 0 0 1 11 0v1" />
+    </svg>
+  ),
   gear: () =>
     ico([
       "M8 4.754a3.246 3.246 0 1 0 0 6.492 3.246 3.246 0 0 0 0-6.492M5.754 8a2.246 2.246 0 1 1 4.492 0 2.246 2.246 0 0 1-4.492 0",
@@ -523,54 +551,6 @@ function Card({
   );
 }
 
-function Row({
-  selected,
-  glyph,
-  title,
-  subtitle,
-  mono,
-  badge,
-  disabled,
-  onSelect,
-  trailing,
-}: {
-  selected: boolean;
-  glyph: React.ReactNode;
-  title: string;
-  subtitle?: string;
-  mono?: boolean;
-  badge?: string;
-  disabled?: boolean;
-  onSelect: () => void;
-  trailing?: React.ReactNode;
-}) {
-  return (
-    <div
-      className={selected ? "sel-row selected" : "sel-row"}
-      role="button"
-      tabIndex={disabled ? -1 : 0}
-      aria-pressed={selected}
-      /* `:disabled` cannot match a div, so the attribute is what carries the state. */
-      aria-disabled={disabled ? true : undefined}
-      onClick={disabled ? undefined : onSelect}
-      onKeyDown={(event) => {
-        if (disabled || event.target !== event.currentTarget) return;
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault();
-          onSelect();
-        }
-      }}
-    >
-      <span className="glyph">{glyph}</span>
-      <span className="sel-text">
-        <span className={mono ? "sel-title mono" : "sel-title"}>{title}</span>
-        {subtitle ? <span className="sel-subtitle">{subtitle}</span> : null}
-      </span>
-      {badge ? <span className="sel-badge">{badge}</span> : null}
-      {trailing}
-    </div>
-  );
-}
 
 function Note({
   kind,
@@ -592,8 +572,11 @@ function Note({
 /* ── app ───────────────────────────────────────────────────────────── */
 
 function MainApp() {
+  const serviceAvailability = useAvailability();
+  const [serviceTooltip, setServiceTooltip] = useState<{ id: string; x: number; y: number } | null>(null);
   const [state, setState] = useState<UiState | null>(null);
   const [appVersion, setAppVersion] = useState<string | null>(null);
+  const [historyView, setHistoryView] = useState<"audio" | "transcripts" | "assistant">("audio");
   const [setupOpen, setSetupOpen] = useState(false);
   const [setupRevision, setSetupRevision] = useState(0);
   const accessibilityPromptStarted = useRef(false);
@@ -601,7 +584,7 @@ function MainApp() {
   // than timed out, because the message is the only answer the user gets.
   const [espeakMessage, setEspeakMessage] = useState<string | null>(null);
   const [espeakInstalling, setEspeakInstalling] = useState(false);
-  const [tab, setTab] = useState<Tab>("general");
+  const [tab, setTab] = useState<Tab>("home");
   const [status, setStatus] = useState<Status>({ phase: "idle" });
   const [error, setError] = useState<string | null>(null);
   const [updateAvailable, setUpdateAvailable] = useState<Update | null>(null);
@@ -610,7 +593,9 @@ function MainApp() {
   const [installingUpdate, setInstallingUpdate] = useState(false);
   const [language, setLanguage] = useState<string | null>(null);
   const [showNovelty, setShowNovelty] = useState(false);
-  const [recording, setRecording] = useState<"speak" | "stop" | null>(null);
+  const [shortcutFeedback, setShortcutFeedback] = useState<{ role: ShortcutRole; message: string; error: boolean } | null>(null);
+  const [shortcutSaving, setShortcutSaving] = useState(false);
+  const [recording, setRecording] = useState<ShortcutRole | null>(null);
   const [rateDraft, setRateDraft] = useState<number | null>(null);
   const [install, setInstall] = useState<InstallEvent | null>(null);
   // The last word from adding or deleting a reference voice. Kept rather than timed out: it is
@@ -711,6 +696,11 @@ function MainApp() {
   }, []);
 
   useEffect(() => { void refreshHostedAccount(); }, [refreshHostedAccount]);
+
+  useEffect(() => {
+    const off = listen("texthalo:assistant-usage", () => { void refreshHostedAccount(); });
+    return () => { void off.then(unlisten => unlisten()); };
+  }, [refreshHostedAccount]);
 
   useEffect(() => {
     if (!account) return;
@@ -948,7 +938,7 @@ function MainApp() {
       setEspeakInstalling(installing);
       if (!installing) void refresh();
     });
-    const recovery = listen<"account" | "voice">("texthalo:speech-recovery", (event) => {
+    const recovery = listen<"account" | "voice" | "assistant">("texthalo:speech-recovery", (event) => {
       setTab(event.payload);
       void refresh();
     });
@@ -969,21 +959,14 @@ function MainApp() {
     };
   }, [refresh]);
 
-  useEffect(() => {
-    if (
-      !state || state.trusted ||
-      state.settings.accessibility_prompted || accessibilityPromptStarted.current
-    ) return;
-    void requestAccessibility();
-  }, [state, requestAccessibility]);
-
   const save = useCallback(
     async (patch: Partial<Settings>) => {
       const current = latestState.current;
-      if (!current) return;
+      if (!current) return false;
       const next: Settings = { ...current.settings, ...patch };
       latestState.current = { ...current, settings: next };
-      setState({ ...current, settings: next }); // optimistic: a click must not lag
+      // Finishing setup waits for persistence before replacing the wizard.
+      if (!patch.onboarding_completed) setState({ ...current, settings: next });
       const revision = ++saveRevision.current;
       pendingSaves.current++;
       const request = saveTail.current.then(() => invoke<UiState>("save_settings", { settings: next }));
@@ -995,8 +978,11 @@ function MainApp() {
           setState(updated);
           setError(null);
         }
+        return true;
       } catch (e) {
         setError(String(e));
+        if (revision === saveRevision.current) latestState.current = current;
+        return false;
       } finally {
         pendingSaves.current--;
         if (pendingSaves.current === 0) void refresh();
@@ -1043,7 +1029,7 @@ function MainApp() {
       }).catch((cause) => setAccountError(cause instanceof Error ? cause.message : String(cause)));
     }
     let current = true;
-    const shouldLoadClones = account && (tab === "account" || (tab === "voice" && state?.settings.engine === "fish"));
+    const shouldLoadClones = account && tab === "voice";
     if (shouldLoadClones) void invoke<{items: HostedClone[]}>("desktop_clones").then((v) => {
       if (!current) return;
       setHostedClones(v.items);
@@ -1178,29 +1164,80 @@ function MainApp() {
     voice.unavailable?.includes("espeak-ng"),
   ).length;
 
-  /* Keyboard recording for the shortcut rows. */
+  const saveShortcut = useCallback(async (role: ShortcutRole, accelerator: string) => {
+    const current = latestState.current;
+    if (!current) return;
+    const duplicate = accelerator && (Object.keys(current.settings.shortcuts) as ShortcutRole[]).find(other => other !== role && current.settings.shortcuts[other]?.toLowerCase() === accelerator.toLowerCase());
+    if (duplicate) {
+      setShortcutFeedback({ role, error: true, message: `Already used by ${shortcutLabels[duplicate]}. Try another shortcut.` });
+      return;
+    }
+    setRecording(null); setShortcutSaving(true);
+    try {
+      const saved = await save({ shortcuts: { ...current.settings.shortcuts, [role]: accelerator } });
+      const refused = latestState.current?.refused_shortcuts ?? [];
+      setShortcutFeedback({ role, error: !saved || refused.length > 0,
+        message: !saved ? "Could not save this shortcut. Try another combination." : refused.length > 0 ? `macOS could not register ${refused.join(", ")}. Choose another shortcut.` : accelerator ? "Shortcut saved" : "Shortcut cleared" });
+    } finally { setShortcutSaving(false); }
+  }, [save]);
+
+  useEffect(() => { setRecording(null); setShortcutFeedback(null); }, [tab]);
+
+  useEffect(() => {
+    if (!recording) return;
+    // Keep an existing hold binding from starting dictation while choosing a key.
+    void invoke("assistant_control", {command:"hold_suspend"}).catch(() => {});
+    const blur = () => setRecording(null);
+    window.addEventListener("blur", blur);
+    return () => {
+      window.removeEventListener("blur", blur);
+      void invoke("assistant_control", {command:"hold_resume"}).catch(() => {});
+    };
+  }, [recording]);
+
+  /* The same recorder serves feature screens, setup, and Settings. */
   useEffect(() => {
     if (!recording || !state) return;
     const shortcuts = state.settings.shortcuts;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let heldCode = "";
+    const clearHold = () => { clearTimeout(timer); timer = undefined; };
+    const onUp = (event: KeyboardEvent) => {
+      if (event.code !== heldCode) return;
+      clearHold(); heldCode = "";
+      if (event.key === "Escape") { setRecording(null); setShortcutFeedback(null); }
+    };
     const onKey = (event: KeyboardEvent) => {
+      if (event.repeat) return;
+      clearHold();
+      // Keep keyboard navigation and the Cancel button available while recording.
+      if (!event.metaKey && !event.ctrlKey && !event.altKey &&
+          (event.key === "Tab" || (event.target instanceof HTMLButtonElement && ["Enter", " "].includes(event.key)))) return;
       event.preventDefault();
+      const hold = ({Fn:"Hold:Fn",AltLeft:"Hold:LeftOption",AltRight:"Hold:RightOption",Escape:"Hold:Escape"} as Record<string,string>)[event.code];
+      if ((recording === "transcribe" || recording === "assistant") && hold && !event.metaKey && !event.ctrlKey && !event.shiftKey && (event.key === "Alt" || !event.altKey)) {
+        heldCode = event.code;
+        timer = setTimeout(() => { heldCode = ""; void saveShortcut(recording, hold); }, 350);
+        return;
+      }
       if (event.key === "Escape") {
-        setRecording(null);
+        setRecording(null); setShortcutFeedback(null);
         return;
       }
       const accelerator = acceleratorFromEvent(event);
       if (!accelerator) return;
-      setRecording(null);
-      void save({
-        shortcuts:
-          recording === "speak"
-            ? { ...shortcuts, speak: accelerator }
-            : { ...shortcuts, stop: accelerator },
-      });
+      const duplicate = (Object.keys(shortcuts) as ShortcutRole[]).find(role => role !== recording && shortcuts[role]?.toLowerCase() === accelerator.toLowerCase());
+      if (duplicate) {
+        setShortcutFeedback({ role: recording, error: true, message: `Already used by ${shortcutLabels[duplicate]}. Try another combination.` });
+        return;
+      }
+      void saveShortcut(recording, accelerator);
     };
     window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
-  }, [recording, save, state]);
+    window.addEventListener("keyup", onUp, true);
+    window.addEventListener("mousedown", clearHold, true);
+    return () => { clearHold(); window.removeEventListener("keydown", onKey, true); window.removeEventListener("keyup", onUp, true); window.removeEventListener("mousedown", clearHold, true); };
+  }, [recording, saveShortcut, state]);
 
   const preview = useCallback(
     (voice: Voice | string | null) => {
@@ -1236,29 +1273,19 @@ function MainApp() {
   );
 
   if (setupOpen || !settings.onboarding_completed) {
-    const kokoroEngine = engines.find((engine) => engine.id === "kokoro");
     return <SetupWizard
       key={setupRevision}
       settings={settings}
       voices={voices}
       trusted={state.trusted}
       recordingShortcut={recording === "speak"}
-      kokoroReady={kokoroEngine?.can_speak ?? false}
-      kokoroDownloadBytes={kokoroEngine?.download_bytes ?? 346_258_435}
-      kokoroInstall={install?.engine === "kokoro" ? install : null}
-      onSave={save}
+      onSave={async (patch) => { if (!await save(patch)) throw new Error("Could not save your preferences. Please try again."); }}
+      externalError={error}
       onRequestAccessibility={() => { void requestAccessibility(); }}
-      onOpenAccessibilitySettings={() => { void invoke("open_accessibility_settings"); }}
-      onPreviewVoice={(voice) => preview(voice)}
-      onChooseEngine={(engine) => { void save({ engine }); }}
-      onInstallKokoro={() => {
-        setInstall(null);
-        void invoke("install_engine", { engine: "kokoro" }).catch((cause) => setError(String(cause)));
-      }}
+      onOpenAccessibilitySettings={() => { void invoke("open_accessibility_settings").catch(cause => setError(String(cause))); }}
+      onPreviewVoice={(voice) => invoke("preview_voice", { engine: "apple", voice, rate: settings.rate, text: null })}
       onRecordShortcut={() => setRecording("speak")}
-      onFinish={() => setSetupOpen(false)}
-      onLoadPlans={() => invoke<SetupPlansResponse>("desktop_billing_plans")}
-      onOpenPlans={() => { void openUrl(`${websiteUrl}/pricing/`); }}
+      onFinish={() => { setSetupOpen(false); setTab("home"); }}
     />;
   }
 
@@ -1433,16 +1460,74 @@ function MainApp() {
               kind: "info" as const,
               text: status.chars ? `Speaking ${status.chars} characters` : "Speaking…",
             }
-          : { kind: "secondary" as const, text: "Idle" };
+          : { kind: "secondary" as const, text: "Ready" };
 
+  const enableAccessibility = async () => {
+    if (settings.accessibility_prompted) {
+      await invoke("open_accessibility_settings");
+    } else {
+      const next = await invoke<UiState>("request_accessibility");
+      latestState.current = next;
+      setState(next);
+    }
+  };
+
+  const shortcutControl = (role: ShortcutRole) => <div className="shortcut-control">
+    <div className="task-shortcut">
+      <kbd aria-live="polite">{recording === role ? "Press a key combination…" : shortcutLabel(settings.shortcuts[role]) || "No shortcut yet"}</kbd>
+      <button className="plain" disabled={shortcutSaving} onClick={() => { setShortcutFeedback(null); setRecording(recording === role ? null : role); }}>{recording === role ? "Cancel" : "Change shortcut"}</button>
+      {(role === "transcribe" || role === "assistant") && settings.shortcuts[role] && recording !== role ? <button className="text" disabled={shortcutSaving} onClick={() => void saveShortcut(role, "")}>Clear shortcut</button> : null}
+    </div>
+    {recording === role ? <>
+      {(role === "transcribe" || role === "assistant") && <div className="inline" style={{flexWrap:"wrap", marginTop:8}}>{Object.entries(holdKeys).map(([key,label]) => <button className="plain hold-key-button" key={key} disabled={shortcutSaving} onClick={() => void saveShortcut(role,key)}><span className="hold-key-symbol" aria-hidden="true">{holdKeySymbols[key]}</span>{label}</button>)}</div>}
+      <p className="card-note">{role === "transcribe" || role === "assistant" ? "Choose a hold key, hold one for a moment, or press a key combination. Tap Esc to cancel." : "Press your new shortcut. Esc to cancel."}</p>
+    </> : null}
+    {settings.shortcuts[role]?.startsWith("Hold:") && <p className="card-note">Hold for 0.35 seconds to speak. Release to finish.{settings.shortcuts[role] === "Hold:Escape" ? " Quick Escape taps take effect on release." : " Other keys or clicks cancel the hold."}{settings.shortcuts[role] === "Hold:Fn" ? " If the Globe key also opens emoji or dictation, change its action in macOS Keyboard settings." : ""}</p>}
+    {settings.shortcuts[role]?.startsWith("Hold:") && serviceAvailability.availability.holdError && <p role="alert" className="shortcut-error">{serviceAvailability.availability.holdError}</p>}
+    {shortcutFeedback?.role === role ? <p className={shortcutFeedback.error ? "shortcut-error" : "card-note"} role={shortcutFeedback.error ? "alert" : "status"}>{shortcutFeedback.message}</p> : null}
+  </div>;
+
+  const settingsTabs: { id: Tab; title: string }[] = [
+    { id: "general", title: "General" },
+    { id: "shortcuts", title: "Shortcuts" },
+    { id: "permissions", title: "Permissions" },
+    { id: "capture", title: "Text capture" },
+  ];
+  const inSettings = settingsTabs.some((entry) => entry.id === tab);
   const tabs: { id: Tab; title: string; icon: React.ReactNode }[] = [
-    { id: "general", title: "General", icon: Icon.gear() },
-    { id: "voice", title: "Voice", icon: Icon.speaker() },
-    { id: "account", title: "Account", icon: Icon.gear() },
-    { id: "shortcuts", title: "Shortcuts", icon: Icon.command() },
-    { id: "capture", title: "Capture", icon: Icon.textCursor() },
+    { id: "home", title: "Home", icon: Icon.box() },
+    { id: "voice", title: "Voices", icon: Icon.speaker() },
+    { id: "transcription", title: "Dictate", icon: Icon.textCursor() },
+    { id: "assistant", title: "Assistant", icon: Icon.sparkles() },
     { id: "history", title: "History", icon: Icon.history() },
   ];
+
+  const readiness = serviceReadiness({
+    availability: serviceAvailability.availability, error: serviceAvailability.error,
+    trusted: state.trusted, focusedPasswordField: state.focused_password_field,
+    shortcuts: settings.shortcuts, refused: state.refused_shortcuts,
+    preferences: settings.assistant ?? defaultAssistantPreferences, engine: activeEngine,
+  });
+
+  const readinessIcon = (id: string, label: string) => {
+    const reasons = readiness[id];
+    const checking = reasons.length > 0 && reasons.every(reason => reason.startsWith("Checking "));
+    const statusLabel = checking ? "Checking…" : reasons.length ? "Not ready" : "Ready";
+    const show = (element: HTMLElement) => {
+      const rect = element.getBoundingClientRect();
+      setServiceTooltip({id, x: Math.max(12, Math.min(rect.left, window.innerWidth - 300)), y: Math.min(rect.bottom + 6, window.innerHeight - 240)});
+    };
+    return <button type="button" className={`service-status ${reasons.length ? "not-ready" : "ready"}`}
+      aria-label={`${label}: ${statusLabel}`} title={reasons.join("\n") || "Ready to use"}
+      aria-description={reasons.join(" ") || "Ready to use"}
+      onMouseEnter={event => show(event.currentTarget)} onFocus={event => show(event.currentTarget)}
+      onMouseLeave={() => setServiceTooltip(null)} onBlur={() => setServiceTooltip(null)}
+      onKeyDown={event => { if (event.key === "Escape") setServiceTooltip(null); }}
+      onClick={event => show(event.currentTarget)}>
+      {reasons.length ? Icon.info() : Icon.checkCircle()}
+      {reasons.length > 0 && <span>{statusLabel}</span>}
+    </button>;
+  };
 
   const paidAccountPlans = accountPlans?.filter((plan) => plan.id !== "free") ?? [];
   const activeAccountSubscription = subscriptionIsActive(account?.subscription ?? null) ? account?.subscription ?? null : null;
@@ -1510,18 +1595,25 @@ function MainApp() {
 
   return (
     <div className="settings">
-      <div className="sidebar">
+      {serviceTooltip && createPortal(<div className="service-tooltip" role="tooltip" style={{left: serviceTooltip.x, top: serviceTooltip.y}}>
+        {readiness[serviceTooltip.id]?.join("\n") || "Ready to use"}
+      </div>, document.body)}
+      <nav className="sidebar" aria-label="Main">
+        <div className="sidebar-brand"><img src={appLogo} alt="" /><strong>TextHalo</strong></div>
         {tabs.map((entry) => (
           <button
             key={entry.id}
             className={tab === entry.id ? "sidebar-row active" : "sidebar-row"}
-            onClick={() => setTab(entry.id)}
+            aria-current={tab === entry.id ? "page" : undefined}
+            onClick={() => { setServiceTooltip(null); setTab(entry.id); }}
           >
             {entry.icon}
             <span>{entry.title}</span>
           </button>
         ))}
         <div className="sidebar-spacer" />
+        <button className={`sidebar-row${tab === "account" ? " active" : ""}`} aria-current={tab === "account" ? "page" : undefined} onClick={() => setTab("account")}>{Icon.person()} Account</button>
+        <button className={`sidebar-row${inSettings ? " active" : ""}`} aria-current={inSettings ? "page" : undefined} onClick={() => setTab("general")}>{Icon.gear()} Settings</button>
         {error ? (
           <Note kind="error" icon={Icon.xCircle()}>
             <span className="truncate" title={error}>
@@ -1532,96 +1624,35 @@ function MainApp() {
         <Note kind={statusLine.kind} icon={Icon.info()}>
           <span className="truncate">{statusLine.text}</span>
         </Note>
-      </div>
+      </nav>
       <div className="vertical-rule" />
 
-      <div className="pane">
+      <main className="pane">
+        {inSettings ? <nav className="section-nav" aria-label="Settings">{settingsTabs.map((entry) => <button key={entry.id} className={tab === entry.id ? "active" : ""} aria-current={tab === entry.id ? "page" : undefined} onClick={() => setTab(entry.id)}>{entry.title}</button>)}</nav> : null}
+        {tab === "home" ? <div className="pane-inner home-pane">
+          <header><h1 className="pane-title">Home</h1><p className="home-intro">Listen. Dictate. Get a little help.</p></header>
+          <section className="listen-hero" aria-labelledby="listen-title">
+            <div className="service-heading"><div className="home-eyebrow">LISTEN</div>{readinessIcon("voice", "Voices")}</div>
+            <h2 id="listen-title">Turn text into speech.</h2>
+            <p>Select text in any app, then use your shortcut.</p>
+            <div className="home-voice"><span>{activeEngine?.label ?? "Apple voices"}</span><span>{settings.engine === "fish" ? "Hosted" : "On this Mac"}</span></div>
+            {!state.trusted ? <div className="home-notice"><span>Allow Accessibility to read selected text.</span><button className="plain" onClick={() => void enableAccessibility().catch(cause => setError(String(cause)))}>{settings.accessibility_prompted ? "Open Accessibility Settings" : "Enable access"}</button></div>
+              : activeEngine && !activeEngine.can_speak ? <div className="home-notice"><span>{activeEngine.status}</span><button className="plain" onClick={() => setTab("voice")}>Set up voice</button></div>
+              : !settings.shortcuts.speak || state.refused_shortcuts.includes(settings.shortcuts.speak) ? <div className="home-notice"><span>Choose an available listening shortcut.</span></div>
+              : <p className="ready-label">{state.focused_password_field ? "Leave the password field to start listening." : "Ready when you are"}</p>}
+            {shortcutControl("speak")}
+            <div className="inline"><button className="primary-button" onClick={() => setTab("voice")}>Choose a voice</button><button className="plain" disabled={!activeEngine?.can_speak || state.speaking} onClick={() => preview(settings.engine === "apple" ? settings.voice : activeEngine?.selected_voice ?? null)}>Preview voice</button>{state.speaking ? <button className="plain" onClick={() => void invoke("stop_speaking").catch(cause => setError(String(cause)))}>Stop</button> : null}</div>
+          </section>
+          <div className="home-tasks">
+            <section className="task-card"><div className="service-heading"><h2>Dictate</h2>{readinessIcon("transcription", "Dictate")}</div><p>Speak and put your words into any text field.</p><kbd>{shortcutLabel(settings.shortcuts.transcribe) || "Set up a shortcut"}</kbd><button className="plain" onClick={() => setTab("transcription")}>Set up dictation</button></section>
+            <section className="task-card"><div className="service-heading"><h2>Assistant</h2>{readinessIcon("assistant", "Assistant")}</div><p>Ask to write, edit, or read something aloud.</p><kbd>{shortcutLabel(settings.shortcuts.assistant) || "Set up a shortcut"}</kbd><button className="plain" onClick={() => setTab("assistant")}>Set up Assistant</button></section>
+          </div>
+          <button className="text home-history" onClick={() => setTab("history")}>Open your history</button>
+        </div> : null}
+
         {tab === "general" ? (
           <div className="pane-inner">
             <h1 className="pane-title">General</h1>
-            <p className="pane-subtitle">
-              Select text anywhere, press <span className="mono">{settings.shortcuts.speak}</span>{" "}
-              and it is read aloud. {settings.engine === "fish" ? "Selected text is sent to TextHalo and Fish Audio for hosted speech." : "Local engines process text on this Mac."}
-            </p>
-
-            <Card title="Permission" icon={Icon.textCursor()}>
-              {state.trusted ? (
-                <>
-                  <Note kind="secondary" icon={Icon.checkCircle()}>
-                    Accessibility access granted. TextHalo uses it when you press your Speak
-                    shortcut to capture the selected text.
-                  </Note>
-                  <div className="card-note">
-                    The default method simulates ⌘C and reads the copied selection. macOS
-                    requires Accessibility access to send that keystroke. The clipboard is
-                    temporarily used; its previous text is restored when the restore option is
-                    enabled. Accessibility-based capture methods use this access to read the
-                    selection directly.
-                  </div>
-                </>
-              ) : (
-                <>
-                  <Note kind="warning" icon={Icon.warn()}>
-                    TextHalo needs Accessibility access to capture selected text when you press
-                    your Speak shortcut. macOS requires this permission for the default
-                    simulated ⌘C method.
-                  </Note>
-                  <div className="card-note">
-                    TextHalo does not capture text continuously. The default method briefly uses
-                    the clipboard to read what the focused app copies; its previous text is
-                    restored when the restore option is enabled. You can also choose an
-                    Accessibility-based method that reads the selection directly.
-                  </div>
-                  <div className="inline">
-                    {state.settings.accessibility_prompted ? (
-                      <button
-                        className="plain"
-                        onClick={() => void invoke("open_accessibility_settings")}
-                      >
-                        Open Accessibility Settings…
-                      </button>
-                    ) : (
-                      <button
-                        className="plain"
-                        onClick={() =>
-                          void invoke<UiState>("request_accessibility")
-                            .then((next) => {
-                              latestState.current = next;
-                              setState(next);
-                            })
-                            .catch((cause) => setError(String(cause)))
-                        }
-                      >
-                        Continue to macOS permission prompt…
-                      </button>
-                    )}
-                  </div>
-                  {state.settings.accessibility_prompted ? (
-                    <div className="card-note">
-                      In System Settings, switch <strong>TextHalo</strong> on under Privacy
-                      &amp; Security → Accessibility. This panel notices by itself once you do.
-                    </div>
-                  ) : (
-                    <div className="card-note">
-                      macOS will show its standard permission prompt. Afterward, enable
-                      <strong> TextHalo</strong> under Privacy &amp; Security → Accessibility.
-                    </div>
-                  )}
-                  <div className="card-note">
-                    Rebuilding from source invalidates the grant, and the stale entry keeps
-                    failing. Clear it with:
-                  </div>
-                  <div className="mono-block">tccutil reset Accessibility com.kiegen.app</div>
-                </>
-              )}
-              {state.secure_input ? (
-                <Note kind="warning" icon={Icon.warn()}>
-                  Secure input is on — a password field has focus. Capture refuses until you
-                  click away.
-                </Note>
-              ) : null}
-            </Card>
-
             <Card title="Startup" icon={Icon.gear()}>
               <label className="startup-option">
                 <span className="startup-option-copy">
@@ -1636,23 +1667,49 @@ function MainApp() {
               </label>
             </Card>
 
-            <Card title="Try it" icon={Icon.play()}>
-              <div className="inline">
-                <button className="plain" onClick={() => void invoke("speak_selection_now")}>
-                  Speak the current selection
-                </button>
-                <button className="plain" onClick={() => void invoke("stop_speaking")}>
-                  Stop
-                </button>
-              </div>
-              <div className="card-note">
-                Select text in another app first, then press the button — same path the
-                global shortcut takes.
-              </div>
-            </Card>
-
+            <details className="disclosure"><summary>Advanced voice settings</summary>
+              <p className="card-note">Keeping a voice ready uses more memory.</p>
+                <div className="field">
+                  <span className="field-label">Kokoro model size</span>
+                  <select
+                    value={settings.kokoro.quant}
+                    onChange={(event) =>
+                      void save({ kokoro: { ...settings.kokoro, quant: event.target.value } })
+                    }
+                  >
+                    <option value="fp32">fp32 — 325 MB</option>
+                    <option value="fp16">fp16 — 163 MB</option>
+                    <option value="q8f16">q8f16 — 86 MB, about half the speed</option>
+                  </select>
+                </div>
+                <label className="toggle-row">
+                  <input
+                    type="checkbox"
+                    checked={settings.kokoro.keep_warm}
+                    onChange={(event) =>
+                      void save({
+                        kokoro: { ...settings.kokoro, keep_warm: event.target.checked },
+                      })
+                    }
+                  />
+                  <span>Keep Kokoro ready in memory</span>
+                </label>
+                <label className="toggle-row">
+                  <input
+                    type="checkbox"
+                    checked={settings.chatterbox.keep_warm}
+                    onChange={(event) =>
+                      void save({
+                        chatterbox: { ...settings.chatterbox, keep_warm: event.target.checked },
+                      })
+                    }
+                  />
+                  <span>Keep Chatterbox ready in memory</span>
+                </label>
+            </details>
             <Card title="About" icon={Icon.box()}>
-              <div className="card-note">Version {appVersion ?? "…"} · Apache-2.0</div>
+              <div className="card-note">Version {appVersion ?? "…"} · TextHalo Source Available License 1.0</div>
+              <details className="disclosure"><summary>License terms</summary><pre style={{ whiteSpace: "pre-wrap", maxHeight: 300, overflowY: "auto", font: "inherit" }}>{textHaloLicense.replace(/^#{1,2} /gm, "").replace(/\*\*/g, "").replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")}</pre></details>
               <div className="inline">
                 <button className="plain" onClick={() => void checkForUpdates()} disabled={checkingUpdate || installingUpdate}>
                   {checkingUpdate ? "Checking…" : "Check for Updates"}
@@ -1664,10 +1721,11 @@ function MainApp() {
                 ) : null}
               </div>
               {updateMessage ? <div className="card-note" role="status">{updateMessage}</div> : null}
+              <details className="disclosure"><summary>Advanced</summary>
               <div className="field">
                 <span className="field-label">Settings file</span>
                 <div className="mono-block">{state.config_path}</div>
-              </div>
+              </div></details>
             </Card>
           </div>
         ) : null}
@@ -1676,18 +1734,13 @@ function MainApp() {
           <div className="pane-inner">
             <div className="history-heading">
               <div>
-                <h1 className="pane-title">Voice</h1>
+                <div className="service-heading"><h1 className="pane-title">Voices</h1>{readinessIcon("voice", "Voices")}</div>
                 <p className="pane-subtitle">
-                  Which engine speaks, and which of its voices it uses.
+                  Find a voice you enjoy listening to.
                 </p>
               </div>
-              {!account ? (
-                <button className="plain" onClick={() => setTab("account")}>
-                  Sign in
-                </button>
-              ) : null}
             </div>
-            <Card title="Engine" icon={Icon.speaker()}>
+            <Card title="Voice source" icon={Icon.speaker()}>
               <div className="row-stack">
                 {engines.map((engine) => (
                   <Row
@@ -1695,7 +1748,7 @@ function MainApp() {
                     selected={settings.engine === engine.id}
                     glyph={settings.engine === engine.id ? Icon.checkCircle() : Icon.circle()}
                     title={engine.label}
-                    subtitle={engine.summary}
+                    subtitle={engine.id === "fish" ? "Hosted · uses credits" : engine.id === "apple" ? "On this Mac · no download" : "On this Mac · free"}
                     badge={
                       engine.can_speak
                         ? "Ready"
@@ -1707,16 +1760,27 @@ function MainApp() {
                   />
                 ))}
               </div>
-
               {activeEngine && !activeEngine.can_speak ? (
                 <Note kind="warning" icon={Icon.warn()}>
                   {activeEngine.status}
                 </Note>
               ) : null}
 
+              {settings.engine === "fish" && !account ? <>
+                <div className="account-brand">
+                  <img className="account-brand-mark" src={appLogo} alt="" />
+                  <div><strong>TextHalo</strong><div className="card-note">Your account for hosted speech</div></div>
+                  <div className="account-brand-actions">
+                    <button className="plain" disabled={accountBusy} onClick={() => void beginDesktopSignIn()}>{accountBusy ? "Waiting for browser sign-in…" : "Sign in"}</button>
+                    {accountBusy ? <button className="text" onClick={() => void cancelDesktopSignIn()}>Cancel</button> : null}
+                  </div>
+                </div>
+                {accountError ? <Note kind="error" icon={Icon.xCircle()}>{accountError}</Note> : null}
+              </> : null}
+
               {activeEngine?.needs_download ? (
                 <div className="field">
-                  <span className="field-label">Weights</span>
+                  <span className="field-label">Voice download</span>
                   {installing && installForEngine ? (
                     <>
                       <div className="progress">
@@ -1775,8 +1839,6 @@ function MainApp() {
                     </div>
                     <span className="field-hint">Choose a voice, then use your Speak shortcut anywhere.</span>
                   </div>
-                  {!account ? <Note kind="warning" icon={Icon.warn()}>Sign in to use hosted speech. Preview samples are available without signing in.</Note> : null}
-                  {accountError ? <Note kind="error" icon={Icon.xCircle()}>{accountError}</Note> : null}
                   <div className="voice-list">
                     {hostedVoicesByLanguage.map(([code, voices]) => (
                       <div key={code}>
@@ -1797,7 +1859,7 @@ function MainApp() {
                 <Card title="Custom voice cloning" icon={Icon.speaker()}>
                   <p className="card-note">Plus includes two saved clones, Creator includes up to five, and a first top-up starts a seven-day trial with two clones.</p>
                   {!account ? <Note kind="info" icon={Icon.info()}>Sign in to see your clone access and create a custom voice.</Note> : (account.cloneEntitlement?.limit ?? 0) > 0 ? <Note kind="info" icon={Icon.info()}>{account.cloneEntitlement?.source === "topup_trial" && account.cloneEntitlement.expiresAt ? `Your top-up trial includes ${account.cloneEntitlement.limit} voice clones through ${new Date(account.cloneEntitlement.expiresAt).toLocaleDateString()}.` : `Your current plan includes up to ${account.cloneEntitlement?.limit ?? 0} voice clones.`}</Note> : <Note kind="secondary" icon={Icon.info()}>Voice cloning is available with Plus, Creator, or the seven-day trial after your first top-up. Visit Account to review plans.</Note>}
-                  <button className="plain" onClick={() => setTab("account")}>{!account ? "Sign in to create a clone" : (account.cloneEntitlement?.limit ?? 0) > 0 ? "Manage voice clones" : "View plans"}</button>
+                  <button className="plain" onClick={() => { if (account && (account.cloneEntitlement?.limit ?? 0) > 0) { const panel = document.getElementById("your-voices") as HTMLDetailsElement | null; if (panel) { panel.open = true; panel.scrollIntoView({ behavior: "smooth", block: "start" }); } } else setTab("account"); }}>{!account ? "Sign in to create a voice" : (account.cloneEntitlement?.limit ?? 0) > 0 ? "Manage voice clones" : "View plans"}</button>
                 </Card>
                 <Card title="Privacy for hosted speech" icon={Icon.info()}>
                   <p className="card-note">When you use hosted speech, selected text is sent to TextHalo’s service and the speech provider to generate audio. Optional text enhancement processes the text through an additional service. Local Apple, Kokoro, and Chatterbox engines process speech on your Mac.</p>
@@ -2110,20 +2172,8 @@ function MainApp() {
             ) : null}
 
             {settings.engine === "kokoro" ? (
-              <Card title="Kokoro settings" icon={Icon.gauge()}>
-                <div className="field">
-                  <span className="field-label">Model precision</span>
-                  <select
-                    value={settings.kokoro.quant}
-                    onChange={(event) =>
-                      void save({ kokoro: { ...settings.kokoro, quant: event.target.value } })
-                    }
-                  >
-                    <option value="fp32">fp32 — 325 MB</option>
-                    <option value="fp16">fp16 — 163 MB</option>
-                    <option value="q8f16">q8f16 — 86 MB, about half the speed</option>
-                  </select>
-                </div>
+              <Card title="Speed" icon={Icon.gauge()}>
+
 
                 <div className="field">
                   <span className="field-label">Speed</span>
@@ -2144,23 +2194,12 @@ function MainApp() {
                   </div>
                 </div>
 
-                <label className="toggle-row">
-                  <input
-                    type="checkbox"
-                    checked={settings.kokoro.keep_warm}
-                    onChange={(event) =>
-                      void save({
-                        kokoro: { ...settings.kokoro, keep_warm: event.target.checked },
-                      })
-                    }
-                  />
-                  <span>Keep the model loaded</span>
-                </label>
+
               </Card>
             ) : null}
 
             {settings.engine === "chatterbox" ? (
-              <Card title="Chatterbox settings" icon={Icon.gauge()}>
+              <Card title="Language" icon={Icon.gauge()}>
                 <div className="field">
                   <span className="field-label">Language</span>
                   <select
@@ -2179,19 +2218,41 @@ function MainApp() {
                   </select>
                 </div>
 
-                <label className="toggle-row">
-                  <input
-                    type="checkbox"
-                    checked={settings.chatterbox.keep_warm}
-                    onChange={(event) =>
-                      void save({
-                        chatterbox: { ...settings.chatterbox, keep_warm: event.target.checked },
-                      })
-                    }
-                  />
-                  <span>Keep the model loaded</span>
-                </label>
+
               </Card>
+            ) : null}
+            {settings.engine === "fish" ? (
+            <details className="disclosure" id="your-voices">
+              <summary>Your voices</summary>
+              {accountError ? <Note kind="error" icon={Icon.xCircle()}>{accountError}</Note> : null}
+                {account && ((account.cloneEntitlement?.limit ?? 0) > 0 || hostedClones.length > 0) ? <section className="clone-panel">
+                  <header className="clone-header">
+                    <div className="clone-heading"><span className="clone-heading-icon">{Icon.speaker()}</span><div><h2>Your voices</h2><p>Create a personal voice from a recording you own or have permission to use.</p></div></div>
+                    <span className="clone-count">{hostedClones.length} saved{(account.cloneEntitlement?.limit ?? 0) > 0 ? ` · ${hostedClones.filter((clone) => clone.access !== "disabled" && clone.status !== "failed").length} of ${account.cloneEntitlement?.limit ?? 0} active` : " · access ended"}{account.cloneEntitlement?.source === "topup_trial" && account.cloneEntitlement.expiresAt ? ` · trial ends ${new Date(account.cloneEntitlement.expiresAt).toLocaleDateString()}` : ""}</span>
+                  </header>
+                  {hostedClones.length ? <div className="clone-list" aria-label="Saved voices">{hostedClones.map((clone) => <div className="clone-item" key={clone.id}>
+                    <span className="clone-avatar">{clone.name.trim().slice(0, 1).toUpperCase()}</span><div className="clone-item-copy"><strong>{clone.name}</strong><span className={`clone-status clone-status-${clone.status}`}>{clone.access === "disabled" ? "Stored · inactive slot" : clone.status === "trained" ? "Ready to use" : clone.status === "failed" ? "Couldn’t train" : "Training"}</span></div>
+                    {clone.status !== "failed" && (account.cloneEntitlement?.limit ?? 0) > 0 ? <button className="clone-delete" onClick={() => void setHostedCloneActive(clone.id, clone.access === "disabled")}>{clone.access === "disabled" ? "Activate" : "Deactivate"}</button> : null}
+                    <button className="clone-delete" aria-label={`Delete ${clone.name}`} onClick={() => void deleteHostedClone(clone.id)}>Delete</button>
+                  </div>)}</div> : <div className="clone-empty"><span className="clone-empty-mark">{Icon.speaker()}</span><strong>No hosted voices yet</strong><span>Your new voice will appear here when it’s ready.</span></div>}
+                  {(account.cloneEntitlement?.limit ?? 0) > 0 ? <div className="clone-create">
+                    <div className="clone-create-title"><span className="clone-step">NEW</span><div><h3>Create a voice</h3><p>Your recording stays on this device until you choose to upload.</p></div></div>
+                    <div className="clone-fields">
+                      <div className="field clone-name-field"><label className="field-label" htmlFor="hosted-clone-name">Voice name <span>Required</span></label><input id="hosted-clone-name" value={cloneName} placeholder="e.g. Warm narration" maxLength={100} required aria-describedby="hosted-clone-name-hint" onChange={(event) => setCloneName(event.target.value)} /><span id="hosted-clone-name-hint" className="field-hint">Up to 100 characters</span></div>
+                      <div className="field"><span className="field-label">Recording <span>Required</span></span><button className={`clone-file-button${clonePath ? " has-file" : ""}`} disabled={accountBusy} onClick={() => void pickCloneAudio()}><span className="clone-file-icon">{Icon.speaker()}</span><span className="clone-file-copy"><strong>{clonePath ? clonePath.split(/[\\/]/).pop() : "Choose an audio file"}</strong><span>{clonePath ? "Selected locally · not uploaded" : "WAV, MP3, M4A, OGG or FLAC · up to 25 MB"}</span></span><span className="clone-file-action">{clonePath ? "Change" : "Browse"}</span></button></div>
+                    </div>
+                    <label className="clone-consent"><input type="checkbox" checked={cloneConsent} onChange={(event) => setCloneConsent(event.target.checked)} /><span>I own this voice or have permission to clone it. I understand the recording will be uploaded to Fish Audio and saved to my account.</span></label>
+                    <div className="clone-submit-row"><div className="clone-feedback" role="status">{!cloneName.trim() ? "Add a name to continue" : !clonePath ? "Choose a recording to continue" : !cloneConsent ? "Confirm permission to continue" : "Everything’s ready to upload"}</div><button className="clone-submit" disabled={accountBusy || !cloneName.trim() || !clonePath || !cloneConsent} onClick={() => void uploadClone()}>{accountBusy ? "Creating voice…" : "Upload and create voice"}<span aria-hidden="true">→</span></button></div>
+                    {cloneUploadError ? <div role="alert"><Note kind="error" icon={Icon.xCircle()}>Clone was not created: {cloneUploadError}</Note></div> : null}
+                    {cloneUploadSuccess ? <div role="status"><Note kind="info" icon={Icon.checkCircle()}>{cloneUploadSuccess}</Note></div> : null}
+                    <div className="clone-privacy">{Icon.checkCircle()}<span>Your recording is only sent when you select “Upload and create voice”.</span></div>
+                  </div> : <div className="clone-create"><Note kind="secondary" icon={Icon.info()}>Your clone access has ended. You can still delete saved voices here; choose Plus or Creator to create and use them again.</Note></div>}
+                </section> : null}
+              {!account || ((account.cloneEntitlement?.limit ?? 0) <= 0 && hostedClones.length === 0) ? <div className="empty-state">
+                <p>Create a voice from your own recording.</p>
+                <button className="plain" onClick={() => setTab("account")}>{account ? "View voice cloning plans" : "Sign in to create a voice"}</button>
+              </div> : null}
+            </details>
             ) : null}
           </div>
         ) : null}
@@ -2199,7 +2260,7 @@ function MainApp() {
         {tab === "account" ? (
           <div className="pane-inner">
             <h1 className="pane-title">Account</h1>
-            <p className="pane-subtitle">Sign in to sync hosted speech with your TextHalo account.</p>
+            <p className="pane-subtitle">Manage your account, credits, and plan.</p>
             {accountError ? <Note kind="error" icon={Icon.xCircle()}>{accountError}</Note> : null}
             {account ? (
               <>
@@ -2225,29 +2286,7 @@ function MainApp() {
                   <div className="card-note">Top-up credits are separate from monthly plan credits. Your first top-up includes seven days of voice cloning with two active slots; the trial waits while Plus or Creator already covers cloning.</div>
                   <div className="inline"><button className="plain" disabled={accountBusy} onClick={() => void buyTopup("topup-5")}>$5 · 30,000 credits</button><button className="plain" disabled={accountBusy} onClick={() => void buyTopup("topup-10")}>$10 · 60,000 credits</button><button className="plain" disabled={accountBusy} onClick={() => void buyTopup("topup-20")}>$20 · 120,000 credits</button></div>
                 </Card>
-                {(account.cloneEntitlement?.limit ?? 0) > 0 || hostedClones.length > 0 ? <section className="clone-panel">
-                  <header className="clone-header">
-                    <div className="clone-heading"><span className="clone-heading-icon">{Icon.speaker()}</span><div><h2>Your hosted voices</h2><p>Create a personal voice from a recording you own or have permission to use.</p></div></div>
-                    <span className="clone-count">{hostedClones.length} saved{(account.cloneEntitlement?.limit ?? 0) > 0 ? ` · ${hostedClones.filter((clone) => clone.access !== "disabled" && clone.status !== "failed").length} of ${account.cloneEntitlement?.limit ?? 0} active` : " · access ended"}{account.cloneEntitlement?.source === "topup_trial" && account.cloneEntitlement.expiresAt ? ` · trial ends ${new Date(account.cloneEntitlement.expiresAt).toLocaleDateString()}` : ""}</span>
-                  </header>
-                  {hostedClones.length ? <div className="clone-list" aria-label="Saved voices">{hostedClones.map((clone) => <div className="clone-item" key={clone.id}>
-                    <span className="clone-avatar">{clone.name.trim().slice(0, 1).toUpperCase()}</span><div className="clone-item-copy"><strong>{clone.name}</strong><span className={`clone-status clone-status-${clone.status}`}>{clone.access === "disabled" ? "Stored · inactive slot" : clone.status === "trained" ? "Ready to use" : clone.status === "failed" ? "Couldn’t train" : "Training"}</span></div>
-                    {clone.status !== "failed" && (account.cloneEntitlement?.limit ?? 0) > 0 ? <button className="clone-delete" onClick={() => void setHostedCloneActive(clone.id, clone.access === "disabled")}>{clone.access === "disabled" ? "Activate" : "Deactivate"}</button> : null}
-                    <button className="clone-delete" aria-label={`Delete ${clone.name}`} onClick={() => void deleteHostedClone(clone.id)}>Delete</button>
-                  </div>)}</div> : <div className="clone-empty"><span className="clone-empty-mark">{Icon.speaker()}</span><strong>No hosted voices yet</strong><span>Your new voice will appear here when it’s ready.</span></div>}
-                  {(account.cloneEntitlement?.limit ?? 0) > 0 ? <div className="clone-create">
-                    <div className="clone-create-title"><span className="clone-step">NEW</span><div><h3>Create a voice</h3><p>Your recording stays on this device until you choose to upload.</p></div></div>
-                    <div className="clone-fields">
-                      <div className="field clone-name-field"><label className="field-label" htmlFor="hosted-clone-name">Voice name <span>Required</span></label><input id="hosted-clone-name" value={cloneName} placeholder="e.g. Warm narration" maxLength={100} required aria-describedby="hosted-clone-name-hint" onChange={(event) => setCloneName(event.target.value)} /><span id="hosted-clone-name-hint" className="field-hint">Up to 100 characters</span></div>
-                      <div className="field"><span className="field-label">Recording <span>Required</span></span><button className={`clone-file-button${clonePath ? " has-file" : ""}`} disabled={accountBusy} onClick={() => void pickCloneAudio()}><span className="clone-file-icon">{Icon.speaker()}</span><span className="clone-file-copy"><strong>{clonePath ? clonePath.split(/[\\/]/).pop() : "Choose an audio file"}</strong><span>{clonePath ? "Selected locally · not uploaded" : "WAV, MP3, M4A, OGG or FLAC · up to 25 MB"}</span></span><span className="clone-file-action">{clonePath ? "Change" : "Browse"}</span></button></div>
-                    </div>
-                    <label className="clone-consent"><input type="checkbox" checked={cloneConsent} onChange={(event) => setCloneConsent(event.target.checked)} /><span>I own this voice or have permission to clone it. I understand the recording will be uploaded to Fish Audio and saved to my account.</span></label>
-                    <div className="clone-submit-row"><div className="clone-feedback" role="status">{!cloneName.trim() ? "Add a name to continue" : !clonePath ? "Choose a recording to continue" : !cloneConsent ? "Confirm permission to continue" : "Everything’s ready to upload"}</div><button className="clone-submit" disabled={accountBusy || !cloneName.trim() || !clonePath || !cloneConsent} onClick={() => void uploadClone()}>{accountBusy ? "Creating voice…" : "Upload and create voice"}<span aria-hidden="true">→</span></button></div>
-                    {cloneUploadError ? <div role="alert"><Note kind="error" icon={Icon.xCircle()}>Clone was not created: {cloneUploadError}</Note></div> : null}
-                    {cloneUploadSuccess ? <div role="status"><Note kind="info" icon={Icon.checkCircle()}>{cloneUploadSuccess}</Note></div> : null}
-                    <div className="clone-privacy">{Icon.checkCircle()}<span>Your recording is only sent when you select “Upload and create voice”.</span></div>
-                  </div> : <div className="clone-create"><Note kind="secondary" icon={Icon.info()}>Your clone access has ended. You can still delete saved voices here; choose Plus or Creator to create and use them again.</Note></div>}
-                </section> : null}
+
               </>
             ) : (
               <>
@@ -2268,54 +2307,107 @@ function MainApp() {
           </div>
         ) : null}
 
+        {tab === "permissions" ? <div className="pane-inner">
+          <h1 className="pane-title">Permissions</h1>
+          <p className="pane-subtitle">You control what TextHalo can access.</p>
+            <Card title="Accessibility" icon={Icon.textCursor()}>
+              {state.trusted ? (
+                <>
+                  <Note kind="secondary" icon={Icon.checkCircle()}>
+                    Accessibility access granted. You can read and edit text in other apps.
+                  </Note>
+
+                </>
+              ) : (
+                <>
+                  <Note kind="warning" icon={Icon.warn()}>
+                    Allow TextHalo to read selected text and insert your words in other apps.
+                  </Note>
+                  <div className="card-note">Text is captured only when you use a shortcut. Clipboard preferences are in Text capture.</div>
+                  <div className="inline">
+                    {state.settings.accessibility_prompted ? (
+                      <button
+                        className="plain"
+                        onClick={() => void invoke("open_accessibility_settings")}
+                      >
+                        Open Accessibility Settings…
+                      </button>
+                    ) : (
+                      <button
+                        className="plain"
+                        onClick={() =>
+                          void invoke<UiState>("request_accessibility")
+                            .then((next) => {
+                              latestState.current = next;
+                              setState(next);
+                            })
+                            .catch((cause) => setError(String(cause)))
+                        }
+                      >
+                        Enable Accessibility
+                      </button>
+                    )}
+                  </div>
+                  {state.settings.accessibility_prompted ? (
+                    <div className="card-note">
+                      In System Settings, switch <strong>TextHalo</strong> on under Privacy
+                      &amp; Security → Accessibility. This panel notices by itself once you do.
+                    </div>
+                  ) : (
+                    <div className="card-note">
+                      macOS will show its standard permission prompt. Afterward, enable
+                      <strong> TextHalo</strong> under Privacy &amp; Security → Accessibility.
+                    </div>
+                  )}
+
+                </>
+              )}
+              {state.focused_password_field ? (
+                <Note kind="warning" icon={Icon.warn()}>
+                  Leave the password field to use TextHalo.
+                </Note>
+              ) : null}
+            </Card>
+
+          <Card title="Voice and screen access" icon={Icon.gear()}><PermissionsSettings /></Card>
+        </div> : null}
+        {tab === "transcription" ? <div className="pane-inner">
+          <div className="service-heading"><h1 className="pane-title">Dictate</h1>{readinessIcon("transcription", "Dictate")}</div>
+          <p className="pane-subtitle">Hold your shortcut, speak, then release.</p>
+          {shortcutControl("transcribe")}
+          <Card title="Transcription source" icon={Icon.textCursor()}><TranscriptionSource value={settings.assistant ?? defaultAssistantPreferences} onChange={assistant => void save({ assistant })} availability={serviceAvailability.availability} warningIcon={Icon.warn()} downloadIcon={Icon.download()} /></Card>
+          <TaskReadiness mode="dictate" preferences={settings.assistant ?? defaultAssistantPreferences} needsAccessibility={(settings.assistant ?? defaultAssistantPreferences).dictation_output === "insert"} accessibilityPrompted={settings.accessibility_prompted} onAccessibility={enableAccessibility} />
+          <Card title="Preferences" icon={Icon.textCursor()}><TranscriptionSettings value={settings.assistant ?? defaultAssistantPreferences} onChange={assistant => void save({ assistant })} /></Card>
+          <button className="text" onClick={() => { setHistoryView("transcripts"); setTab("history"); }}>View transcripts</button>
+        </div> : null}
+        {tab === "assistant" ? <div className="pane-inner">
+          <div className="service-heading"><h1 className="pane-title">Assistant</h1>{readinessIcon("assistant", "Assistant")}</div>
+          <p className="pane-subtitle">Hold your shortcut and ask to write, edit, or read aloud.</p>
+          {shortcutControl("assistant")}
+          <TaskReadiness mode="assistant" preferences={settings.assistant ?? defaultAssistantPreferences} accessibilityPrompted={settings.accessibility_prompted} onAccessibility={enableAccessibility} />
+          <Card title="Make it yours" icon={Icon.textCursor()}><AssistantSettings value={settings.assistant ?? defaultAssistantPreferences} onChange={assistant => void save({ assistant })} onSignIn={() => void beginDesktopSignIn()} onCancelSignIn={() => void cancelDesktopSignIn()} signingIn={accountBusy} warningIcon={Icon.warn()} accountMark={appLogo} signInError={accountError} /></Card>
+          <button className="text" onClick={() => { setHistoryView("assistant"); setTab("history"); }}>View Assistant history</button>
+          {(settings.assistant?.provider ?? "local") !== "local" && <button className="text" onClick={() => setTab("account")}>Account and credits</button>}
+        </div> : null}
+
         {tab === "shortcuts" ? (
           <div className="pane-inner">
             <h1 className="pane-title">Shortcuts</h1>
             <p className="pane-subtitle">
-              These work in every app. Speak plays the selection; Stop silences it.
+              Hold Dictate or Assistant to speak. Press Listen to read selected text.
             </p>
 
-            <Card title="Global shortcuts" icon={Icon.command()}>
-              {(["speak", "stop"] as const).map((role) => {
-                const isRecording = recording === role;
-                return (
-                  <div className="field" key={role}>
-                    <span className="field-label">
-                      {role === "speak" ? "Speak the selection" : "Stop speaking"}
-                    </span>
-                    <Row
-                      selected={!isRecording}
-                      glyph={isRecording ? Icon.keyboard() : Icon.checkCircle()}
-                      title={isRecording ? "Press a key combo…" : settings.shortcuts[role]}
-                      subtitle={
-                        isRecording
-                          ? "Press Esc to cancel"
-                          : role === "speak"
-                            ? "Reads the selected text aloud"
-                            : "Stops playback immediately"
-                      }
-                      mono={!isRecording}
-                      onSelect={() => setRecording(role)}
-                      trailing={
-                        <button
-                          className="plain"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            setRecording(isRecording ? null : role);
-                          }}
-                        >
-                          {isRecording ? "Cancel" : "Record…"}
-                        </button>
-                      }
-                    />
-                  </div>
-                );
-              })}
-
+            {([
+              {title:"Listen",role:"speak"}, {title:"Dictate",role:"transcribe"},
+              {title:"Assistant",role:"assistant"}, {title:"Stop / cancel",role:"stop"},
+            ] as const).map(({title,role}) => <Card key={role} title={title} icon={Icon.command()}>
+              {shortcutControl(role)}
+            </Card>)}
+            <Card title="Shortcut availability" icon={Icon.keyboard()}>
               {state.refused_shortcuts.length > 0 ? (
                 <Note kind="error" icon={Icon.xCircle()}>
                   macOS refused {state.refused_shortcuts.join(", ")} — another app already
-                  owns it. Pick a different chord.
+                  owns it. Choose another shortcut.
                 </Note>
               ) : null}
               <div className="card-note">
@@ -2328,8 +2420,8 @@ function MainApp() {
 
         {tab === "capture" ? (
           <div className="pane-inner">
-            <h1 className="pane-title">Capture</h1>
-            <p className="pane-subtitle">How TextHalo gets hold of the text you selected.</p>
+            <h1 className="pane-title">Text capture</h1>
+            <p className="pane-subtitle">Choose how selected text is read.</p>
 
             <Card title="Capture method" icon={Icon.textCursor()}>
               <div className="row-stack">
@@ -2337,19 +2429,19 @@ function MainApp() {
                   [
                     {
                       mode: "copy_only" as CaptureMode,
-                      title: "Simulated ⌘C only (recommended)",
+                      title: "Copy selected text (recommended)",
                       subtitle:
-                        "Avoids inconsistent Accessibility text by simulating ⌘C; requires macOS Accessibility permission and temporarily uses the clipboard",
+                        "Uses the clipboard. Requires Accessibility access.",
                     },
                     {
                       mode: "ax_then_copy" as CaptureMode,
-                      title: "Accessibility, then copy",
+                      title: "Read directly, then copy",
                       subtitle:
-                        "Reads the selection directly, falling back to a simulated ⌘C when an app won't answer",
+                        "Uses the clipboard only when direct reading is unavailable.",
                     },
                     {
                       mode: "ax_only" as CaptureMode,
-                      title: "Accessibility only",
+                      title: "Read directly",
                       subtitle: "Never touches the clipboard",
                     },
                   ] as const
@@ -2412,9 +2504,15 @@ function MainApp() {
 
         {tab === "history" ? (
           <div className="pane-inner">
+            <div className="section-nav history-tabs" role="group" aria-label="History type">
+              <button aria-pressed={historyView === "audio"} className={historyView === "audio" ? "active" : ""} onClick={() => setHistoryView("audio")}>Audio</button>
+              <button aria-pressed={historyView === "transcripts"} className={historyView === "transcripts" ? "active" : ""} onClick={() => setHistoryView("transcripts")}>Transcripts</button>
+              <button aria-pressed={historyView === "assistant"} className={historyView === "assistant" ? "active" : ""} onClick={() => setHistoryView("assistant")}>Assistant</button>
+            </div>
+            {historyView === "assistant" ? <GenerationHistory /> : historyView === "transcripts" ? <><h1 className="pane-title">History</h1><TranscriptionHistory /></> : <>
             <div className="history-heading">
               <div>
-                <h1 className="pane-title">Audio History</h1>
+                <h1 className="pane-title">History</h1>
                 <p className="pane-subtitle">Saved privately on this Mac · keeps the latest 50.</p>
               </div>
               <div className="inline">
@@ -2488,9 +2586,10 @@ function MainApp() {
                 </div>
               </Card>
             )}
+            </> }
           </div>
         ) : null}
-      </div>
+      </main>
     </div>
   );
 }

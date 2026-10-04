@@ -533,7 +533,7 @@ pub fn catalog_with(settings: &Settings, clips: Vec<crate::voices::VoiceClip>) -
             status: if !fish_configured {
                 "Backend not configured".to_string()
             } else if !fish_signed_in {
-                "Sign in to continue".to_string()
+                "Sign in required".to_string()
             } else if !settings.fish.privacy_accepted {
                 "Review privacy details".to_string()
             } else if settings.fish.voice_id.is_empty() {
@@ -544,7 +544,7 @@ pub fn catalog_with(settings: &Settings, clips: Vec<crate::voices::VoiceClip>) -
             blocked_reason: if !fish_configured {
                 Some("Set VITE_TEXTHALO_API_URL when building the app.".to_string())
             } else if !fish_signed_in {
-                Some("Sign in from Account settings before using hosted speech.".to_string())
+                Some("Sign in to use cloud hosted voice.".to_string())
             } else if !settings.fish.privacy_accepted {
                 Some(
                     "Review and accept the hosted speech privacy details in Voice settings."

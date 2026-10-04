@@ -111,20 +111,33 @@ fn tick(app: &AppHandle) {
     let error = matches!(job.status.phase, Phase::Error);
     let visible = !matches!(job.status.phase, Phase::Idle);
     drop(job);
+    let owned = crate::assistant::sync_speech(app);
+    let assistant_error = crate::assistant::assistant_error_overlay_height(app);
+    let visible = (visible && !owned) || assistant_error.is_some();
     let Some(window) = app.get_webview_window("speech-overlay") else {
         return;
     };
     if visible {
-        position(&window, error);
+        if let Some(height) = assistant_error {
+            let _ = window.set_focusable(height > 190.0);
+            position_sized(&window, 430.0, height);
+        } else {
+            let _ = window.set_focusable(false);
+            position(&window, error);
+        }
         let _ = window.show();
     } else if !visible && window.is_visible().unwrap_or(false) {
         let _ = window.hide();
     }
 }
 
-fn position(window: &tauri::WebviewWindow, error: bool) {
+pub(crate) fn position(window: &tauri::WebviewWindow, error: bool) {
     let width = if error { 430.0 } else { 270.0 };
     let height = if error { 190.0 } else { 44.0 };
+    position_sized(window, width, height);
+}
+
+pub(crate) fn position_sized(window: &tauri::WebviewWindow, width: f64, height: f64) {
     // AppKit coordinates are logical points with the origin at the bottom left.
     // Stay below the menu bar/notch so the label and Stop remain visible on every Mac.
     #[cfg(target_os = "macos")]
@@ -147,16 +160,25 @@ fn position(window: &tauri::WebviewWindow, error: bool) {
                 NSWindowCollectionBehavior::CanJoinAllSpaces
                     | NSWindowCollectionBehavior::FullScreenAuxiliary,
             );
-            native.setFrame_display(
-                NSRect::new(
-                    NSPoint::new(
-                        frame.origin.x + (frame.size.width - width) / 2.0,
-                        frame.origin.y + frame.size.height - height - 6.0,
-                    ),
-                    NSSize::new(width, height),
-                ),
-                true,
-            );
+            let current = native.frame();
+            let visible = native.isVisible();
+            // Live updates must not snap a dragged widget back to its default
+            // position. When its height changes, keep its top edge in place.
+            if visible && current.size.width == width && current.size.height == height {
+                return;
+            }
+            let origin = if visible {
+                NSPoint::new(
+                    current.origin.x,
+                    current.origin.y + current.size.height - height,
+                )
+            } else {
+                NSPoint::new(
+                    frame.origin.x + (frame.size.width - width) / 2.0,
+                    frame.origin.y + frame.size.height - height - 6.0,
+                )
+            };
+            native.setFrame_display(NSRect::new(origin, NSSize::new(width, height)), true);
         }
     }
 }

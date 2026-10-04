@@ -4,6 +4,9 @@
 //! appear when needed, then the tray is the persistent UI and settings open on demand. The
 //! real app is the Rust service below; the webview is a config editor and setup wizard.
 
+mod assistant;
+mod assistant_job;
+mod assistant_stream;
 mod capture;
 pub mod chatterbox;
 pub mod config;
@@ -13,8 +16,13 @@ pub mod engine_paths;
 pub mod engines;
 pub mod espeak;
 pub mod g2p;
+mod generation_history;
 mod history;
 mod hosted;
+mod hosted_assistant;
+mod hosted_input;
+#[cfg(target_os = "macos")]
+mod instance;
 pub mod kokoro;
 pub mod lexicon;
 pub mod numbers;
@@ -22,11 +30,16 @@ mod overlay;
 mod pcm;
 mod shortcuts;
 mod speech;
+mod speech_input;
 mod speech_job;
 pub mod spoken;
 mod streaming;
+mod transcription_history;
 mod update_safety;
 pub mod voices;
+mod whisper;
+pub mod whisper_core;
+mod whisper_models;
 
 use std::sync::Mutex;
 
@@ -108,9 +121,9 @@ struct UiState {
     /// adding an engine never means editing TypeScript.
     engines: Vec<engines::EngineInfo>,
     trusted: bool,
-    /// True while a password field has secure input on — a copy-mode capture will
-    /// refuse rather than fail mysteriously, and the UI says so up front.
-    secure_input: bool,
+    /// The focused Accessibility control is a password field. This is distinct
+    /// from system-wide Secure Input, which another app can leave enabled.
+    focused_password_field: bool,
     speaking: bool,
     refused_shortcuts: Vec<String>,
     /// `xx_YY` from the OS, so the voice browser can open on the user's own language.
@@ -134,7 +147,7 @@ fn ui_state(app: &AppHandle, refused_shortcuts: Vec<String>) -> UiState {
         voices: state.voices.clone(),
         engines,
         trusted: capture::is_trusted(),
-        secure_input: capture::secure_input_active(),
+        focused_password_field: capture::focused_password_field(),
         speaking: state.spoken.is_speaking(),
         refused_shortcuts,
         system_language: speech::system_language(),
@@ -312,6 +325,17 @@ fn job_status(
 
 /// Serialize synthesis per engine, keeping Stop and other engines independent. A canceled
 /// render may finish computing; only the current job is allowed to start playback.
+pub(crate) fn run_speech_input(
+    app: &AppHandle,
+    id: u64,
+    settings: Settings,
+    input: speech_input::SpeechInput,
+    archive: bool,
+    source: capture::SourceMetadata,
+) {
+    run_speech_input_inner(app, id, settings, input, false, archive, source);
+}
+
 fn run_speech(
     app: &AppHandle,
     id: u64,
@@ -321,12 +345,35 @@ fn run_speech(
     archive: bool,
     source: capture::SourceMetadata,
 ) {
+    run_speech_input_inner(
+        app,
+        id,
+        settings,
+        speech_input::SpeechInput::Complete(text),
+        truncated,
+        archive,
+        source,
+    );
+}
+
+fn run_speech_input_inner(
+    app: &AppHandle,
+    id: u64,
+    settings: Settings,
+    input: speech_input::SpeechInput,
+    truncated: bool,
+    archive: bool,
+    source: capture::SourceMetadata,
+) {
     let state = app.state::<AppState>();
     let _synthesis = state.synthesis.for_engine(settings.engine).lock().unwrap();
     if !state.job.lock().unwrap().is_current(id) {
         return;
     }
-    let chars = text.chars().count();
+    let chars = match &input {
+        speech_input::SpeechInput::Complete(text) => text.chars().count(),
+        _ => 0,
+    };
     job_status(app, id, Phase::Preparing, None, Some(chars));
     if let Some(reason) = selected_engine_refusal(&settings) {
         job_status(app, id, Phase::Error, Some(reason), Some(chars));
@@ -348,10 +395,10 @@ fn run_speech(
         let model_id = settings.fish.model_id.clone();
         let enhance = settings.fish.enhance_text;
         tauri::async_runtime::spawn(async move {
-            let result = hosted::stream_speech(
+            let result = hosted::stream_speech_input(
                 app.clone(),
                 id,
-                text.clone(),
+                input,
                 voice,
                 model_id,
                 enhance,
@@ -365,15 +412,16 @@ fn run_speech(
             let mut job = state.job.lock().unwrap();
             if job.is_current(id) {
                 job.streaming = false;
+                let chars = job.status.chars.unwrap_or(chars);
                 match result {
                     Ok(()) => job.set(
                         Phase::Idle,
                         Some("Hosted speech complete".into()),
-                        Some(text.chars().count()),
+                        Some(chars),
                     ),
                     Err(message) => {
                         state.spoken.stop();
-                        job.set(Phase::Error, Some(message), Some(text.chars().count()));
+                        job.set(Phase::Error, Some(message), Some(chars));
                     }
                 }
                 let _ = app.emit("kiegen:status", &job.status);
@@ -382,6 +430,21 @@ fn run_speech(
         return;
     }
     if settings.engine == config::Engine::Apple {
+        let text = match streaming::run_input(
+            input,
+            180,
+            240,
+            |_| Ok(()),
+            |_, _| Ok(()),
+            || !state.job.lock().unwrap().is_current(id),
+        ) {
+            Ok(text) => text,
+            Err(error) => {
+                job_status(app, id, Phase::Error, Some(error), Some(chars));
+                return;
+            }
+        };
+        let chars = text.chars().count();
         let archive_path = archive
             .then(|| history_dir(app).ok())
             .flatten()
@@ -454,9 +517,9 @@ fn run_speech(
     }
     let result = state
         .spoken
-        .stream_pcm(
+        .stream_pcm_input(
             &settings,
-            &text,
+            input,
             recorder.as_mut(),
             || !state.job.lock().unwrap().is_current(id),
             |player| {
@@ -471,14 +534,15 @@ fn run_speech(
                 Ok(())
             },
         )
-        .map(|(report, _, _)| report);
+        .map(|(report, _, _, text)| (report, text));
     let mut job = state.job.lock().unwrap();
     if !job.is_current(id) {
         return;
     }
     job.streaming = false;
     match result {
-        Ok(report) => {
+        Ok((report, text)) => {
+            let chars = text.chars().count();
             if let (Some(recorder), Some(dir)) = (recorder.take(), history_root.as_deref()) {
                 if let Some(path) = recorder.finish() {
                     let (engine, voice) = match settings.engine {
@@ -660,6 +724,7 @@ fn get_state(app: AppHandle) -> UiState {
 #[tauri::command]
 fn save_settings(app: AppHandle, settings: Settings) -> Result<UiState, String> {
     shortcuts::bindings(&settings)?; // validate before writing anything
+    whisper_models::validate_settings(&settings.assistant)?;
     use tauri_plugin_autostart::ManagerExt;
     let manager = app.autolaunch();
     let launch_changed = manager.is_enabled().unwrap_or_else(|_| {
@@ -691,6 +756,7 @@ fn save_settings(app: AppHandle, settings: Settings) -> Result<UiState, String> 
     if changed_engine {
         stop_speaking(app.clone());
     }
+    assistant::cancel(&app);
     let refused = shortcuts::apply(&app)?;
     Ok(ui_state(&app, refused))
 }
@@ -950,7 +1016,7 @@ fn speech_error_recovery(app: AppHandle, action: String) -> Result<(), String> {
             show_settings(&app);
             let _ = app.emit("texthalo:speech-recovery", "voice");
         }
-        "account" | "billing" | "voice" => {
+        "account" | "billing" | "voice" | "assistant" => {
             show_settings(&app);
             let tab = if action == "billing" {
                 "account"
@@ -1066,6 +1132,7 @@ fn install_tray(app: &AppHandle) -> tauri::Result<()> {
                 std::thread::spawn(move || speak_selection(&app, id));
             }
             "stop" => {
+                assistant::cancel(app);
                 stop_speaking(app.clone());
             }
             "settings" => show_settings(app),
@@ -1095,6 +1162,7 @@ fn install_tray(app: &AppHandle) -> tauri::Result<()> {
             }
             "quit" => {
                 app.state::<AppState>().spoken.stop();
+                assistant::shutdown(app);
                 app.exit(0);
             }
             _ => {}
@@ -1108,10 +1176,24 @@ fn install_tray(app: &AppHandle) -> tauri::Result<()> {
 }
 
 pub fn run() {
+    #[cfg(target_os = "macos")]
+    let _instance = match instance::acquire() {
+        Ok(guard) => guard,
+        Err(error) => {
+            eprintln!("{error}");
+            return;
+        }
+    };
     tauri::Builder::default()
         .on_window_event(|window, event| {
             // A menu-bar app keeps its settings window alive between visits. Destroying
             // it makes get_webview_window("main") return None when Settings is clicked.
+            if window.label() == "assistant" {
+                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                    api.prevent_close();
+                    assistant::cancel(window.app_handle());
+                }
+            }
             if window.label() == "main" {
                 if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                     api.prevent_close();
@@ -1131,20 +1213,39 @@ pub fn run() {
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, shortcut, event| {
-                    // Press only: `Released` would double-trigger every chord.
+                    let action = shortcuts::action_for(app, shortcut);
+                    if let Some(Action::Transcribe | Action::Assistant) = action {
+                        let mode = if matches!(action, Some(Action::Transcribe)) {
+                            assistant_job::Mode::Transcribe
+                        } else {
+                            assistant_job::Mode::Assistant
+                        };
+                        if event.state == ShortcutState::Pressed {
+                            assistant::pressed(
+                                app,
+                                mode,
+                                shortcut.key.to_string(),
+                                format!("{:?}", shortcut.mods),
+                            );
+                        } else {
+                            assistant::released(app, mode);
+                        }
+                        return;
+                    }
                     if event.state != ShortcutState::Pressed {
                         return;
                     }
-                    match shortcuts::action_for(app, shortcut) {
+                    match action {
                         Some(Action::Speak) => {
                             let app = app.clone();
                             let id = begin_speech(&app, Phase::Capturing);
                             std::thread::spawn(move || speak_selection(&app, id));
                         }
                         Some(Action::Stop) => {
+                            assistant::cancel(app);
                             stop_speaking(app.clone());
                         }
-                        None => {}
+                        Some(Action::Transcribe | Action::Assistant) | None => {}
                     }
                 })
                 .build(),
@@ -1184,6 +1285,10 @@ pub fn run() {
                 start_background_update_checks(handle.clone());
             }
             overlay::setup(&handle)?;
+            assistant::setup(&handle)?;
+            if let Err(error) = assistant::configure_holds(&handle) {
+                eprintln!("[TextHalo] hold shortcut setup failed: {error}");
+            }
 
             // Show setup on a fresh install, and show permission guidance whenever access
             // is missing. Existing installs keep their saved onboarding state.
@@ -1198,6 +1303,14 @@ pub fn run() {
             update_safety::prepare_update_installation,
             update_safety::finish_update_installation,
             update_safety::record_update_failure,
+            assistant::assistant_state,
+            assistant::transcription_history,
+            generation_history::generation_history,
+            assistant::assistant_control,
+            whisper_models::whisper_models,
+            whisper_models::whisper_download,
+            whisper_models::whisper_cancel_download,
+            whisper_models::whisper_remove,
             get_state,
             get_speech_status,
             get_update_overlay_status,
