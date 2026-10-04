@@ -266,6 +266,7 @@ fn publish(app: &AppHandle, status: &Value) {
     let busy = matches!(status["phase"].as_str(), Some("recording" | "processing" | "capturing_screen" | "streaming" | "speaking"));
     let anchor = status.get("bounds").cloned();
     let assistant_error_overlay = is_assistant_error(status);
+    let error_height = assistant_error_height(status);
     let app = app.clone();
     let _ = app.clone().run_on_main_thread(move || {
         if assistant_error_overlay {
@@ -273,7 +274,8 @@ fn publish(app: &AppHandle, status: &Value) {
                 let _ = assistant_window.hide();
             }
             if let Some(window) = app.get_webview_window("speech-overlay") {
-                crate::overlay::position_sized(&window, 430.0, 190.0);
+                let _ = window.set_focusable(error_height > 190.0);
+                crate::overlay::position_sized(&window, 430.0, error_height);
                 let _ = window.show();
             }
         } else if let Some(window) = app.get_webview_window("assistant") {
@@ -643,10 +645,14 @@ pub fn assistant_state(app: AppHandle) -> Value {
     json!({"status":inner.status,"availability":availability})
 }
 
-pub(crate) fn has_assistant_error(app: &AppHandle) -> bool {
-    let Some(state) = app.try_state::<AssistantState>() else { return false; };
-    let Ok(inner) = state.inner.try_lock() else { return false; };
-    is_assistant_error(&inner.status)
+pub(crate) fn assistant_error_overlay_height(app: &AppHandle) -> Option<f64> {
+    let state = app.try_state::<AssistantState>()?;
+    let inner = state.inner.try_lock().ok()?;
+    is_assistant_error(&inner.status).then(|| assistant_error_height(&inner.status))
+}
+
+fn assistant_error_height(status: &Value) -> f64 {
+    if status["text"].as_str().is_some_and(|text| !text.is_empty()) { 360.0 } else { 190.0 }
 }
 
 fn is_assistant_error(status: &Value) -> bool {
@@ -862,7 +868,11 @@ mod tests {
     }
     #[test]
     fn failed_partial_answer_can_be_copied_or_undone_but_empty_error_cannot() {
-        assert_eq!(result_id(&json!({"id":7,"phase":"error","text":"Partial answer"}), Some(7)).unwrap(), 7);
+        let partial = json!({"id":7,"phase":"error","mode":"assistant","text":"Partial answer"});
+        assert_eq!(result_id(&partial, Some(7)).unwrap(), 7);
+        assert!(is_assistant_error(&partial));
+        assert_eq!(assistant_error_height(&partial), 360.0);
+        assert_eq!(assistant_error_height(&json!({"phase":"error","mode":"assistant"})), 190.0);
         assert!(result_id(&json!({"id":7,"phase":"error"}), Some(7)).is_err());
         assert!(result_id(&json!({"id":7,"phase":"error","text":"Partial"}), Some(6)).is_err());
     }

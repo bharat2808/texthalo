@@ -48,7 +48,7 @@ export default function AssistantPanel() {
   const visibleText = busy && (status.text?.length ?? 0) > 2000 ? "…" + status.text!.slice(-2000) : status.text;
   const providerLabel = status.provider === "cloud" ? "TextHalo Cloud" : "On this Mac";
   const usageLabel = status.provider === "cloud" ? assistantUsageLabel(status.usage) : "";
-  // All Assistant errors are presented by the shared SpeechOverlay widget.
+  // Shared SpeechOverlay owns Assistant errors, including preserved text and Copy/Undo.
   if (status.phase === "error" && status.mode === "assistant") return null;
   if (busy || completed) {
     const label = status.phase === "recording" ? "Listening…"

@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import SpeechErrorPanel from "./SpeechErrorPanel";
 import "./SpeechOverlay.css";
 
 type Status = { phase: "idle" | "capturing" | "preparing" | "speaking" | "error"; message?: string | null };
-type AssistantStatus = { id?: number; mode?: string; phase?: string; provider?: string; message?: string };
+type AssistantStatus = { id?: number; mode?: string; phase?: string; provider?: string; message?: string; text?: string; canUndo?: boolean };
 
 export default function SpeechOverlay() {
   const [actionError, setActionError] = useState<string | null>(null);
@@ -33,13 +34,21 @@ export default function SpeechOverlay() {
     catch (cause) { setActionError(String(cause)); }
     finally { setBusy(false); }
   };
+  const assistantControl = async (command: string) => {
+    setBusy(true);
+    setActionError(null);
+    try { await invoke("assistant_control", { command, requestId: assistantErrorStatus?.id }); }
+    catch (cause) { setActionError(String(cause)); }
+    finally { setBusy(false); }
+  };
   useEffect(() => {
     let mounted = true;
-    const update = (value: AssistantStatus) => setAssistantErrorStatus(
+    let received = false;
+    const update = (value: AssistantStatus) => { if (mounted) setAssistantErrorStatus(
       value.phase === "error" && value.mode === "assistant" ? value : null,
-    );
-    const subscription = listen<AssistantStatus>("texthalo:assistant", ({ payload }) => update(payload ?? {}));
-    void invoke<{status: AssistantStatus}>("assistant_state").then(value => { if (mounted) update(value.status ?? {}); }).catch(() => {});
+    ); };
+    const subscription = listen<AssistantStatus>("texthalo:assistant", ({ payload }) => { received = true; update(payload ?? {}); });
+    void subscription.then(() => invoke<{status: AssistantStatus}>("assistant_state")).then(value => { if (!received) update(value.status ?? {}); }).catch(() => {});
     return () => { mounted = false; void subscription.then(off => off()); };
   }, []);
   useEffect(() => { setActionError(null); }, [assistantErrorStatus?.id, assistantErrorStatus?.message]);
@@ -51,21 +60,12 @@ export default function SpeechOverlay() {
     const local = !assistantError && (signIn || billing || /hosted|fish|switch to the apple/i.test(message));
     const action = assistantError ? signIn ? "account" : billing ? "billing" : "assistant" : signIn ? "account" : billing ? "billing" : "voice";
     const actionLabel = signIn ? (/expired|renewal|again/i.test(message) ? "Sign in again" : "Sign in") : billing ? "Open Billing" : assistantError ? "Assistant settings" : "Voice settings";
-    return (
-      <div className="overlay-root speech-overlay error error-panel">
-        <div className="error-heading"><span className="activity" aria-hidden="true">!</span><strong>{assistantError ? "Unable to answer" : "Unable to speak"}</strong>
-          <button className="dismiss" aria-label={assistantError ? "Dismiss Assistant error" : "Dismiss speech error"} title="Dismiss" onClick={() => assistantError ? void invoke("assistant_control", { command: "cancel", requestId: assistantErrorStatus?.id }) : void invoke("stop_speaking")}>×</button>
-        </div>
-        <p className="error-reason" role="alert">{message}</p>
-        {actionError && <p className="recovery-error" role="alert">{actionError}</p>}
-        <div className="recovery-actions">
-          <button disabled={busy} onClick={() => assistantError
-            ? void recover(action, assistantErrorStatus?.id)
-            : void recover(action)}>{actionLabel}</button>
-          {local && <button className="secondary" disabled={busy} onClick={() => void recover("local")}>Use local voice</button>}
-        </div>
-      </div>
-    );
+    return <SpeechErrorPanel assistant={assistantError} message={message} actionError={actionError} busy={busy} actionLabel={actionLabel}
+      dismiss={() => assistantError ? void assistantControl("cancel") : void invoke("stop_speaking")}
+      recover={() => void recover(action, assistantErrorStatus?.id)}
+      useLocal={local ? () => void recover("local") : undefined}
+      textRecovery={assistantErrorStatus?.text ? { text: assistantErrorStatus.text, canUndo: assistantErrorStatus.canUndo,
+        copy: () => void assistantControl("copy"), undo: () => void assistantControl("undo") } : undefined} />;
   }
   if (status.phase === "idle") return <div className="overlay-root" />;
   const label = status.phase === "capturing" ? "Reading selection…"

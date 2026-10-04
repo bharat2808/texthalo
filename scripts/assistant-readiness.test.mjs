@@ -1,11 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { readFileSync } from 'node:fs';
-import ts from 'typescript';
+import { loadTestModule } from './load-test-module.mjs';
 
-const source = readFileSync(new URL('../src/serviceReadiness.ts', import.meta.url), 'utf8');
-const compiled = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.ESNext } }).outputText;
-const { serviceReadiness } = await import(`data:text/javascript;base64,${Buffer.from(compiled).toString('base64')}`);
+const { serviceReadiness } = await loadTestModule(new URL('../src/serviceReadiness.ts', import.meta.url));
 const ready = () => ({
   availability: { model: 'unavailable', microphone: 3, recognition: 3, imageInput: false,
     cloudConfigured: true, cloudSignedIn: true },

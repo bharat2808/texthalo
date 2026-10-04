@@ -178,16 +178,70 @@ struct AssistantPrompt {
     }
 }
 
+// Results can describe only the current utterance after a pause. Keep earlier
+// passages, but replace revisions of the same passage rather than appending
+// every partial result. Segment times are relative to the recorded audio.
+struct TranscriptAccumulator {
+    private struct Passage {
+        var text: String
+        var start: TimeInterval?
+        var end: TimeInterval?
+        var complete: Bool
+    }
+    private var passages: [Passage] = []
+    var text: String { passages.map(\.text).joined(separator: " ") }
+
+    mutating func update(_ text: String, start: TimeInterval?, end: TimeInterval?, complete: Bool) {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        // An empty reset/final callback must not erase words already recognized.
+        guard !text.isEmpty else { return }
+        let timed = start.map { $0.isFinite && $0 >= 0 } == true
+            && end.map { $0.isFinite && $0 > (start ?? 0) } == true
+        let incoming = Passage(text: text, start: timed ? start : nil, end: timed ? end : nil, complete: complete)
+        guard let current = passages.last else { passages.append(incoming); return }
+        let prefix = passages.dropLast().map(\.text).joined(separator: " ")
+        if incoming.start == nil && !prefix.isEmpty && text.hasPrefix(prefix + " ") {
+            passages = [incoming]
+        } else if let start = incoming.start, let end = current.end, start >= end {
+            passages.append(incoming)
+        } else if let start = incoming.start, let currentStart = current.start {
+            // A cumulative final may cover passages previously returned separately.
+            if start < currentStart {
+                passages.removeAll { ($0.start ?? currentStart) >= start }
+            } else {
+                passages.removeLast()
+            }
+            passages.append(incoming)
+        } else if current.complete && text != current.text
+                    && !text.hasPrefix(current.text) {
+            // Some on-device recognizers reset provisional timings to zero for
+            // the next utterance. Metadata marks the preceding passage complete.
+            passages.append(incoming)
+        } else {
+            passages.removeLast()
+            passages.append(incoming)
+        }
+    }
+}
+
 // A recognizer may finalize before key-up; only release authorizes delivering text.
 struct TranscriptGate {
     private var held = true
     private var delivered = false
     private var pending: String?
-    mutating func recognized(_ text: String) -> String? {
+    private var accumulator = TranscriptAccumulator()
+    var text: String { accumulator.text }
+    mutating func recognized(_ text: String, isFinal: Bool = true,
+                             start: TimeInterval? = nil, end: TimeInterval? = nil,
+                             utteranceComplete: Bool = false) -> String? {
         guard !delivered else { return nil }
-        if held { pending = text; return nil }
+        accumulator.update(text, start: start, end: end, complete: isFinal || utteranceComplete)
+        // A new partial after an early final means audio is still being recognized.
+        pending = isFinal ? accumulator.text : nil
+        guard isFinal else { return nil }
+        if held { return nil }
         delivered = true
-        return text
+        return accumulator.text
     }
     mutating func release() -> String? {
         guard held, !delivered else { return nil }

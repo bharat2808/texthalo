@@ -495,11 +495,18 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
         recognition = recognizer.recognitionTask(with: bufferRequest) { [weak self] response, error in
             Task { @MainActor in
                 guard let self, self.id == currentID, self.recording || self.finishing else { return }
-                if let response, response.isFinal {
-                    let text = response.bestTranscription.formattedString
-                    if let transcript = self.transcriptGate.recognized(text) { self.completeTranscript(transcript) }
-                } else if let response, self.recording {
-                    self.event("recording", "Listening… Release to transcribe.", text: response.bestTranscription.formattedString)
+                if let response {
+                    let transcription = response.bestTranscription
+                    let segments = transcription.segments
+                    let start = segments.first?.timestamp
+                    let end = segments.last.map { $0.timestamp + $0.duration }
+                    if let transcript = self.transcriptGate.recognized(transcription.formattedString,
+                        isFinal: response.isFinal, start: start, end: end,
+                        utteranceComplete: response.speechRecognitionMetadata != nil) {
+                        self.completeTranscript(transcript)
+                    } else if self.recording {
+                        self.event("recording", "Listening… Release to transcribe.", text: self.transcriptGate.text)
+                    }
                 } else if let error {
                     self.cancel(); self.event("error", "Transcription failed: \(error.localizedDescription)")
                 }

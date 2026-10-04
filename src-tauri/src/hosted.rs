@@ -714,6 +714,8 @@ enum StreamEvent {
     },
     Finished {
         status: String,
+        #[serde(default, rename = "creditLimited")]
+        credit_limited: bool,
         #[serde(rename = "availableCredits")]
         _available_credits: Option<u64>,
     },
@@ -843,6 +845,7 @@ async fn stream_speech_inner(
     let mut tick = tokio::time::interval(Duration::from_millis(20));
     let mut is_started = false;
     let mut finished = false;
+    let mut credit_limited = false;
     loop {
         // Poll the bounded native input without blocking the async socket reader.
         // The same tick grants playback lookahead; neither direction waits on the other.
@@ -945,10 +948,11 @@ async fn stream_speech_inner(
                         if pending_ack.is_some() { return Err("The speech server sent overlapping playback requests.".into()); }
                         pending_ack = Some((next_chunk_index, audio_bytes_sent));
                     }
-                    StreamEvent::Finished { status, .. } => {
-                        if status != "completed" || !upload.finished {
+                    StreamEvent::Finished { status, credit_limited: limited, .. } => {
+                        if status != "completed" || (!upload.finished && !limited) {
                             return Err("The live speech request did not complete.".into());
                         }
+                        credit_limited = limited;
                         finished = true;
                         break;
                     }
@@ -975,6 +979,9 @@ async fn stream_speech_inner(
     player.push(Vec::new(), true);
     while player.is_playing()? && app_state.job.lock().unwrap().is_current(job_id) {
         tokio::time::sleep(Duration::from_millis(40)).await;
+    }
+    if credit_limited && app_state.job.lock().unwrap().is_current(job_id) {
+        return Err(api_error(reqwest::StatusCode::PAYMENT_REQUIRED, &json!({"error":"insufficient_credits"})));
     }
     if app_state.job.lock().unwrap().is_current(job_id) {
         if let Some(recorder) = recorder {

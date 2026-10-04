@@ -47,12 +47,14 @@ test("updater archive strips the app-name component and rejects AppleDouble side
 test("CLI inspects real Mach-O archives and rejects swapped architectures", { skip: process.platform !== "darwin" }, async () => {
   const root = await mkdtemp(join(tmpdir(), "texthalo-manifest-test-"));
   try {
+    // Pair the selected compiler with its SDK instead of /usr/bin/clang's default SDK.
+    const sdk = execFileSync("xcrun", ["--sdk", "macosx", "--show-sdk-path"], { encoding: "utf8" }).trim();
     const artifacts = [];
     for (const arch of ["arm64", "x86_64"]) {
       const folder = join(root, arch);
       const contents = join(folder, "TextHalo.app", "Contents");
       await mkdir(join(contents, "MacOS"), { recursive: true });
-      execFileSync("/usr/bin/clang", ["-arch", arch, "-mmacosx-version-min=11.0", "-x", "c", "-o", join(contents, "MacOS", "texthalo"), "-"], { input: "int main(void) { return 0; }" });
+      execFileSync("xcrun", ["--sdk", "macosx", "clang", "-isysroot", sdk, "-arch", arch, "-mmacosx-version-min=11.0", "-x", "c", "-o", join(contents, "MacOS", "texthalo"), "-"], { input: "int main(void) { return 0; }" });
       await writeFile(join(contents, "Info.plist"), `<?xml version="1.0"?><plist version="1.0"><dict><key>CFBundleExecutable</key><string>texthalo</string><key>CFBundleIdentifier</key><string>com.kiegen.app</string><key>CFBundleShortVersionString</key><string>1.2.3</string></dict></plist>`);
       const archive = join(root, `${arch}.app.tar.gz`);
       execFileSync("tar", ["-czf", archive, "-C", folder, "TextHalo.app"], { env: { ...process.env, COPYFILE_DISABLE: "1" } });
