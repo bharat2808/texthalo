@@ -31,7 +31,10 @@ pub fn parse(accelerator: &str) -> Result<Shortcut, String> {
 }
 
 pub fn is_hold(accelerator: &str) -> bool {
-    matches!(accelerator, "Hold:Fn" | "Hold:LeftOption" | "Hold:RightOption" | "Hold:Escape")
+    matches!(
+        accelerator,
+        "Hold:Fn" | "Hold:LeftOption" | "Hold:RightOption" | "Hold:Escape"
+    )
 }
 
 /// Validate the whole set before touching the OS: parse errors and collisions are
@@ -54,14 +57,18 @@ pub fn bindings(settings: &Settings) -> Result<Vec<Binding>, String> {
                 return Err("Hold keys are available for Dictate and Assistant.".into());
             }
             if holds.contains(&accelerator) {
-                return Err(format!("`{accelerator}` is already bound to another action"));
+                return Err(format!(
+                    "`{accelerator}` is already bound to another action"
+                ));
             }
             holds.push(accelerator);
             continue;
         }
         let shortcut = parse(accelerator)?;
         if shortcut.to_string() == "Escape"
-            && (settings.shortcuts.transcribe == "Hold:Escape" || settings.shortcuts.assistant == "Hold:Escape") {
+            && (settings.shortcuts.transcribe == "Hold:Escape"
+                || settings.shortcuts.assistant == "Hold:Escape")
+        {
             return Err("Escape is already used as a hold key.".into());
         }
         if let Some(previous) = out.iter().find(|b| b.shortcut == shortcut) {
@@ -100,7 +107,10 @@ pub fn apply(app: &AppHandle) -> Result<Vec<String>, String> {
         .filter(|b| !refused.contains(&b.shortcut.to_string()))
         .collect();
 
-    if app.try_state::<crate::assistant::AssistantState>().is_some() {
+    if app
+        .try_state::<crate::assistant::AssistantState>()
+        .is_some()
+    {
         crate::assistant::configure_holds(app)?;
     }
 

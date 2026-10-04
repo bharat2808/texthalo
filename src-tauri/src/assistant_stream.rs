@@ -82,9 +82,18 @@ mod tests {
     #[test]
     fn ocr_line_wraps_wait_for_sentence_punctuation() {
         let mut buffer = SnapshotBuffer::default();
-        assert_eq!(buffer.update("A sentence wraps\nacross lines", false).unwrap(), "");
-        assert_eq!(buffer.update("A sentence wraps\nacross lines. Next", false).unwrap(),
-                   "A sentence wraps\nacross lines. ");
+        assert_eq!(
+            buffer
+                .update("A sentence wraps\nacross lines", false)
+                .unwrap(),
+            ""
+        );
+        assert_eq!(
+            buffer
+                .update("A sentence wraps\nacross lines. Next", false)
+                .unwrap(),
+            "A sentence wraps\nacross lines. "
+        );
     }
 
     #[test]

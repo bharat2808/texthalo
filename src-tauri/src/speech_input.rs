@@ -3,8 +3,10 @@ use std::sync::mpsc::{self, Receiver, SyncSender};
 
 /// Normalize only at engine boundaries. Preserve spaces at streamed chunk edges.
 pub fn normalize(text: &str) -> String {
-    text.chars().flat_map(char::to_lowercase)
-        .map(|c| if c.is_whitespace() { ' ' } else { c }).collect()
+    text.chars()
+        .flat_map(char::to_lowercase)
+        .map(|c| if c.is_whitespace() { ' ' } else { c })
+        .collect()
 }
 
 pub const MAX_CHARS: usize = 20_000;
@@ -29,7 +31,10 @@ pub fn channel() -> (SyncSender<SpeechEvent>, SpeechInput) {
 mod tests {
     #[test]
     fn audio_text_is_lowercase_and_has_no_line_breaks() {
-        assert_eq!(super::normalize("HELLO\r\nWorld\u{2028}ÉCOLE"), "hello  world école");
+        assert_eq!(
+            super::normalize("HELLO\r\nWorld\u{2028}ÉCOLE"),
+            "hello  world école"
+        );
     }
     #[test]
     fn streamed_normalization_preserves_word_boundaries() {

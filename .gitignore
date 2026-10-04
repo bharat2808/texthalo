@@ -41,3 +41,6 @@ src-tauri/binaries/texthalo-assistant-*
 
 # Generated demo narration and render scratch assets
 modal-video/output/
+
+# Separate backend repository; managed and released independently.
+/texthalo-server/

@@ -254,9 +254,14 @@ pub fn load(app: &AppHandle) -> Settings {
 fn parse_settings(raw: &str) -> Result<Settings, serde_json::Error> {
     let value: serde_json::Value = serde_json::from_str(raw)?;
     let has_onboarding_state = value.get("onboarding_completed").is_some();
-    let has_transcription_engine = value.get("assistant").and_then(|a| a.get("transcription_engine")).is_some();
+    let has_transcription_engine = value
+        .get("assistant")
+        .and_then(|a| a.get("transcription_engine"))
+        .is_some();
     let mut settings: Settings = serde_json::from_value(value)?;
-    if !has_transcription_engine { settings.assistant.transcription_engine = "apple".into(); }
+    if !has_transcription_engine {
+        settings.assistant.transcription_engine = "apple".into();
+    }
     if !has_onboarding_state {
         settings.onboarding_completed = true;
     }
@@ -278,11 +283,26 @@ mod tests {
 
     #[test]
     fn transcription_defaults_and_migration() {
-        assert_eq!(Settings::default().assistant.transcription_engine, "whisper");
+        assert_eq!(
+            Settings::default().assistant.transcription_engine,
+            "whisper"
+        );
         assert_eq!(Settings::default().assistant.whisper_model, "small");
-        assert_eq!(parse_settings(r#"{"assistant":{"language":"hi-IN"}}"#).unwrap().assistant.transcription_engine, "apple");
+        assert_eq!(
+            parse_settings(r#"{"assistant":{"language":"hi-IN"}}"#)
+                .unwrap()
+                .assistant
+                .transcription_engine,
+            "apple"
+        );
         let saved = serde_json::to_string(&Settings::default()).unwrap();
-        assert_eq!(parse_settings(&saved).unwrap().assistant.transcription_engine, "whisper");
+        assert_eq!(
+            parse_settings(&saved)
+                .unwrap()
+                .assistant
+                .transcription_engine,
+            "whisper"
+        );
     }
     /// The default must stay Apple. If this ever flips, a fresh install starts by asking
     /// the user for a 325 MB (or 2 GB) download before it can say a word.
@@ -392,7 +412,8 @@ mod tests {
 
     #[test]
     fn legacy_assistant_remains_local_without_cloud_consent() {
-        let settings: Settings = serde_json::from_str(r#"{"assistant":{"language":"fr-FR"}}"#).unwrap();
+        let settings: Settings =
+            serde_json::from_str(r#"{"assistant":{"language":"fr-FR"}}"#).unwrap();
         assert_eq!(settings.assistant.provider, "local");
         assert_eq!(settings.assistant.cloud_consent_version, None);
         assert_eq!(settings.assistant.language, "fr-FR");
@@ -403,7 +424,8 @@ mod tests {
         let mut settings = Settings::default();
         settings.assistant.provider = "cloud".into();
         settings.assistant.cloud_consent_version = Some(1);
-        let loaded: Settings = serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+        let loaded: Settings =
+            serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
         assert_eq!(loaded.assistant.provider, "cloud");
         assert_eq!(loaded.assistant.cloud_consent_version, Some(1));
     }

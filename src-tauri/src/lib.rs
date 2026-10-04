@@ -5,7 +5,6 @@
 //! real app is the Rust service below; the webview is a config editor and setup wizard.
 
 mod assistant;
-mod hosted_assistant;
 mod assistant_job;
 mod assistant_stream;
 mod capture;
@@ -17,12 +16,13 @@ pub mod engine_paths;
 pub mod engines;
 pub mod espeak;
 pub mod g2p;
-mod history;
 mod generation_history;
+mod history;
+mod hosted;
+mod hosted_assistant;
+mod hosted_input;
 #[cfg(target_os = "macos")]
 mod instance;
-mod hosted;
-mod hosted_input;
 pub mod kokoro;
 pub mod lexicon;
 pub mod numbers;
@@ -35,11 +35,11 @@ mod speech_job;
 pub mod spoken;
 mod streaming;
 mod transcription_history;
+mod update_safety;
+pub mod voices;
 mod whisper;
 pub mod whisper_core;
 mod whisper_models;
-mod update_safety;
-pub mod voices;
 
 use std::sync::Mutex;
 
@@ -1179,7 +1179,10 @@ pub fn run() {
     #[cfg(target_os = "macos")]
     let _instance = match instance::acquire() {
         Ok(guard) => guard,
-        Err(error) => { eprintln!("{error}"); return; }
+        Err(error) => {
+            eprintln!("{error}");
+            return;
+        }
     };
     tauri::Builder::default()
         .on_window_event(|window, event| {

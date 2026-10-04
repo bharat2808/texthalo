@@ -7,15 +7,21 @@ pub struct Upload {
 }
 impl Upload {
     pub fn append(&mut self, text: &str) -> Result<u64, String> {
-        if self.finished || text.is_empty() { return Err("Invalid speech input sequence.".into()); }
-        if self.text.chars().count() + text.chars().count() > 20_000 { return Err("Speech exceeds 20,000 characters.".into()); }
+        if self.finished || text.is_empty() {
+            return Err("Invalid speech input sequence.".into());
+        }
+        if self.text.chars().count() + text.chars().count() > 20_000 {
+            return Err("Speech exceeds 20,000 characters.".into());
+        }
         let sequence = self.sequence;
         self.sequence += 1;
         self.text.push_str(text);
         Ok(sequence)
     }
     pub fn finish(&mut self) -> Result<u64, String> {
-        if self.finished || self.text.trim().is_empty() { return Err("Speech ended without valid text.".into()); }
+        if self.finished || self.text.trim().is_empty() {
+            return Err("Speech ended without valid text.".into());
+        }
         self.finished = true;
         Ok(self.sequence)
     }

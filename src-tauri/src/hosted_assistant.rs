@@ -382,13 +382,84 @@ fn server_error(value: &Value) -> String {
     .collect()
 }
 
+async fn reconcile(app: &AppHandle, id: u64, request: &str, audit: Option<&str>) {
+    for delay in RECOVERY_DELAYS {
+        if delay > 0 {
+            tokio::time::sleep(Duration::from_secs(delay)).await;
+        }
+        let Ok(status) = crate::hosted::json_request(
+            reqwest::Method::GET,
+            &format!("/v1/assistant/requests/{request}"),
+            None,
+        )
+        .await
+        else {
+            continue;
+        };
+        let usage = status.get("usage").cloned().unwrap_or(status);
+        crate::generation_history::save_cloud_usage(app, audit, request, &usage);
+        let pending = matches!(
+            usage["billingStatus"].as_str(),
+            None | Some("pending" | "reserved")
+        );
+        crate::assistant::hosted_usage(app, id, request, usage);
+        if !pending {
+            break;
+        }
+    }
+}
+pub(crate) async fn recover(app: AppHandle) {
+    static RECOVERY: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    let Ok(_guard) = RECOVERY.try_lock() else {
+        return;
+    };
+    use tauri::Manager;
+    let Ok(root) = app
+        .path()
+        .app_data_dir()
+        .map(|p| p.join("generation-history"))
+    else {
+        return;
+    };
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().is_none_or(|e| e != "usage") {
+            continue;
+        }
+        let Ok(bytes) = std::fs::read(&path) else {
+            continue;
+        };
+        let Ok(value) = serde_json::from_slice::<Value>(&bytes) else {
+            continue;
+        };
+        if !matches!(
+            value["usage"]["billingStatus"].as_str(),
+            None | Some("pending" | "reserved")
+        ) {
+            continue;
+        }
+        let Some(request) = value["requestId"]
+            .as_str()
+            .filter(|s| uuid::Uuid::parse_str(s).is_ok())
+        else {
+            continue;
+        };
+        reconcile(&app, 0, request, path.file_stem().and_then(|s| s.to_str())).await;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     #[test]
     fn terminal_error_preserves_prior_authoritative_settlement_amounts() {
-        let mut decoder = Decoder::default();
-        decoder.dispatched = true;
+        let mut decoder = Decoder {
+            dispatched: true,
+            ..Decoder::default()
+        };
         event(&mut decoder, 1, "accepted", json!({"reservedCredits":1000})).unwrap();
         event(&mut decoder, 2, "usage", json!({"billingStatus":"settled","chargedCredits":1,"refundedCredits":999,"availableCredits":42})).unwrap();
         event(
@@ -405,8 +476,10 @@ mod tests {
     }
     #[test]
     fn incomplete_terminal_error_after_admission_requires_reconciliation() {
-        let mut decoder = Decoder::default();
-        decoder.dispatched = true;
+        let mut decoder = Decoder {
+            dispatched: true,
+            ..Decoder::default()
+        };
         event(&mut decoder, 1, "accepted", json!({"reservedCredits":1000})).unwrap();
         event(
             &mut decoder,
@@ -419,8 +492,10 @@ mod tests {
     }
     #[test]
     fn provisional_zero_amounts_do_not_make_terminal_error_authoritative() {
-        let mut decoder = Decoder::default();
-        decoder.dispatched = true;
+        let mut decoder = Decoder {
+            dispatched: true,
+            ..Decoder::default()
+        };
         event(&mut decoder, 1, "accepted", json!({"reservedCredits":1000})).unwrap();
         event(
             &mut decoder,
@@ -440,8 +515,10 @@ mod tests {
     }
     #[test]
     fn admission_rejection_preserves_released_usage_without_recovery() {
-        let mut decoder = Decoder::default();
-        decoder.dispatched = true;
+        let mut decoder = Decoder {
+            dispatched: true,
+            ..Decoder::default()
+        };
         let error = event(&mut decoder, 1, "error", json!({"error":"insufficient_credits","billingStatus":"released","chargedCredits":0,"refundedCredits":0,"availableCredits":7})).unwrap();
         assert!(matches!(error, Event::Error(_)));
         let usage = definitive_failure_usage(&decoder).unwrap();
@@ -692,74 +769,5 @@ mod tests {
             resolve("automatic", Some(1), false, true, true).unwrap(),
             "cloud"
         );
-    }
-}
-
-async fn reconcile(app: &AppHandle, id: u64, request: &str, audit: Option<&str>) {
-    for delay in RECOVERY_DELAYS {
-        if delay > 0 {
-            tokio::time::sleep(Duration::from_secs(delay)).await;
-        }
-        let Ok(status) = crate::hosted::json_request(
-            reqwest::Method::GET,
-            &format!("/v1/assistant/requests/{request}"),
-            None,
-        )
-        .await
-        else {
-            continue;
-        };
-        let usage = status.get("usage").cloned().unwrap_or(status);
-        crate::generation_history::save_cloud_usage(app, audit, request, &usage);
-        let pending = matches!(
-            usage["billingStatus"].as_str(),
-            None | Some("pending" | "reserved")
-        );
-        crate::assistant::hosted_usage(app, id, request, usage);
-        if !pending {
-            break;
-        }
-    }
-}
-pub(crate) async fn recover(app: AppHandle) {
-    static RECOVERY: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-    let Ok(_guard) = RECOVERY.try_lock() else {
-        return;
-    };
-    use tauri::Manager;
-    let Ok(root) = app
-        .path()
-        .app_data_dir()
-        .map(|p| p.join("generation-history"))
-    else {
-        return;
-    };
-    let Ok(entries) = std::fs::read_dir(root) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().is_none_or(|e| e != "usage") {
-            continue;
-        }
-        let Ok(bytes) = std::fs::read(&path) else {
-            continue;
-        };
-        let Ok(value) = serde_json::from_slice::<Value>(&bytes) else {
-            continue;
-        };
-        if !matches!(
-            value["usage"]["billingStatus"].as_str(),
-            None | Some("pending" | "reserved")
-        ) {
-            continue;
-        }
-        let Some(request) = value["requestId"]
-            .as_str()
-            .filter(|s| uuid::Uuid::parse_str(s).is_ok())
-        else {
-            continue;
-        };
-        reconcile(&app, 0, request, path.file_stem().and_then(|s| s.to_str())).await;
     }
 }

@@ -860,7 +860,7 @@ button:focus-visible {
 .home-pane { max-width: 920px; gap: 14px; padding: 20px; }
 .home-pane .pane-title { font-size: 21px; letter-spacing: -.025em; }
 .home-intro { margin: 4px 0 0; color: var(--label-secondary); font-size: 13px; }
-.listen-hero { padding: 18px; border: 1px solid color-mix(in srgb, var(--accent) 20%, var(--separator)); border-radius: 14px; background: color-mix(in srgb, var(--accent) 5%, var(--control-bg)); }
+.listen-hero { padding: 18px; border: 1px solid var(--separator); border-radius: 14px; background: color-mix(in srgb, var(--control-bg) 65%, transparent); }
 .home-eyebrow { color: var(--accent); font-size: 10px; font-weight: 700; letter-spacing: .12em; }
 .listen-hero h2 { margin: 8px 0; font-size: 21px; letter-spacing: -.025em; line-height: 1.2; }
 .listen-hero p { margin: 8px 0; line-height: 1.4; }

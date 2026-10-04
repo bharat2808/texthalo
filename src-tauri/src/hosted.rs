@@ -786,7 +786,7 @@ async fn stream_speech_inner(
         enabled: archive,
         source,
     } = history;
-    use crate::speech_input::{SpeechInput, SpeechEvent};
+    use crate::speech_input::{SpeechEvent, SpeechInput};
     use std::sync::mpsc::TryRecvError;
     let (mut upload, input) = match input {
         SpeechInput::Complete(text) => {
@@ -837,7 +837,8 @@ async fn stream_speech_inner(
     let history_root = archive.then(|| crate::history_dir(&app).ok()).flatten();
     // One recorder for the entire request, across all provider chunks.
     let mut recorder = history_root.as_deref().and_then(|dir| {
-        crate::history::ArchivedRecording::new(dir, "Fish Audio", &voice_id, &upload.text, &source).ok()
+        crate::history::ArchivedRecording::new(dir, "Fish Audio", &voice_id, &upload.text, &source)
+            .ok()
     });
     let mut buffer = Vec::<u8>::new();
     let mut ready = false;
@@ -907,13 +908,19 @@ async fn stream_speech_inner(
                         recorder.write(&samples);
                     }
                     let mut job = app_state.job.lock().unwrap();
-                    if !job.is_current(job_id) { return Ok(()); }
+                    if !job.is_current(job_id) {
+                        return Ok(());
+                    }
                     player.push(samples, false);
                     if !is_started {
                         app_state.spoken.activate_pcm(player.clone());
                         player.start()?;
                         is_started = true;
-                        job.set(crate::Phase::Speaking, None, Some(upload.text.chars().count()));
+                        job.set(
+                            crate::Phase::Speaking,
+                            None,
+                            Some(upload.text.chars().count()),
+                        );
                         let _ = app.emit("kiegen:status", &job.status);
                     }
                 }
@@ -923,9 +930,15 @@ async fn stream_speech_inner(
                 match serde_json::from_value::<StreamEvent>(value.clone())
                     .unwrap_or(StreamEvent::Other)
                 {
-                    StreamEvent::Ready { session_id, input_mode } => {
+                    StreamEvent::Ready {
+                        session_id,
+                        input_mode,
+                    } => {
                         if incremental && input_mode.as_deref() != Some("incremental") {
-                            return Err("This speech server does not support streamed assistant text yet.".into());
+                            return Err(
+                                "This speech server does not support streamed assistant text yet."
+                                    .into(),
+                            );
                         }
                         ready = true;
                         let mut job = app_state.job.lock().unwrap();
@@ -945,10 +958,18 @@ async fn stream_speech_inner(
                         next_chunk_index,
                         audio_bytes_sent,
                     } => {
-                        if pending_ack.is_some() { return Err("The speech server sent overlapping playback requests.".into()); }
+                        if pending_ack.is_some() {
+                            return Err(
+                                "The speech server sent overlapping playback requests.".into()
+                            );
+                        }
                         pending_ack = Some((next_chunk_index, audio_bytes_sent));
                     }
-                    StreamEvent::Finished { status, credit_limited: limited, .. } => {
+                    StreamEvent::Finished {
+                        status,
+                        credit_limited: limited,
+                        ..
+                    } => {
                         if status != "completed" || (!upload.finished && !limited) {
                             return Err("The live speech request did not complete.".into());
                         }
@@ -981,7 +1002,10 @@ async fn stream_speech_inner(
         tokio::time::sleep(Duration::from_millis(40)).await;
     }
     if credit_limited && app_state.job.lock().unwrap().is_current(job_id) {
-        return Err(api_error(reqwest::StatusCode::PAYMENT_REQUIRED, &json!({"error":"insufficient_credits"})));
+        return Err(api_error(
+            reqwest::StatusCode::PAYMENT_REQUIRED,
+            &json!({"error":"insufficient_credits"}),
+        ));
     }
     if app_state.job.lock().unwrap().is_current(job_id) {
         if let Some(recorder) = recorder {

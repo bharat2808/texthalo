@@ -168,7 +168,7 @@ Nothing in this License is intended to revoke, modify, or restrict rights that w
 For clarity, the TextHalo Source Available License 1.0 applies beginning with:
 
 - Effective version: 0.1.12 source revisions expressly distributed under this License after the prior Apache-licensed release
-- Effective commit: the first commit introducing this License and the updated project license declarations (pending commit)
+- Effective commit: the first commit on the main branch introducing this License and the updated project license declarations
 - Effective date: 2026-10-04
 
 The prior Apache-licensed release and source baseline are:

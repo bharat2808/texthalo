@@ -72,7 +72,7 @@ impl Engine {
             .map_err(|e| format!("Transcription failed: {e}"))?;
         let mut text = String::new();
         for segment in state.as_iter() {
-            text.push_str(&segment.to_str().map_err(|e| e.to_string())?);
+            text.push_str(segment.to_str().map_err(|e| e.to_string())?);
         }
         Ok(text.trim().to_owned())
     }

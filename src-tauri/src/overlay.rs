@@ -168,20 +168,17 @@ pub(crate) fn position_sized(window: &tauri::WebviewWindow, width: f64, height: 
                 return;
             }
             let origin = if visible {
-                NSPoint::new(current.origin.x, current.origin.y + current.size.height - height)
+                NSPoint::new(
+                    current.origin.x,
+                    current.origin.y + current.size.height - height,
+                )
             } else {
                 NSPoint::new(
                     frame.origin.x + (frame.size.width - width) / 2.0,
                     frame.origin.y + frame.size.height - height - 6.0,
                 )
             };
-            native.setFrame_display(
-                NSRect::new(
-                    origin,
-                    NSSize::new(width, height),
-                ),
-                true,
-            );
+            native.setFrame_display(NSRect::new(origin, NSSize::new(width, height)), true);
         }
     }
 }

@@ -29,6 +29,9 @@ ignore = [
 version = 2
 # Confidence threshold: 0.9 is cargo-deny's default; lower only if CI is noisy.
 confidence-threshold = 0.9
+# The application has custom terms and is not published as a reusable crate.
+# Continue checking every third-party dependency against the policy below.
+private = { ignore = true }
 # Allowed third-party dependency licenses; these do not declare TextHalo’s own license.
 allow = [
     "MIT",

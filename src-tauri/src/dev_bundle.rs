@@ -76,13 +76,19 @@ pub fn launch() -> Result<bool, Box<dyn std::error::Error>> {
             .arg(&path)
             .status()?;
         if !signed.success() {
-            return Err(format!("Could not sign {} with {identity}; check the signing certificate in Keychain", path.display()).into());
+            return Err(format!(
+                "Could not sign {} with {identity}; check the signing certificate in Keychain",
+                path.display()
+            )
+            .into());
         }
     }
     if !Command::new("/usr/bin/codesign")
         .args(["--verify", "--deep", "--strict"])
         .arg(&bundle)
-        .status()?.success() {
+        .status()?
+        .success()
+    {
         return Err("TextHalo development signature verification failed".into());
     }
     let status = Command::new("/usr/bin/open")
@@ -104,7 +110,10 @@ mod tests {
     #[test]
     fn development_uses_the_configured_release_identity() {
         let config = serde_json::json!({"bundle":{"macOS":{"signingIdentity":"Developer ID Application: Test (TEAM)"}}});
-        assert_eq!(signing_identity(&config).unwrap(), "Developer ID Application: Test (TEAM)");
+        assert_eq!(
+            signing_identity(&config).unwrap(),
+            "Developer ID Application: Test (TEAM)"
+        );
         for identity in ["", "-", "   "] {
             let config = serde_json::json!({"bundle":{"macOS":{"signingIdentity":identity}}});
             assert!(signing_identity(&config).is_err());

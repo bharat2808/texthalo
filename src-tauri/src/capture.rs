@@ -242,8 +242,7 @@ mod platform {
                 CFRelease(subrole);
                 return false;
             }
-            CFString::wrap_under_create_rule(subrole as CFStringRef).to_string()
-                == "AXSecureTextField"
+            CFString::wrap_under_create_rule(subrole as CFStringRef) == "AXSecureTextField"
         }
     }
 

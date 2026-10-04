@@ -42,8 +42,13 @@ struct Inner {
 
 fn hold_configuration(settings: &Settings) -> Value {
     let mut bindings = serde_json::Map::new();
-    for (mode, key) in [("transcribe", &settings.shortcuts.transcribe), ("assistant", &settings.shortcuts.assistant)] {
-        if crate::shortcuts::is_hold(key) { bindings.insert(mode.into(), json!(key)); }
+    for (mode, key) in [
+        ("transcribe", &settings.shortcuts.transcribe),
+        ("assistant", &settings.shortcuts.assistant),
+    ] {
+        if crate::shortcuts::is_hold(key) {
+            bindings.insert(mode.into(), json!(key));
+        }
     }
     json!({"command":"hold_configure", "id":0, "holdBindings":bindings})
 }
@@ -53,7 +58,13 @@ pub fn configure_holds(app: &AppHandle) -> Result<(), String> {
     let state = app.state::<AssistantState>();
     let mut inner = state.inner.lock().unwrap();
     // Do not launch a sidecar solely for an empty hold configuration.
-    if inner.native.is_none() && value["holdBindings"].as_object().is_some_and(|b| b.is_empty()) { return Ok(()); }
+    if inner.native.is_none()
+        && value["holdBindings"]
+            .as_object()
+            .is_some_and(|b| b.is_empty())
+    {
+        return Ok(());
+    }
     send(app, &mut inner, value)
 }
 
@@ -108,7 +119,13 @@ fn send(app: &AppHandle, inner: &mut Inner, value: Value) -> Result<(), String> 
         #[cfg(not(target_os = "macos"))]
         let path = std::path::PathBuf::from("texthalo-assistant");
         let mut child = Command::new(path)
-            .env("TEXTHALO_AUDIT_DIR", app.path().app_data_dir().map_err(|e| e.to_string())?.join("generation-history"))
+            .env(
+                "TEXTHALO_AUDIT_DIR",
+                app.path()
+                    .app_data_dir()
+                    .map_err(|e| e.to_string())?
+                    .join("generation-history"),
+            )
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -116,7 +133,9 @@ fn send(app: &AppHandle, inner: &mut Inner, value: Value) -> Result<(), String> 
             .map_err(|e| format!("Could not start native assistant: {e}"))?;
         let mut input = child.stdin.take().ok_or("Native input unavailable")?;
         let holds = hold_configuration(&app.state::<AppState>().settings.lock().unwrap());
-        writeln!(input, "{holds}").and_then(|_| input.flush()).map_err(|e| e.to_string())?;
+        writeln!(input, "{holds}")
+            .and_then(|_| input.flush())
+            .map_err(|e| e.to_string())?;
         let output = child.stdout.take().ok_or("Native output unavailable")?;
         let pid = child.id();
         inner.native = Some(Native { child, input });
@@ -132,7 +151,7 @@ fn send(app: &AppHandle, inner: &mut Inner, value: Value) -> Result<(), String> 
             let mut inner = state.inner.lock().unwrap();
             if inner.native.as_ref().map(|n| n.child.id()) == Some(pid) {
                 inner.native = None;
-                crate::whisper::cancel(&app,None);
+                crate::whisper::cancel(&app, None);
                 cancel_cloud(&mut inner);
                 stop_assistant_speech(&app, &mut inner);
                 inner.job.cancel();
@@ -154,7 +173,11 @@ struct Presentation {
 }
 
 #[derive(Debug, PartialEq)]
-enum NarrationOwnership { None, Current, Replaced }
+enum NarrationOwnership {
+    None,
+    Current,
+    Replaced,
+}
 fn narration_ownership(owned: Option<u64>, current: u64) -> NarrationOwnership {
     match owned {
         None => NarrationOwnership::None,
@@ -168,13 +191,18 @@ fn audio_presentation(status: &Value, phase: &Phase, message: Option<&str>) -> V
     value["assistantSpeech"] = json!(true);
     // Copy/Undo after a terminal speech failure owns this window too. Preserve
     // its recovery result instead of redisplaying the old playback error.
-    if matches!(phase, Phase::Error) && status["phase"] == "result" && status["action"] != "speak" { return value; }
+    if matches!(phase, Phase::Error) && status["phase"] == "result" && status["action"] != "speak" {
+        return value;
+    }
     match phase {
-        Phase::Idle => { value["phase"] = json!("idle"); }
+        Phase::Idle => {
+            value["phase"] = json!("idle");
+        }
         Phase::Error => {
             value["phase"] = json!("error");
             value["action"] = Value::Null;
-            value["message"] = json!(message.unwrap_or("Speech could not complete. The generated text is available to copy."));
+            value["message"] = json!(message
+                .unwrap_or("Speech could not complete. The generated text is available to copy."));
         }
         _ => {
             let generating = status["phase"] == "streaming";
@@ -193,7 +221,9 @@ fn audio_presentation(status: &Value, phase: &Phase, message: Option<&str>) -> V
 /// Called after releasing the speech-job mutex. An assistant-owned narration uses
 /// the same preview window, rather than opening a second playback overlay.
 pub(crate) fn sync_speech(app: &AppHandle) -> bool {
-    let Some(state) = app.try_state::<AssistantState>() else { return false; };
+    let Some(state) = app.try_state::<AssistantState>() else {
+        return false;
+    };
     let mut inner = state.inner.lock().unwrap();
     // Read current speech only after locking the assistant. A tick snapshot taken
     // earlier can predate a newly acquired narration lease and cancel that new job.
@@ -219,10 +249,14 @@ pub(crate) fn sync_speech(app: &AppHandle) -> bool {
             if matches!(status.phase, Phase::Error) {
                 cancel_cloud(&mut inner);
                 let id = inner.status["id"].as_u64().unwrap_or(0);
-                if inner.native.is_some() { let _ = send(app, &mut inner, json!({"command":"halt","id":id})); }
+                if inner.native.is_some() {
+                    let _ = send(app, &mut inner, json!({"command":"halt","id":id}));
+                }
             } else {
                 inner.job.cancel();
-                if inner.native.is_some() { let _ = send(app, &mut inner, json!({"command":"cancel","id":0})); }
+                if inner.native.is_some() {
+                    let _ = send(app, &mut inner, json!({"command":"cancel","id":0}));
+                }
             }
         }
         inner.status = next;
@@ -232,27 +266,57 @@ pub(crate) fn sync_speech(app: &AppHandle) -> bool {
 }
 
 fn presentation(status: &Value) -> Presentation {
-    let busy = matches!(status["phase"].as_str(), Some("recording" | "processing" | "capturing_screen" | "streaming" | "speaking"));
+    let busy = matches!(
+        status["phase"].as_str(),
+        Some("recording" | "processing" | "capturing_screen" | "streaming" | "speaking")
+    );
     let show = !matches!(status["phase"].as_str(), Some("idle" | "canceled"))
         && (busy || !matches!(status["action"].as_str(), Some("speak" | "applied")));
-    let expanded = status["text"].as_str().is_some_and(|s| !s.is_empty()) && status["action"] != "applied";
+    let expanded =
+        status["text"].as_str().is_some_and(|s| !s.is_empty()) && status["action"] != "applied";
     let compact = busy || matches!(status["action"].as_str(), Some("copied" | "undone"));
     let height = if busy && expanded {
-        if status["previewExpanded"] == true { status["previewHeight"].as_f64().unwrap_or(76.0).clamp(76.0, 4096.0) } else { 76.0 }
-    } else if compact { 44.0 } else if expanded { 360.0 } else { 140.0 };
-    Presentation { show, compact, height }
+        if status["previewExpanded"] == true {
+            status["previewHeight"]
+                .as_f64()
+                .unwrap_or(76.0)
+                .clamp(76.0, 4096.0)
+        } else {
+            76.0
+        }
+    } else if compact {
+        44.0
+    } else if expanded {
+        360.0
+    } else {
+        140.0
+    };
+    Presentation {
+        show,
+        compact,
+        height,
+    }
 }
 
-fn set_preview_expanded(status: &mut Value, request_id: Option<u64>, expanded: bool) -> Result<(), String> {
+fn set_preview_expanded(
+    status: &mut Value,
+    request_id: Option<u64>,
+    expanded: bool,
+) -> Result<(), String> {
     let id = status["id"].as_u64().filter(|id| *id != 0);
     if id.is_none() || request_id != id {
         return Err("This preview is no longer current".into());
     }
-    if !matches!(status["phase"].as_str(), Some("recording" | "processing" | "capturing_screen" | "streaming" | "speaking")) {
+    if !matches!(
+        status["phase"].as_str(),
+        Some("recording" | "processing" | "capturing_screen" | "streaming" | "speaking")
+    ) {
         return Err("This preview is no longer live".into());
     }
     status["previewExpanded"] = json!(expanded);
-    if !expanded { status.as_object_mut().unwrap().remove("previewHeight"); }
+    if !expanded {
+        status.as_object_mut().unwrap().remove("previewHeight");
+    }
     Ok(())
 }
 
@@ -265,10 +329,17 @@ fn preserve_preview(previous: &Value, next: &mut Value) {
     }
 }
 
-fn set_preview_height(status: &mut Value, request_id: Option<u64>, height: Option<f64>) -> Result<(), String> {
-    let height = height.filter(|height| height.is_finite() && (76.0..=4096.0).contains(height))
+fn set_preview_height(
+    status: &mut Value,
+    request_id: Option<u64>,
+    height: Option<f64>,
+) -> Result<(), String> {
+    let height = height
+        .filter(|height| height.is_finite() && (76.0..=4096.0).contains(height))
         .ok_or("Invalid preview height")?;
-    if status["previewExpanded"] != true { return Err("This preview is collapsed".into()); }
+    if status["previewExpanded"] != true {
+        return Err("This preview is collapsed".into());
+    }
     set_preview_expanded(status, request_id, true)?;
     status["previewHeight"] = json!(height.ceil());
     Ok(())
@@ -276,11 +347,12 @@ fn set_preview_height(status: &mut Value, request_id: Option<u64>, height: Optio
 
 fn publish(app: &AppHandle, status: &Value) {
     let _ = app.emit("texthalo:assistant", status);
-    let Presentation { show, compact, height } = presentation(status);
-    if matches!(
-        status["action"].as_str(),
-        Some("copied" | "undone")
-    ) {
+    let Presentation {
+        show,
+        compact,
+        height,
+    } = presentation(status);
+    if matches!(status["action"].as_str(), Some("copied" | "undone")) {
         let id = status["id"].clone();
         let action = status["action"].clone();
         let app = app.clone();
@@ -298,7 +370,10 @@ fn publish(app: &AppHandle, status: &Value) {
             }
         });
     }
-    let busy = matches!(status["phase"].as_str(), Some("recording" | "processing" | "capturing_screen" | "streaming" | "speaking"));
+    let busy = matches!(
+        status["phase"].as_str(),
+        Some("recording" | "processing" | "capturing_screen" | "streaming" | "speaking")
+    );
     let anchor = status.get("bounds").cloned();
     let assistant_error_overlay = is_assistant_error(status);
     let error_height = assistant_error_height(status);
@@ -370,35 +445,70 @@ fn position_panel(window: &tauri::WebviewWindow, anchor: Option<&Value>, height:
     let _ = window.center();
 }
 
-pub(crate) fn whisper_output(app: &AppHandle, id: u64, result: Result<String,String>, finished: bool) {
+pub(crate) fn whisper_output(
+    app: &AppHandle,
+    id: u64,
+    result: Result<String, String>,
+    finished: bool,
+) {
     let state = app.state::<AssistantState>();
     let mut inner = state.inner.lock().unwrap();
-    if !inner.job.current(id) { return; }
+    if !inner.job.current(id) {
+        return;
+    }
     let value = match result {
-        Ok(text) => json!({"command":if finished {"whisper_result"} else {"whisper_partial"},"id":id,"text":text}),
+        Ok(text) => {
+            json!({"command":if finished {"whisper_result"} else {"whisper_partial"},"id":id,"text":text})
+        }
         Err(message) => json!({"command":"whisper_error","id":id,"text":message}),
     };
     let _ = send(app, &mut inner, value);
 }
 fn receive(app: &AppHandle, mut event: Value) {
     if event["phase"] == "whisper_audio" {
-        if let (Some(id),Some(audio)) = (event["id"].as_u64(),event["audio"].as_str()) {
-            if let Err(error) = crate::whisper::audio(app,id,audio) { whisper_output(app,id,Err(error),true); }
+        if let (Some(id), Some(audio)) = (event["id"].as_u64(), event["audio"].as_str()) {
+            if let Err(error) = crate::whisper::audio(app, id, audio) {
+                whisper_output(app, id, Err(error), true);
+            }
         }
         return;
     }
     if event["phase"] == "whisper_capture_error" {
-        if let Some(id) = event["id"].as_u64() { whisper_output(app,id,Err(event["message"].as_str().unwrap_or("Microphone conversion failed.").into()),true); }
+        if let Some(id) = event["id"].as_u64() {
+            whisper_output(
+                app,
+                id,
+                Err(event["message"]
+                    .as_str()
+                    .unwrap_or("Microphone conversion failed.")
+                    .into()),
+                true,
+            );
+        }
         return;
     }
-    if event["phase"] == "whisper_finish" { if let Some(id)=event["id"].as_u64() { crate::whisper::finish(app,id); } return; }
-    if event["phase"] == "whisper_cancel" { crate::whisper::cancel(app,event["id"].as_u64()); return; }
+    if event["phase"] == "whisper_finish" {
+        if let Some(id) = event["id"].as_u64() {
+            crate::whisper::finish(app, id);
+        }
+        return;
+    }
+    if event["phase"] == "whisper_cancel" {
+        crate::whisper::cancel(app, event["id"].as_u64());
+        return;
+    }
     if event["phase"] == "audit_error" {
         let _ = app.emit("texthalo:generation-history-error", &event["message"]);
-        eprintln!("Generation history could not be saved: {}", event["message"]);
+        eprintln!(
+            "Generation history could not be saved: {}",
+            event["message"]
+        );
         return;
     }
-    if matches!(event["phase"].as_str(), Some("hold_pressed" | "hold_released" | "hold_cancel")) {
+    if matches!(
+        event["phase"].as_str(),
+        Some("hold_pressed" | "hold_released" | "hold_cancel")
+    ) {
         let mode = match event["mode"].as_str() {
             Some("transcribe") => Mode::Transcribe,
             Some("assistant") => Mode::Assistant,
@@ -407,9 +517,15 @@ fn receive(app: &AppHandle, mut event: Value) {
         let configured = {
             let state = app.state::<AppState>();
             let settings = state.settings.lock().unwrap();
-            if mode == Mode::Transcribe { settings.shortcuts.transcribe.clone() } else { settings.shortcuts.assistant.clone() }
+            if mode == Mode::Transcribe {
+                settings.shortcuts.transcribe.clone()
+            } else {
+                settings.shortcuts.assistant.clone()
+            }
         };
-        if !crate::shortcuts::is_hold(&configured) || event["key"] != configured { return; }
+        if !crate::shortcuts::is_hold(&configured) || event["key"] != configured {
+            return;
+        }
         match event["phase"].as_str() {
             Some("hold_pressed") => pressed(app, mode, configured, String::new()),
             Some("hold_released") => released(app, mode),
@@ -421,7 +537,9 @@ fn receive(app: &AppHandle, mut event: Value) {
         let state = app.state::<AssistantState>();
         let mut inner = state.inner.lock().unwrap();
         inner.hold_error = event["message"].as_str().unwrap_or("").to_string();
-        if !inner.availability.is_object() { inner.availability = json!({}); }
+        if !inner.availability.is_object() {
+            inner.availability = json!({});
+        }
         inner.availability["holdError"] = json!(inner.hold_error);
         let _ = app.emit("texthalo:assistant-availability", &inner.availability);
         return;
@@ -431,9 +549,18 @@ fn receive(app: &AppHandle, mut event: Value) {
     if event["phase"] == "availability" {
         event["holdError"] = json!(inner.hold_error);
         cloud_availability(app, &mut event);
-        let preferences = app.state::<AppState>().settings.lock().unwrap().assistant.clone();
+        let preferences = app
+            .state::<AppState>()
+            .settings
+            .lock()
+            .unwrap()
+            .assistant
+            .clone();
         event["whisperLanguages"] = crate::whisper_core::languages(&preferences.whisper_model);
-        event["whisperReady"] = json!(crate::whisper_models::installed(app,&preferences.whisper_model));
+        event["whisperReady"] = json!(crate::whisper_models::installed(
+            app,
+            &preferences.whisper_model
+        ));
         inner.availability = event.clone();
         let _ = app.emit("texthalo:assistant-availability", event);
         return;
@@ -457,18 +584,26 @@ fn receive(app: &AppHandle, mut event: Value) {
         };
     }
     if event["phase"] == "generation_input" {
-        if inner.provider != "cloud" || inner.cloud_started == Some(id) { return; }
+        if inner.provider != "cloud" || inner.cloud_started == Some(id) {
+            return;
+        }
         inner.cloud_started = Some(id);
         let request = uuid::Uuid::new_v4().to_string();
         let (cancel, receiver) = tokio::sync::watch::channel(false);
         inner.billing_request = Some((id, request.clone()));
         inner.cloud = Some((id, request.clone(), cancel));
         let app = app.clone();
-        tauri::async_runtime::spawn(crate::hosted_assistant::run(app, id, request, event, receiver));
+        tauri::async_runtime::spawn(crate::hosted_assistant::run(
+            app, id, request, event, receiver,
+        ));
         return;
     }
-    if inner.status["phase"] == "error" && inner.status["assistantSpeech"] == true
-        && (event["phase"] == "streaming" || event["action"] == "speak") { return; }
+    if inner.status["phase"] == "error"
+        && inner.status["assistantSpeech"] == true
+        && (event["phase"] == "streaming" || event["action"] == "speak")
+    {
+        return;
+    }
     if event["phase"] == "transcript" {
         if let Some(text) = event["text"].as_str().filter(|t| !t.trim().is_empty()) {
             let now = std::time::SystemTime::now()
@@ -494,22 +629,26 @@ fn receive(app: &AppHandle, mut event: Value) {
         return;
     }
     if event["phase"] == "error" {
-        crate::whisper::cancel(app,Some(id));
+        crate::whisper::cancel(app, Some(id));
         cancel_cloud(&mut inner);
         stop_assistant_speech(app, &mut inner);
     }
     if event["phase"] == "canceled" {
-        crate::whisper::cancel(app,Some(id));
+        crate::whisper::cancel(app, Some(id));
         cancel_cloud(&mut inner);
         stop_assistant_speech(app, &mut inner);
         inner.job.cancel();
     } else if matches!(event["phase"].as_str(), Some("result" | "error")) {
         inner.job.finish(id);
     }
-    if matches!(event["phase"].as_str(), Some("streaming" | "result")) && event["action"] == "speak" {
+    if matches!(event["phase"].as_str(), Some("streaming" | "result")) && event["action"] == "speak"
+    {
         if let Some(text) = event["text"].as_str().filter(|s| !s.trim().is_empty()) {
             if inner.spoke != Some(id) {
-                let settings = inner.speech_settings.clone().unwrap_or_else(|| app.state::<AppState>().settings.lock().unwrap().clone());
+                let settings = inner
+                    .speech_settings
+                    .clone()
+                    .unwrap_or_else(|| app.state::<AppState>().settings.lock().unwrap().clone());
                 let source = capture::SourceMetadata {
                     app_name: event["source"].as_str().map(str::to_owned),
                     window_title: event["windowTitle"].as_str().map(str::to_owned),
@@ -527,7 +666,8 @@ fn receive(app: &AppHandle, mut event: Value) {
             // here can race the feeder reading the final snapshot.
         }
     }
-    if event["action"] == "speak" && matches!(event["phase"].as_str(), Some("streaming" | "result")) {
+    if event["action"] == "speak" && matches!(event["phase"].as_str(), Some("streaming" | "result"))
+    {
         let state = app.state::<AppState>();
         let job = state.job.lock().unwrap();
         if inner.speech_id == Some(job.id) {
@@ -563,13 +703,18 @@ fn speak_generated(app: &AppHandle, text: String) -> u64 {
 }
 /// A watch mailbox coalesces draft snapshots while the bounded synthesis input is
 /// busy. The sidecar reader never waits on playback or holds its mutex for backpressure.
-fn begin_generated_stream(app: &AppHandle, settings: Settings, source: capture::SourceMetadata)
-    -> (u64, tokio::sync::watch::Sender<(String, bool)>) {
+fn begin_generated_stream(
+    app: &AppHandle,
+    settings: Settings,
+    source: capture::SourceMetadata,
+) -> (u64, tokio::sync::watch::Sender<(String, bool)>) {
     let speech_id = crate::begin_speech(app, Phase::Preparing);
     let (feed, latest) = tokio::sync::watch::channel((String::new(), false));
     let (tx, input) = crate::speech_input::channel();
     let worker_app = app.clone();
-    std::thread::spawn(move || crate::run_speech_input(&worker_app, speech_id, settings, input, true, source));
+    std::thread::spawn(move || {
+        crate::run_speech_input(&worker_app, speech_id, settings, input, true, source)
+    });
     let app = app.clone();
     std::thread::spawn(move || {
         let cancelled = || {
@@ -580,7 +725,8 @@ fn begin_generated_stream(app: &AppHandle, settings: Settings, source: capture::
         if let Err(error) = crate::assistant_stream::forward_snapshots(latest, tx, cancelled) {
             let state = app.state::<AppState>();
             let mut job = state.job.lock().unwrap();
-            if job.is_current(speech_id) && !matches!(job.status.phase, Phase::Idle | Phase::Error) {
+            if job.is_current(speech_id) && !matches!(job.status.phase, Phase::Idle | Phase::Error)
+            {
                 // Abort audible/queued output immediately; the overlay tick halts
                 // the native generator while preserving its copyable partial answer.
                 state.spoken.stop();
@@ -628,7 +774,7 @@ pub fn pressed(app: &AppHandle, mode: Mode, key: String, modifiers: String) {
     let Some(id) = inner.job.press(mode) else {
         return;
     };
-    crate::whisper::cancel(app,None);
+    crate::whisper::cancel(app, None);
     cancel_cloud(&mut inner);
     inner.usage = Value::Null;
     // Prevent existing narration being captured as the user's request.
@@ -639,16 +785,33 @@ pub fn pressed(app: &AppHandle, mode: Mode, key: String, modifiers: String) {
     inner.speech_settings = Some(settings.clone());
     inner.mode = Some(mode);
     let mut command = configuration("start", id, &settings);
-    if mode == Mode::Assistant && settings.assistant.provider == "automatic" && inner.availability["model"].as_str().is_none() {
+    if mode == Mode::Assistant
+        && settings.assistant.provider == "automatic"
+        && inner.availability["model"].as_str().is_none()
+    {
         let _ = send(app, &mut inner, json!({"command":"status","id":0}));
     }
-    let provider = if mode == Mode::Assistant { resolve_provider(&settings, &inner.availability) } else { Ok("local") };
-    let provider = match provider { Ok(p) => p, Err(message) => {
-        crate::whisper::cancel(app,Some(id)); inner.job.finish(id); inner.status = json!({"id":id,"phase":"error","mode":mode,"message":message}); publish(app, &inner.status); return;
-    }};
+    let provider = if mode == Mode::Assistant {
+        resolve_provider(&settings, &inner.availability)
+    } else {
+        Ok("local")
+    };
+    let provider = match provider {
+        Ok(p) => p,
+        Err(message) => {
+            crate::whisper::cancel(app, Some(id));
+            inner.job.finish(id);
+            inner.status = json!({"id":id,"phase":"error","mode":mode,"message":message});
+            publish(app, &inner.status);
+            return;
+        }
+    };
     if settings.assistant.transcription_engine == "whisper" {
-        if let Err(message)=crate::whisper::start(app,id,&settings.assistant) {
-            inner.job.finish(id); inner.status=json!({"id":id,"phase":"error","mode":mode,"message":message}); publish(app,&inner.status); return;
+        if let Err(message) = crate::whisper::start(app, id, &settings.assistant) {
+            inner.job.finish(id);
+            inner.status = json!({"id":id,"phase":"error","mode":mode,"message":message});
+            publish(app, &inner.status);
+            return;
         }
     }
     inner.provider = provider.into();
@@ -659,9 +822,10 @@ pub fn pressed(app: &AppHandle, mode: Mode, key: String, modifiers: String) {
     inner.status = json!({"id":id,"phase":"processing","mode":mode,"message":"Starting microphone…","text":"","provider":provider});
     // Wait for the native context snapshot before showing any new UI.
     if let Err(error) = send(app, &mut inner, command) {
-        crate::whisper::cancel(app,Some(id));
+        crate::whisper::cancel(app, Some(id));
         inner.job.finish(id);
-        inner.status = json!({"id":id,"phase":"error","mode":mode,"provider":provider,"message":error});
+        inner.status =
+            json!({"id":id,"phase":"error","mode":mode,"provider":provider,"message":error});
         publish(app, &inner.status);
     }
 }
@@ -683,7 +847,7 @@ pub fn cancel(app: &AppHandle) {
     cancel_locked(app, &mut inner);
 }
 fn cancel_locked(app: &AppHandle, inner: &mut Inner) {
-    crate::whisper::cancel(app,None);
+    crate::whisper::cancel(app, None);
     cancel_cloud(inner);
     inner.job.cancel();
     stop_assistant_speech(app, inner);
@@ -717,9 +881,18 @@ pub fn assistant_state(app: AppHandle) -> Value {
     let inner = state.inner.lock().unwrap();
     let mut availability = inner.availability.clone();
     cloud_availability(&app, &mut availability);
-    let preferences = app.state::<AppState>().settings.lock().unwrap().assistant.clone();
+    let preferences = app
+        .state::<AppState>()
+        .settings
+        .lock()
+        .unwrap()
+        .assistant
+        .clone();
     availability["whisperLanguages"] = crate::whisper_core::languages(&preferences.whisper_model);
-    availability["whisperReady"] = json!(crate::whisper_models::installed(&app, &preferences.whisper_model));
+    availability["whisperReady"] = json!(crate::whisper_models::installed(
+        &app,
+        &preferences.whisper_model
+    ));
     json!({"status":inner.status,"availability":availability})
 }
 
@@ -730,7 +903,11 @@ pub(crate) fn assistant_error_overlay_height(app: &AppHandle) -> Option<f64> {
 }
 
 fn assistant_error_height(status: &Value) -> f64 {
-    if status["text"].as_str().is_some_and(|text| !text.is_empty()) { 360.0 } else { 190.0 }
+    if status["text"].as_str().is_some_and(|text| !text.is_empty()) {
+        360.0
+    } else {
+        190.0
+    }
 }
 
 fn is_assistant_error(status: &Value) -> bool {
@@ -743,7 +920,8 @@ fn result_id(status: &Value, request_id: Option<u64>) -> Result<u64, String> {
     if request_id != Some(id) {
         return Err("This result is no longer current".into());
     }
-    let recoverable_error = status["phase"] == "error" && status["text"].as_str().is_some_and(|s| !s.is_empty());
+    let recoverable_error =
+        status["phase"] == "error" && status["text"].as_str().is_some_and(|s| !s.is_empty());
     if status["phase"] != "result" && !recoverable_error {
         return Err("Wait for the current request or cancel it first.".into());
     }
@@ -810,13 +988,16 @@ pub fn assistant_control(
         inner.job.release(Mode::Assistant);
         let settings = app.state::<AppState>().settings.lock().unwrap().clone();
         inner.speech_settings = Some(settings.clone());
-        if settings.assistant.provider == "automatic" && inner.availability["model"].as_str().is_none() {
+        if settings.assistant.provider == "automatic"
+            && inner.availability["model"].as_str().is_none()
+        {
             let _ = send(&app, &mut inner, json!({"command":"status","id":0}));
         }
         let provider = match resolve_provider(&settings, &inner.availability) {
             Ok(provider) => provider,
             Err(message) => {
-                inner.status = json!({"id":id,"phase":"error","mode":"assistant","message":message});
+                inner.status =
+                    json!({"id":id,"phase":"error","mode":"assistant","message":message});
                 publish(&app, &inner.status);
                 return Ok(());
             }
@@ -877,18 +1058,32 @@ mod tests {
         let mut settings = Settings::default();
         settings.assistant.provider = "automatic".into();
         settings.assistant.cloud_consent_version = Some(1);
-        assert!(resolve_provider(&settings, &json!({})).unwrap_err().contains("Checking"));
+        assert!(resolve_provider(&settings, &json!({}))
+            .unwrap_err()
+            .contains("Checking"));
     }
     #[test]
     fn finalized_billing_cannot_be_downgraded_by_late_reconciliation() {
-        assert!(!billing_update_allowed(&json!({"billingStatus":"settled"}), &json!({"billingStatus":"reserved"})));
-        assert!(!billing_update_allowed(&json!({"billingStatus":"released"}), &json!({"billingStatus":"pending"})));
-        assert!(billing_update_allowed(&json!({"billingStatus":"reserved"}), &json!({"billingStatus":"settled"})));
+        assert!(!billing_update_allowed(
+            &json!({"billingStatus":"settled"}),
+            &json!({"billingStatus":"reserved"})
+        ));
+        assert!(!billing_update_allowed(
+            &json!({"billingStatus":"released"}),
+            &json!({"billingStatus":"pending"})
+        ));
+        assert!(billing_update_allowed(
+            &json!({"billingStatus":"reserved"}),
+            &json!({"billingStatus":"settled"})
+        ));
     }
     #[test]
     fn stopped_or_replaced_narration_loses_only_its_own_overlay() {
         assert_eq!(narration_ownership(Some(4), 4), NarrationOwnership::Current);
-        assert_eq!(narration_ownership(Some(4), 5), NarrationOwnership::Replaced);
+        assert_eq!(
+            narration_ownership(Some(4), 5),
+            NarrationOwnership::Replaced
+        );
         assert_eq!(narration_ownership(None, 5), NarrationOwnership::None);
     }
     #[test]
@@ -921,7 +1116,9 @@ mod tests {
     fn live_preview_keeps_the_assistant_visible_without_a_focusable_result() {
         let recording = presentation(&json!({"phase":"recording","text":"Hello there"}));
         assert!(recording.show && recording.compact && recording.height == 76.0);
-        let audio = presentation(&json!({"phase":"streaming","action":"speak","text":"A narrated answer."}));
+        let audio = presentation(
+            &json!({"phase":"streaming","action":"speak","text":"A narrated answer."}),
+        );
         assert!(audio.show && audio.compact && audio.height == 76.0);
     }
     #[test]
@@ -949,8 +1146,15 @@ mod tests {
     }
     #[test]
     fn expanded_preview_resizing_is_scoped_and_bounded() {
-        let mut status = json!({"id":7,"phase":"recording","text":"Growing text","previewExpanded":true});
-        for height in [None, Some(f64::NAN), Some(f64::INFINITY), Some(-1.0), Some(5000.0)] {
+        let mut status =
+            json!({"id":7,"phase":"recording","text":"Growing text","previewExpanded":true});
+        for height in [
+            None,
+            Some(f64::NAN),
+            Some(f64::INFINITY),
+            Some(-1.0),
+            Some(5000.0),
+        ] {
             assert!(set_preview_height(&mut status, Some(7), height).is_err());
         }
         assert!(set_preview_height(&mut status, Some(6), Some(100.0)).is_err());
@@ -977,17 +1181,27 @@ mod tests {
         settings.shortcuts.transcribe = "Hold:LeftOption".into();
         settings.shortcuts.assistant = "Ctrl+D".into();
         let payload = hold_configuration(&settings);
-        assert_eq!(payload["id"], json!(0), "Swift Request requires id even for configuration commands");
+        assert_eq!(
+            payload["id"],
+            json!(0),
+            "Swift Request requires id even for configuration commands"
+        );
         assert_eq!(payload["command"], "hold_configure");
-        assert_eq!(payload["holdBindings"], json!({"transcribe":"Hold:LeftOption"}));
+        assert_eq!(
+            payload["holdBindings"],
+            json!({"transcribe":"Hold:LeftOption"})
+        );
     }
     #[test]
     fn completed_insertion_closes_the_overlay() {
-        let applied = presentation(&json!({"phase":"result","action":"applied","message":"Text inserted"}));
+        let applied =
+            presentation(&json!({"phase":"result","action":"applied","message":"Text inserted"}));
         assert!(!applied.show);
         let processing = presentation(&json!({"phase":"processing","message":"Inserting text…"}));
         assert!(processing.show && processing.compact && processing.height == 44.0);
-        let fallback = presentation(&json!({"phase":"result","text":"Keep this text","message":"Could not insert"}));
+        let fallback = presentation(
+            &json!({"phase":"result","text":"Keep this text","message":"Could not insert"}),
+        );
         assert!(fallback.show && !fallback.compact && fallback.height == 360.0);
     }
     #[test]
@@ -996,7 +1210,10 @@ mod tests {
         assert_eq!(result_id(&partial, Some(7)).unwrap(), 7);
         assert!(is_assistant_error(&partial));
         assert_eq!(assistant_error_height(&partial), 360.0);
-        assert_eq!(assistant_error_height(&json!({"phase":"error","mode":"assistant"})), 190.0);
+        assert_eq!(
+            assistant_error_height(&json!({"phase":"error","mode":"assistant"})),
+            190.0
+        );
         assert!(result_id(&json!({"id":7,"phase":"error"}), Some(7)).is_err());
         assert!(result_id(&json!({"id":7,"phase":"error","text":"Partial"}), Some(6)).is_err());
     }

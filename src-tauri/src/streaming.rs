@@ -315,20 +315,35 @@ mod input_tests {
         for streamed in [false, true] {
             let input = if streamed {
                 let (tx, input) = channel();
-                tx.send(SpeechEvent::Delta("A SENTENCE wraps\n".into())).unwrap();
-                tx.send(SpeechEvent::Delta("across lines. Next sentence.".into())).unwrap();
+                tx.send(SpeechEvent::Delta("A SENTENCE wraps\n".into()))
+                    .unwrap();
+                tx.send(SpeechEvent::Delta("across lines. Next sentence.".into()))
+                    .unwrap();
                 tx.send(SpeechEvent::Finish).unwrap();
                 input
             } else {
                 crate::speech_input::SpeechInput::Complete(original.into())
             };
             let mut chunks = Vec::new();
-            let full = run_input(input, 180, 240,
+            let full = run_input(
+                input,
+                180,
+                240,
                 |text| Ok(crate::speech_input::normalize(text)),
-                |audio, _| { if let Some(text) = audio { chunks.push(text); } Ok(()) },
-                || false).unwrap();
+                |audio, _| {
+                    if let Some(text) = audio {
+                        chunks.push(text);
+                    }
+                    Ok(())
+                },
+                || false,
+            )
+            .unwrap();
             assert_eq!(full, original);
-            assert_eq!(chunks, ["a sentence wraps across lines. ", "next sentence."]);
+            assert_eq!(
+                chunks,
+                ["a sentence wraps across lines. ", "next sentence."]
+            );
         }
     }
 
@@ -666,9 +681,9 @@ where
                             || (chunk.len() <= pending.len()
                                 && (pending.chars().count() >= budget
                                     || (chunk
-                                            .trim_end()
-                                            .trim_end_matches(['\"', '\'', '”', '’', ')', ']', '}'])
-                                            .ends_with(['.', '!', '?', '。', '！', '？']))))
+                                        .trim_end()
+                                        .trim_end_matches(['\"', '\'', '”', '’', ')', ']', '}'])
+                                        .ends_with(['.', '!', '?', '。', '！', '？']))))
                     }) {
                         pending.drain(..chunk.len());
                         if !chunk.trim().is_empty() {
