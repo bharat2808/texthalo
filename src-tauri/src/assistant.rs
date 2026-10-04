@@ -264,9 +264,18 @@ fn publish(app: &AppHandle, status: &Value) {
     }
     let busy = matches!(status["phase"].as_str(), Some("recording" | "processing" | "capturing_screen" | "streaming" | "speaking"));
     let anchor = status.get("bounds").cloned();
+    let credit_error_overlay = is_cloud_credit_error(status);
     let app = app.clone();
     let _ = app.clone().run_on_main_thread(move || {
-        if let Some(window) = app.get_webview_window("assistant") {
+        if credit_error_overlay {
+            if let Some(assistant_window) = app.get_webview_window("assistant") {
+                let _ = assistant_window.hide();
+            }
+            if let Some(window) = app.get_webview_window("speech-overlay") {
+                crate::overlay::position_sized(&window, 430.0, 190.0);
+                let _ = window.show();
+            }
+        } else if let Some(window) = app.get_webview_window("assistant") {
             if show {
                 let _ = window.set_focusable(!compact && !busy);
                 if compact {
@@ -618,6 +627,18 @@ pub fn assistant_state(app: AppHandle) -> Value {
     let mut availability = inner.availability.clone();
     cloud_availability(&app, &mut availability);
     json!({"status":inner.status,"availability":availability})
+}
+
+pub(crate) fn has_cloud_credit_error(app: &AppHandle) -> bool {
+    let Some(state) = app.try_state::<AssistantState>() else { return false; };
+    let Ok(inner) = state.inner.try_lock() else { return false; };
+    is_cloud_credit_error(&inner.status)
+}
+
+fn is_cloud_credit_error(status: &Value) -> bool {
+    status["phase"] == "error"
+        && status["provider"] == "cloud"
+        && status["message"].as_str().is_some_and(|message| message.contains("credits"))
 }
 fn result_id(status: &Value, request_id: Option<u64>) -> Result<u64, String> {
     let id = status["id"]

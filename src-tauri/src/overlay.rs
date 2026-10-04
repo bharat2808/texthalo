@@ -112,12 +112,17 @@ fn tick(app: &AppHandle) {
     let visible = !matches!(job.status.phase, Phase::Idle);
     drop(job);
     let owned = crate::assistant::sync_speech(app);
-    let visible = visible && !owned;
+    let assistant_credit_error = crate::assistant::has_cloud_credit_error(app);
+    let visible = (visible && !owned) || assistant_credit_error;
     let Some(window) = app.get_webview_window("speech-overlay") else {
         return;
     };
     if visible {
-        position(&window, error);
+        if assistant_credit_error {
+            position_sized(&window, 430.0, 190.0);
+        } else {
+            position(&window, error);
+        }
         let _ = window.show();
     } else if !visible && window.is_visible().unwrap_or(false) {
         let _ = window.hide();
