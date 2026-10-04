@@ -26,6 +26,7 @@ struct Inner {
     hold_error: String,
     cloud: Option<(u64, String, tokio::sync::watch::Sender<bool>)>,
     provider: String,
+    mode: Option<Mode>,
     cloud_started: Option<u64>,
     billing_request: Option<(u64, String)>,
     usage: Value,
@@ -133,7 +134,7 @@ fn send(app: &AppHandle, inner: &mut Inner, value: Value) -> Result<(), String> 
                 cancel_cloud(&mut inner);
                 stop_assistant_speech(&app, &mut inner);
                 inner.job.cancel();
-                inner.status = json!({"phase":"error","message":"The native assistant stopped. Hold the shortcut again to retry."});
+                inner.status = json!({"phase":"error","mode":inner.mode,"provider":inner.provider,"message":"The native assistant stopped. Hold the shortcut again to retry."});
                 publish(&app, &inner.status);
             }
         });
@@ -264,10 +265,10 @@ fn publish(app: &AppHandle, status: &Value) {
     }
     let busy = matches!(status["phase"].as_str(), Some("recording" | "processing" | "capturing_screen" | "streaming" | "speaking"));
     let anchor = status.get("bounds").cloned();
-    let credit_error_overlay = is_cloud_credit_error(status);
+    let assistant_error_overlay = is_assistant_error(status);
     let app = app.clone();
     let _ = app.clone().run_on_main_thread(move || {
-        if credit_error_overlay {
+        if assistant_error_overlay {
             if let Some(assistant_window) = app.get_webview_window("assistant") {
                 let _ = assistant_window.hide();
             }
@@ -377,6 +378,18 @@ fn receive(app: &AppHandle, mut event: Value) {
     };
     if !inner.job.current(id) {
         return;
+    }
+    if event.get("mode").is_none() {
+        if let Some(mode) = inner.mode {
+            event["mode"] = json!(mode);
+        }
+    }
+    if let Some(mode) = event["mode"].as_str() {
+        inner.mode = match mode {
+            "assistant" => Some(Mode::Assistant),
+            "transcribe" => Some(Mode::Transcribe),
+            _ => inner.mode,
+        };
     }
     if event["phase"] == "generation_input" {
         if inner.provider != "cloud" || inner.cloud_started == Some(id) { return; }
@@ -555,24 +568,25 @@ pub fn pressed(app: &AppHandle, mode: Mode, key: String, modifiers: String) {
     crate::stop_speaking(app.clone());
     let settings = app.state::<AppState>().settings.lock().unwrap().clone();
     inner.speech_settings = Some(settings.clone());
+    inner.mode = Some(mode);
     let mut command = configuration("start", id, &settings);
     if mode == Mode::Assistant && settings.assistant.provider == "automatic" && inner.availability["model"].as_str().is_none() {
         let _ = send(app, &mut inner, json!({"command":"status","id":0}));
     }
     let provider = if mode == Mode::Assistant { resolve_provider(&settings, &inner.availability) } else { Ok("local") };
     let provider = match provider { Ok(p) => p, Err(message) => {
-        inner.job.finish(id); inner.status = json!({"id":id,"phase":"error","message":message}); publish(app, &inner.status); return;
+        inner.job.finish(id); inner.status = json!({"id":id,"phase":"error","mode":mode,"message":message}); publish(app, &inner.status); return;
     }};
     inner.provider = provider.into();
     command["provider"] = json!(provider);
     command["mode"] = json!(mode);
     command["key"] = json!(key);
     command["modifiers"] = json!(modifiers);
-    inner.status = json!({"id":id,"phase":"processing","message":"Starting microphone…","text":"","provider":provider});
+    inner.status = json!({"id":id,"phase":"processing","mode":mode,"message":"Starting microphone…","text":"","provider":provider});
     // Wait for the native context snapshot before showing any new UI.
     if let Err(error) = send(app, &mut inner, command) {
         inner.job.finish(id);
-        inner.status = json!({"id":id,"phase":"error","message":error});
+        inner.status = json!({"id":id,"phase":"error","mode":mode,"provider":provider,"message":error});
         publish(app, &inner.status);
     }
 }
@@ -581,7 +595,7 @@ pub fn released(app: &AppHandle, mode: Mode) {
     let mut inner = state.inner.lock().unwrap();
     if let Some(id) = inner.job.release(mode) {
         if let Err(error) = send(app, &mut inner, json!({"command":"stop","id":id})) {
-            inner.status = json!({"id":id,"phase":"error","message":error});
+            inner.status = json!({"id":id,"phase":"error","mode":mode,"provider":inner.provider,"message":error});
             publish(app, &inner.status);
         }
     }
@@ -629,16 +643,14 @@ pub fn assistant_state(app: AppHandle) -> Value {
     json!({"status":inner.status,"availability":availability})
 }
 
-pub(crate) fn has_cloud_credit_error(app: &AppHandle) -> bool {
+pub(crate) fn has_assistant_error(app: &AppHandle) -> bool {
     let Some(state) = app.try_state::<AssistantState>() else { return false; };
     let Ok(inner) = state.inner.try_lock() else { return false; };
-    is_cloud_credit_error(&inner.status)
+    is_assistant_error(&inner.status)
 }
 
-fn is_cloud_credit_error(status: &Value) -> bool {
-    status["phase"] == "error"
-        && status["provider"] == "cloud"
-        && status["message"].as_str().is_some_and(|message| message.contains("credits"))
+fn is_assistant_error(status: &Value) -> bool {
+    status["phase"] == "error" && status["mode"] == "assistant"
 }
 fn result_id(status: &Value, request_id: Option<u64>) -> Result<u64, String> {
     let id = status["id"]
@@ -699,6 +711,7 @@ pub fn assistant_control(
         cancel_cloud(&mut inner);
         stop_assistant_speech(&app, &mut inner);
         inner.job.cancel();
+        inner.mode = Some(Mode::Assistant);
         let id = inner.job.press(Mode::Assistant).unwrap();
         inner.job.release(Mode::Assistant);
         let settings = app.state::<AppState>().settings.lock().unwrap().clone();
@@ -706,15 +719,26 @@ pub fn assistant_control(
         if settings.assistant.provider == "automatic" && inner.availability["model"].as_str().is_none() {
             let _ = send(&app, &mut inner, json!({"command":"status","id":0}));
         }
-        let provider = resolve_provider(&settings, &inner.availability)?;
+        let provider = match resolve_provider(&settings, &inner.availability) {
+            Ok(provider) => provider,
+            Err(message) => {
+                inner.status = json!({"id":id,"phase":"error","mode":"assistant","message":message});
+                publish(&app, &inner.status);
+                return Ok(());
+            }
+        };
         inner.provider = provider.into();
         inner.usage = Value::Null;
         let mut value = configuration(&command, id, &settings);
         value["provider"] = json!(provider);
         value["text"] = json!(text);
-        inner.status = json!({"id":id,"phase":"processing","message":if provider == "cloud" { "Thinking with cloud Assistant…" } else { "Thinking on this Mac…" },"provider":provider});
+        inner.status = json!({"id":id,"phase":"processing","mode":"assistant","message":if provider == "cloud" { "Thinking with cloud Assistant…" } else { "Thinking on this Mac…" },"provider":provider});
         publish(&app, &inner.status);
-        return send(&app, &mut inner, value);
+        if let Err(message) = send(&app, &mut inner, value) {
+            inner.status = json!({"id":id,"phase":"error","mode":"assistant","provider":provider,"message":message});
+            publish(&app, &inner.status);
+        }
+        return Ok(());
     }
     let id = result_id(&inner.status, request_id)?;
     match command.as_str() {
@@ -958,8 +982,7 @@ pub(crate) fn hosted_delivery(
     if let Err(message) = send(app, &mut inner, payload) {
         cancel_cloud(&mut inner);
         inner.job.cancel();
-        inner.status =
-            json!({"id":id,"phase":"error","message":message,"text":text,"provider":"cloud"});
+        inner.status = json!({"id":id,"phase":"error","mode":"assistant","message":message,"text":text,"provider":"cloud"});
         publish(app, &inner.status);
     }
 }

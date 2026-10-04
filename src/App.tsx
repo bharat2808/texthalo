@@ -936,7 +936,7 @@ function MainApp() {
       setEspeakInstalling(installing);
       if (!installing) void refresh();
     });
-    const recovery = listen<"account" | "voice">("texthalo:speech-recovery", (event) => {
+    const recovery = listen<"account" | "voice" | "assistant">("texthalo:speech-recovery", (event) => {
       setTab(event.payload);
       void refresh();
     });

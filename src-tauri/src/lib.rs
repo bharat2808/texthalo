@@ -1012,7 +1012,7 @@ fn speech_error_recovery(app: AppHandle, action: String) -> Result<(), String> {
             show_settings(&app);
             let _ = app.emit("texthalo:speech-recovery", "voice");
         }
-        "account" | "billing" | "voice" => {
+        "account" | "billing" | "voice" | "assistant" => {
             show_settings(&app);
             let tab = if action == "billing" {
                 "account"

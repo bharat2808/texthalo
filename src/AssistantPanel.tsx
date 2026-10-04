@@ -6,7 +6,7 @@ import { assistantUsageLabel, type AssistantUsage } from "./assistantUsage";
 import "./assistant.css";
 import "./SpeechOverlay.css";
 
-type Status = { id?: number; phase?: string; action?: string; message?: string; text?: string; canUndo?: boolean; provider?: string; usage?: AssistantUsage };
+type Status = { id?: number; phase?: string; mode?: string; action?: string; message?: string; text?: string; canUndo?: boolean; provider?: string; usage?: AssistantUsage };
 export default function AssistantPanel() {
   const [status, setStatus] = useState<Status>({});
   const current = useRef(status);
@@ -48,9 +48,8 @@ export default function AssistantPanel() {
   const visibleText = busy && (status.text?.length ?? 0) > 2000 ? "…" + status.text!.slice(-2000) : status.text;
   const providerLabel = status.provider === "cloud" ? "TextHalo Cloud" : "On this Mac";
   const usageLabel = status.provider === "cloud" ? assistantUsageLabel(status.usage) : "";
-  const outOfCredits = status.phase === "error" && status.provider === "cloud" && /out of .*credits/i.test(status.message ?? "");
-  // The shared top-center SpeechOverlay renders cloud-credit errors.
-  if (outOfCredits) return null;
+  // All Assistant errors are presented by the shared SpeechOverlay widget.
+  if (status.phase === "error" && status.mode === "assistant") return null;
   if (busy || completed) {
     const label = status.phase === "recording" ? "Listening…"
       : status.phase === "capturing_screen" ? "Reading screen…"
