@@ -1509,18 +1509,21 @@ function MainApp() {
 
   const readinessIcon = (id: string, label: string) => {
     const reasons = readiness[id];
+    const checking = reasons.length > 0 && reasons.every(reason => reason.startsWith("Checking "));
+    const statusLabel = checking ? "Checking…" : reasons.length ? "Not ready" : "Ready";
     const show = (element: HTMLElement) => {
       const rect = element.getBoundingClientRect();
       setServiceTooltip({id, x: Math.max(12, Math.min(rect.left, window.innerWidth - 300)), y: Math.min(rect.bottom + 6, window.innerHeight - 240)});
     };
     return <button type="button" className={`service-status ${reasons.length ? "not-ready" : "ready"}`}
-      aria-label={`${label} status`} title={reasons.join("\n") || "Ready to use"}
+      aria-label={`${label}: ${statusLabel}`} title={reasons.join("\n") || "Ready to use"}
       aria-description={reasons.join(" ") || "Ready to use"}
       onMouseEnter={event => show(event.currentTarget)} onFocus={event => show(event.currentTarget)}
       onMouseLeave={() => setServiceTooltip(null)} onBlur={() => setServiceTooltip(null)}
       onKeyDown={event => { if (event.key === "Escape") setServiceTooltip(null); }}
       onClick={event => show(event.currentTarget)}>
       {reasons.length ? Icon.info() : Icon.checkCircle()}
+      {reasons.length > 0 && <span>{statusLabel}</span>}
     </button>;
   };
 
