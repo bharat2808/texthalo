@@ -1,6 +1,7 @@
 # cargo-deny configuration — the CI-enforced half of the licence decision.
 #
-# TextHalo is Apache-2.0 only (docs/DESIGN.md §5). This file makes "no GPL in the runtime graph"
+# TextHalo uses its own source-available license. Third-party licenses remain unchanged.
+# This file makes "no GPL in the runtime graph"
 # a failing check rather than a promise. Run locally with:
 #     cargo install cargo-deny && cargo deny check
 #
@@ -28,7 +29,7 @@ ignore = [
 version = 2
 # Confidence threshold: 0.9 is cargo-deny's default; lower only if CI is noisy.
 confidence-threshold = 0.9
-# Permissive dependency licences compatible with distributing TextHalo under Apache-2.0.
+# Allowed third-party dependency licenses; these do not declare TextHalo’s own license.
 allow = [
     "MIT",
     "MIT-0",

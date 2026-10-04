@@ -14,6 +14,7 @@ import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import SetupWizard, { type SetupPlansResponse } from "./SetupWizard";
+import textHaloLicense from "../LICENSE-TEXTHALO.md?raw";
 import appLogo from "../src-tauri/icons/icon.png";
 import "./App.css";
 
@@ -1707,7 +1708,8 @@ function MainApp() {
                 </label>
             </details>
             <Card title="About" icon={Icon.box()}>
-              <div className="card-note">Version {appVersion ?? "…"} · Apache-2.0</div>
+              <div className="card-note">Version {appVersion ?? "…"} · TextHalo Source Available License 1.0</div>
+              <details className="disclosure"><summary>License terms</summary><pre style={{ whiteSpace: "pre-wrap", maxHeight: 300, overflowY: "auto", font: "inherit" }}>{textHaloLicense.replace(/^#{1,2} /gm, "").replace(/\*\*/g, "").replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")}</pre></details>
               <div className="inline">
                 <button className="plain" onClick={() => void checkForUpdates()} disabled={checkingUpdate || installingUpdate}>
                   {checkingUpdate ? "Checking…" : "Check for Updates"}

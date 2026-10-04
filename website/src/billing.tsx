@@ -145,7 +145,7 @@ export function SiteHeader() {
   }
 
   return <>
-    <div className="announcement"><span className="announcement-dot" /> TextHalo is open source <span className="announcement-separator">·</span> Requires Apple Silicon </div>
+    <div className="announcement"><span className="announcement-dot" /> TextHalo is source available <span className="announcement-separator">·</span> Requires Apple Silicon </div>
     <header className="site-header billing-header">
       <a className="wordmark" href="/"><Mark /><span>TextHalo</span></a>
       <nav className={menuOpen ? "nav-open" : ""} aria-label="Main navigation">
@@ -223,7 +223,7 @@ function TurnstileWidget({ active, onToken }: { active: boolean; onToken: (token
 }
 
 function BillingFooter() {
-  return <footer className="site-footer"><a className="wordmark footer-wordmark" href="/"><Mark /><span>TextHalo</span></a><span className="footer-copy">Listen. Dictate. Get a little help.</span><div className="footer-links"><a href="/">Home</a><a href="/demo/">Demo</a><a href="https://github.com/bharat2808/texthalo" target="_blank" rel="noreferrer">GitHub <span className="arrow" aria-hidden="true">↗</span></a></div><span className="copyright">© {new Date().getFullYear()} TextHalo</span></footer>;
+  return <footer className="site-footer"><a className="wordmark footer-wordmark" href="/"><Mark /><span>TextHalo</span></a><span className="footer-copy">Listen. Dictate. Get a little help.</span><div className="footer-links"><a href="/license/">License</a><a href="/">Home</a><a href="/demo/">Demo</a><a href="https://github.com/bharat2808/texthalo" target="_blank" rel="noreferrer">GitHub <span className="arrow" aria-hidden="true">↗</span></a></div><span className="copyright">© {new Date().getFullYear()} TextHalo</span></footer>;
 }
 
 export function createDesktopHandoffAttempt() {

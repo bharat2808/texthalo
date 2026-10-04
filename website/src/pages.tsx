@@ -1,4 +1,5 @@
 import { DEMO_VIDEO } from "./demo";
+import textHaloLicense from "../../LICENSE-TEXTHALO.md?raw";
 import { blogPosts, stories, type EditorialPage } from "./content";
 import { BillingAccountPage, BillingSuccessPage, DesktopConnectPage, PasswordResetPage, PricingPage, SignInPage } from "./billing";
 import Website from "./website";
@@ -11,6 +12,7 @@ export function getSitePaths(): string[] {
     "/",
     "/pricing/",
     "/privacy/",
+    "/license/",
     "/sign-in/",
     "/desktop-connect/",
     "/reset-password/",
@@ -53,7 +55,7 @@ function Mark() {
 
 function EditorialHeader() {
   return <>
-    <div className="announcement"><span className="announcement-dot" /> TextHalo is open source <span className="announcement-separator">·</span> Requires Apple Silicon</div>
+    <div className="announcement"><span className="announcement-dot" /> TextHalo is source available <span className="announcement-separator">·</span> Requires Apple Silicon</div>
     <header className="site-header editorial-header">
       <a className="wordmark" href="/" aria-label="TextHalo home"><Mark /><span>TextHalo</span></a>
       <nav className="editorial-nav" aria-label="Main navigation">
@@ -71,7 +73,30 @@ function EditorialHeader() {
 }
 
 function EditorialFooter() {
-  return <footer className="site-footer"><a className="wordmark footer-wordmark" href="/"><Mark /><span>TextHalo</span></a><span className="footer-copy">Listen. Dictate. Get a little help.</span><div className="footer-links"><a href="/privacy/">Privacy</a><a href="/blog/">Blog</a><a href="/stories/">Stories</a><a href="https://github.com/bharat2808/texthalo" target="_blank" rel="noreferrer">GitHub <span className="arrow" aria-hidden="true">↗</span></a></div><span className="copyright">© {new Date().getFullYear()} TextHalo</span></footer>;
+  return <footer className="site-footer"><a className="wordmark footer-wordmark" href="/"><Mark /><span>TextHalo</span></a><span className="footer-copy">Listen. Dictate. Get a little help.</span><div className="footer-links"><a href="/license/">License</a><a href="/privacy/">Privacy</a><a href="/blog/">Blog</a><a href="/stories/">Stories</a><a href="https://github.com/bharat2808/texthalo" target="_blank" rel="noreferrer">GitHub <span className="arrow" aria-hidden="true">↗</span></a></div><span className="copyright">© {new Date().getFullYear()} TextHalo</span></footer>;
+}
+
+function LicenseInline({ text }: { text: string }) {
+  return <>{text.replace(/\*\*/g, "").split(/(\[[^\]]+\]\(https:\/\/[^)]+\))/).map((part, index) => {
+    const link = part.match(/^\[([^\]]+)\]\((https:\/\/[^)]+)\)$/);
+    return link ? <a key={index} href={link[2]}>{link[1]}</a> : part;
+  })}</>;
+}
+
+function LicensePage() {
+  return <div className="site-shell"><EditorialHeader /><main className="editorial-main article-main">
+    <nav className="breadcrumbs" aria-label="Breadcrumb"><a href="/">Home</a><span>/</span><span>License</span></nav>
+    <article>
+      <header className="article-header"><div className="eyebrow">SOURCE AVAILABLE</div><h1>TextHalo Source Available License 1.0</h1></header>
+      <div className="article-body">{textHaloLicense.trim().split(/\n\n+/).map((block, index) => {
+        if (block.startsWith("# ")) return null;
+        if (block.startsWith("## ")) return <h2 key={index}>{block.slice(3)}</h2>;
+        if (block === "---") return <hr key={index} />;
+        if (block.startsWith("- ")) return <ul key={index}>{block.split("\n").map((line, item) => <li key={item}><LicenseInline text={line.slice(2)} /></li>)}</ul>;
+        return <p key={index}><LicenseInline text={block} /></p>;
+      })}</div>
+    </article>
+  </main><EditorialFooter /></div>;
 }
 
 function PrivacyPolicyPage() {
@@ -147,13 +172,14 @@ function EditorialArticle({ page, kind }: { page: EditorialPage; kind: "blog" | 
         return <p key={index}>{block.text}</p>;
       })}</div>
     </article>
-    <aside className="article-cta"><div><strong>Listen to selected text on your Mac.</strong><span>Free local features. Open-source app. Requires Apple Silicon.</span></div><a className="button button-dark" href={MAC_DOWNLOAD}>Download TextHalo <span aria-hidden="true">→</span></a></aside>
+    <aside className="article-cta"><div><strong>Listen to selected text on your Mac.</strong><span>Free local features. Source-available app. Requires Apple Silicon.</span></div><a className="button button-dark" href={MAC_DOWNLOAD}>Download TextHalo <span aria-hidden="true">→</span></a></aside>
     <a className="text-link back-link" href={basePath}>← Back to {kind}</a>
   </main><EditorialFooter /></div>;
 }
 
 export function SitePage({ pathname }: { pathname: string }) {
   if (pathname === "/") return <Website />;
+  if (pathname === "/license/") return <LicensePage />;
   if (pathname === "/privacy/") return <PrivacyPolicyPage />;
   if (pathname === "/pricing/") return <PricingPage />;
   if (pathname === "/sign-in/") return <SignInPage />;
@@ -210,17 +236,22 @@ const defaultMetadata = (path: string): SeoMetadata => ({
     name: "TextHalo",
     applicationCategory: "UtilitiesApplication",
     operatingSystem: "macOS",
-    description: "An open-source Mac menu bar app for text to speech, on-device dictation, and writing assistance, with free local features and optional paid hosted services.",
+    description: "A source-available Mac menu bar app for text to speech, on-device dictation, and writing assistance, with free local features and optional paid hosted services.",
     url: SITE_URL,
     downloadUrl: MAC_DOWNLOAD,
     offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
-    license: "Apache-2.0",
+    license: `${SITE_URL}/license/`,
   },
 });
 
 export function getSeoMetadata(pathname: string): SeoMetadata {
   const path = normalizePath(pathname);
   if (path === "/") return defaultMetadata(path);
+  if (path === "/license/") {
+    const title = "TextHalo Source Available License 1.0";
+    const description = "TextHalo licensing terms for private use, internal business use, redistribution, derivative products, and hosted services. Prior Apache-licensed releases retain their original terms.";
+    return { ...defaultMetadata(path), title, description, modified: "2026-10-04", schema: { "@context": "https://schema.org", "@type": "WebPage", name: title, description, url: `${SITE_URL}${path}` } };
+  }
   if (path === "/pricing/") {
     return { ...defaultMetadata(path), title: "TextHalo Plans — Local Features & Cloud Credits", description: "Compare TextHalo Free, Plus, and Creator plans. Use local voices and dictation for free, then add credits for Fish Audio and Cloud Assistant." };
   }

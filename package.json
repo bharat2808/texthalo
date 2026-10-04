@@ -2,7 +2,7 @@
   "name": "texthalo",
   "private": true,
   "version": "0.1.12",
-  "license": "Apache-2.0",
+  "license": "SEE LICENSE IN LICENSE-TEXTHALO.md",
   "type": "module",
   "scripts": {
     "test": "node --test scripts/*.test.mjs",
