@@ -1,3 +1,4 @@
+import { DEMO_VIDEO } from "./demo";
 import { blogPosts, stories, type EditorialPage } from "./content";
 import { BillingAccountPage, BillingSuccessPage, DesktopConnectPage, PasswordResetPage, PricingPage, SignInPage } from "./billing";
 import Website from "./website";
@@ -27,19 +28,20 @@ function VideoWatchPage() {
   return <div className="site-shell"><EditorialHeader /><main className="editorial-main watch-main">
     <nav className="breadcrumbs" aria-label="Breadcrumb"><a href="/">Home</a><span>/</span><span>Product demo</span></nav>
     <div className="eyebrow"><span className="eyebrow-line" /> TEXTHALO FOR MAC</div>
-    <h1>See how TextHalo reads selected text aloud</h1>
-    <p className="editorial-intro">Watch the 15-second listening demo to see selected text become speech. TextHalo also includes Dictate and Assistant; explore those workflows on the homepage.</p>
+    <h1>Listen. Dictate. Get a little help.</h1>
+    <p className="editorial-intro">Watch a 30-second animated walkthrough of Listen, Dictate, and Assistant, with example interactions that show how each workflow fits into your day.</p>
     <figure className="watch-player">
-      <video controls playsInline preload="metadata" poster="/videos/texthalo-product-demo-poster.png" width="960" height="540" aria-label="15-second TextHalo product demo with narration">
-        <source src="/videos/texthalo-product-demo.mp4" type="video/mp4" />
+      <video controls playsInline preload="metadata" poster={DEMO_VIDEO.poster} width={DEMO_VIDEO.width} height={DEMO_VIDEO.height} aria-label="30-second animated TextHalo product demo with narration">
+        <source src={DEMO_VIDEO.src} type="video/mp4" />
+        <track kind="captions" src={DEMO_VIDEO.captions} srcLang="en" label="English" />
         Your browser does not support embedded video.
       </video>
-      <figcaption>TextHalo listening demo · 15 seconds · Narrated with Kokoro</figcaption>
+      <figcaption>TextHalo workflow demo · 30 seconds · Animated examples · Fish Audio · Sophia narration</figcaption>
     </figure>
     <section className="watch-details">
-      <h2>A small Mac app for listening while you work</h2>
+      <h2>Three ways to work with your words</h2>
       <p>TextHalo reads a passage you select in another app. Start playback with a keyboard shortcut, keep the floating player nearby, and choose Apple, Kokoro, Chatterbox, or Fish Audio voices. Local voices run on your Mac; Fish Audio uses hosted credits.</p>
-      <p>Apple, Kokoro, and Chatterbox synthesize speech on your Mac. Kokoro and Chatterbox need model downloads. For speech to text and writing help, explore Dictate and Assistant on the homepage.</p>
+      <p>Dictate transcribes on your Mac using macOS speech recognition or Whisper. Assistant can write, edit selected text, or read aloud with Apple Intelligence where available or TextHalo Cloud. Cloud Assistant requires sign-in, consent, and credits. Choose your Dictate and Assistant shortcuts in the app.</p>
       <a className="button button-dark" href={MAC_DOWNLOAD}>Download TextHalo for Apple Silicon <span aria-hidden="true">→</span></a>
     </section>
   </main><EditorialFooter /></div>;
@@ -69,7 +71,7 @@ function EditorialHeader() {
 }
 
 function EditorialFooter() {
-  return <footer className="site-footer"><a className="wordmark footer-wordmark" href="/"><Mark /><span>TextHalo</span></a><span className="footer-copy">Listen. Dictate. Get a little help.</span><div className="footer-links"><a href="/privacy/">Privacy</a><a href="/blog/">Blog</a><a href="/stories/">Stories</a></div><span className="copyright">© {new Date().getFullYear()} TextHalo</span></footer>;
+  return <footer className="site-footer"><a className="wordmark footer-wordmark" href="/"><Mark /><span>TextHalo</span></a><span className="footer-copy">Listen. Dictate. Get a little help.</span><div className="footer-links"><a href="/privacy/">Privacy</a><a href="/blog/">Blog</a><a href="/stories/">Stories</a><a href="https://github.com/bharat2808/texthalo" target="_blank" rel="noreferrer">GitHub <span className="arrow" aria-hidden="true">↗</span></a></div><span className="copyright">© {new Date().getFullYear()} TextHalo</span></footer>;
 }
 
 function PrivacyPolicyPage() {
@@ -190,6 +192,8 @@ export type SeoMetadata = {
     thumbnailUrl: string;
     contentUrl: string;
     duration: string;
+    width: number;
+    height: number;
     uploadDate: string;
   };
   schema: Record<string, unknown>;
@@ -241,15 +245,17 @@ export function getSeoMetadata(pathname: string): SeoMetadata {
     return { ...defaultMetadata(path), title: "Checkout complete | TextHalo", description: "Return to TextHalo after checking out for hosted speech credits." };
   }
   if (path === "/demo/") {
-    const title = "TextHalo Mac App Demo — Listen in 15 Seconds";
-    const description = "Watch TextHalo read selected text aloud on Mac. This 15-second product tour shows the menu bar app, shortcut, and floating playback controls.";
+    const title = "TextHalo Mac App Demo — Listen, Dictate & Assistant";
+    const description = DEMO_VIDEO.description;
     const video = {
-      name: "TextHalo for Mac: 15-Second Product Tour",
+      name: DEMO_VIDEO.title,
       description,
-      thumbnailUrl: `${SITE_URL}/videos/texthalo-product-demo-poster.png`,
-      contentUrl: `${SITE_URL}/videos/texthalo-product-demo.mp4`,
-      duration: "PT15S",
-      uploadDate: "2026-09-25",
+      thumbnailUrl: `${SITE_URL}${DEMO_VIDEO.poster}`,
+      contentUrl: `${SITE_URL}${DEMO_VIDEO.src}`,
+      duration: DEMO_VIDEO.duration,
+      width: DEMO_VIDEO.width,
+      height: DEMO_VIDEO.height,
+      uploadDate: DEMO_VIDEO.published,
     };
     const videoId = `${SITE_URL}${path}#video`;
     return {
@@ -257,7 +263,7 @@ export function getSeoMetadata(pathname: string): SeoMetadata {
       title,
       description,
       type: "video.other",
-      modified: "2026-09-27",
+      modified: DEMO_VIDEO.published,
       video,
       schema: {
         "@context": "https://schema.org",
@@ -282,7 +288,7 @@ export function getSeoMetadata(pathname: string): SeoMetadata {
   const page = match && collection.find((item) => item.slug === match[2]);
   if (!page) return { ...defaultMetadata(path), title: "Page not found | TextHalo", description: "This TextHalo page could not be found." };
   const title = `${page.title} | TextHalo`;
-  const image = `${SITE_URL}/videos/texthalo-product-demo-poster.png`;
+  const image = `${SITE_URL}${DEMO_VIDEO.poster}`;
   const schema = {
     "@context": "https://schema.org",
     "@type": isBlog ? "BlogPosting" : "Article",

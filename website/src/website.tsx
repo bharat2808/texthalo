@@ -1,3 +1,4 @@
+import { DEMO_VIDEO } from "./demo";
 import { SiteHeader } from "./billing";
 import { MAC_DOWNLOAD as DOWNLOAD } from "./downloads";
 import { version } from "../../package.json";
@@ -18,19 +19,20 @@ function Arrow() {
 function ProductVideo() {
   return (
     <div className="product-video">
-      <div className="product-video-label"><span className="live-dot" /> SEE LISTEN IN ACTION</div>
+      <div className="product-video-label"><span className="live-dot" /> SEE TEXTHALO IN ACTION</div>
       <video
         controls
         playsInline
         preload="metadata"
-        poster="/videos/texthalo-product-demo-poster.png"
-        aria-label="TextHalo selected-text listening demo with narration"
+        poster={DEMO_VIDEO.poster}
+        aria-label="30-second animated TextHalo demo: Listen, Dictate, and Assistant"
       >
-        <source src="/videos/texthalo-product-demo.mp4" type="video/mp4" />
+        <source src={DEMO_VIDEO.src} type="video/mp4" />
+        <track kind="captions" src={DEMO_VIDEO.captions} srcLang="en" label="English" />
         Your browser does not support embedded video.
       </video>
-      <div className="product-video-caption"><span>15 SECOND LISTEN DEMO</span><span>VOICEOVER · KOKORO</span></div>
-      <a className="video-watch-link" href="/demo/">Watch the listening demo <Arrow /></a>
+      <div className="product-video-caption"><span>30 SECOND WORKFLOW DEMO</span><span>VOICEOVER · FISH AUDIO</span></div>
+      <a className="video-watch-link" href="/demo/">Watch the product demo <Arrow /></a>
     </div>
   );
 }
@@ -92,7 +94,7 @@ function Website() {
         <section className="closing-cta"><div className="closing-inner"><div className="closing-mark"><Mark /></div><div className="eyebrow eyebrow-light"><span className="eyebrow-line" /> READY WHEN YOU ARE</div><h2>Listen. Dictate.<br /><em>Get a little help.</em></h2><p>Free local features. Open-source app. Optional paid Cloud Assistant and hosted voices.</p><a className="button button-cream button-large" href={DOWNLOAD} target="_blank" rel="noreferrer">Get TextHalo for macOS <Arrow /></a><span className="cta-version">Current version {version} <span>·</span> Requires Apple Silicon</span></div><div className="cta-decoration cta-dec-a"/><div className="cta-decoration cta-dec-b"/></section>
       </main>
 
-      <footer className="site-footer"><a className="wordmark footer-wordmark" href="#top"><Mark /><span>TextHalo</span></a><span className="footer-copy">Listen. Dictate. Get a little help.</span><div className="footer-links"><a href="/pricing/">Pricing</a><a href="/demo/">Demo</a><a href="/stories/">Stories</a><a href="/blog/">Blog</a></div><span className="copyright">© {new Date().getFullYear()} TextHalo</span></footer>
+      <footer className="site-footer"><a className="wordmark footer-wordmark" href="#top"><Mark /><span>TextHalo</span></a><span className="footer-copy">Listen. Dictate. Get a little help.</span><div className="footer-links"><a href="/pricing/">Pricing</a><a href="/demo/">Demo</a><a href="/stories/">Stories</a><a href="/blog/">Blog</a><a href="https://github.com/bharat2808/texthalo" target="_blank" rel="noreferrer">GitHub <span className="arrow" aria-hidden="true">↗</span></a></div><span className="copyright">© {new Date().getFullYear()} TextHalo</span></footer>
     </div>
   );
 }

@@ -7,7 +7,7 @@ from pathlib import Path
 
 
 RATE = 48_000
-DURATION = 15.0
+DURATION = 30.0
 SAMPLES = int(RATE * DURATION)
 LEFT = [0.0] * SAMPLES
 RIGHT = [0.0] * SAMPLES
@@ -77,11 +77,11 @@ def main():
         (98.00, 146.83, 196.00, 293.66),
     ]
     for chord_index, notes in enumerate(chord_notes):
-        start = chord_index * 3.75
+        start = chord_index * 7.5
         for note_index, frequency in enumerate(notes):
             add_note(
                 start,
-                4.0,
+                7.7,
                 frequency,
                 0.032 if note_index == 0 else 0.024,
                 pan=(-0.24, -0.08, 0.1, 0.24)[note_index],
@@ -94,7 +94,8 @@ def main():
     plucks = [
         (0.35, 523.25), (1.9, 659.25), (3.65, 587.33),
         (5.25, 783.99), (7.35, 659.25), (9.2, 783.99),
-        (11.1, 698.46), (12.3, 783.99), (13.55, 659.25),
+        (11.1, 698.46), (14.3, 783.99), (17.55, 659.25),
+        (19.4, 587.33), (22.3, 698.46), (25.3, 659.25), (27.5, 523.25),
     ]
     for start, frequency in plucks:
         add_note(

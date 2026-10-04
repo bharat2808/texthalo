@@ -38,3 +38,6 @@ test-results/
 
 # Native assistant sidecar compiled by build.rs
 src-tauri/binaries/texthalo-assistant-*
+
+# Generated demo narration and render scratch assets
+modal-video/output/
