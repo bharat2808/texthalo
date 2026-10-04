@@ -59,6 +59,7 @@ pub fn configure_holds(app: &AppHandle) -> Result<(), String> {
 
 pub fn setup(app: &AppHandle) -> tauri::Result<()> {
     app.manage(AssistantState::default());
+    crate::whisper::setup(app);
     tauri::async_runtime::spawn(crate::hosted_assistant::recover(app.clone()));
     WebviewWindowBuilder::new(
         app,
@@ -131,6 +132,7 @@ fn send(app: &AppHandle, inner: &mut Inner, value: Value) -> Result<(), String> 
             let mut inner = state.inner.lock().unwrap();
             if inner.native.as_ref().map(|n| n.child.id()) == Some(pid) {
                 inner.native = None;
+                crate::whisper::cancel(&app,None);
                 cancel_cloud(&mut inner);
                 stop_assistant_speech(&app, &mut inner);
                 inner.job.cancel();
@@ -368,7 +370,29 @@ fn position_panel(window: &tauri::WebviewWindow, anchor: Option<&Value>, height:
     let _ = window.center();
 }
 
+pub(crate) fn whisper_output(app: &AppHandle, id: u64, result: Result<String,String>, finished: bool) {
+    let state = app.state::<AssistantState>();
+    let mut inner = state.inner.lock().unwrap();
+    if !inner.job.current(id) { return; }
+    let value = match result {
+        Ok(text) => json!({"command":if finished {"whisper_result"} else {"whisper_partial"},"id":id,"text":text}),
+        Err(message) => json!({"command":"whisper_error","id":id,"text":message}),
+    };
+    let _ = send(app, &mut inner, value);
+}
 fn receive(app: &AppHandle, mut event: Value) {
+    if event["phase"] == "whisper_audio" {
+        if let (Some(id),Some(audio)) = (event["id"].as_u64(),event["audio"].as_str()) {
+            if let Err(error) = crate::whisper::audio(app,id,audio) { whisper_output(app,id,Err(error),true); }
+        }
+        return;
+    }
+    if event["phase"] == "whisper_capture_error" {
+        if let Some(id) = event["id"].as_u64() { whisper_output(app,id,Err(event["message"].as_str().unwrap_or("Microphone conversion failed.").into()),true); }
+        return;
+    }
+    if event["phase"] == "whisper_finish" { if let Some(id)=event["id"].as_u64() { crate::whisper::finish(app,id); } return; }
+    if event["phase"] == "whisper_cancel" { crate::whisper::cancel(app,event["id"].as_u64()); return; }
     if event["phase"] == "audit_error" {
         let _ = app.emit("texthalo:generation-history-error", &event["message"]);
         eprintln!("Generation history could not be saved: {}", event["message"]);
@@ -407,6 +431,9 @@ fn receive(app: &AppHandle, mut event: Value) {
     if event["phase"] == "availability" {
         event["holdError"] = json!(inner.hold_error);
         cloud_availability(app, &mut event);
+        let preferences = app.state::<AppState>().settings.lock().unwrap().assistant.clone();
+        event["whisperLanguages"] = crate::whisper_core::languages(&preferences.whisper_model);
+        event["whisperReady"] = json!(crate::whisper_models::installed(app,&preferences.whisper_model));
         inner.availability = event.clone();
         let _ = app.emit("texthalo:assistant-availability", event);
         return;
@@ -467,10 +494,12 @@ fn receive(app: &AppHandle, mut event: Value) {
         return;
     }
     if event["phase"] == "error" {
+        crate::whisper::cancel(app,Some(id));
         cancel_cloud(&mut inner);
         stop_assistant_speech(app, &mut inner);
     }
     if event["phase"] == "canceled" {
+        crate::whisper::cancel(app,Some(id));
         cancel_cloud(&mut inner);
         stop_assistant_speech(app, &mut inner);
         inner.job.cancel();
@@ -589,7 +618,7 @@ fn stop_assistant_speech(app: &AppHandle, inner: &mut Inner) {
 
 fn configuration(command: &str, id: u64, settings: &Settings) -> Value {
     json!({"command":command,"id":id,"language":settings.assistant.language,
-        "instruction":settings.assistant.instruction,
+        "transcriptionEngine":settings.assistant.transcription_engine,"instruction":settings.assistant.instruction,
         "output":settings.assistant.dictation_output,"restoreClipboard":settings.restore_clipboard})
 }
 
@@ -599,6 +628,7 @@ pub fn pressed(app: &AppHandle, mode: Mode, key: String, modifiers: String) {
     let Some(id) = inner.job.press(mode) else {
         return;
     };
+    crate::whisper::cancel(app,None);
     cancel_cloud(&mut inner);
     inner.usage = Value::Null;
     // Prevent existing narration being captured as the user's request.
@@ -614,8 +644,13 @@ pub fn pressed(app: &AppHandle, mode: Mode, key: String, modifiers: String) {
     }
     let provider = if mode == Mode::Assistant { resolve_provider(&settings, &inner.availability) } else { Ok("local") };
     let provider = match provider { Ok(p) => p, Err(message) => {
-        inner.job.finish(id); inner.status = json!({"id":id,"phase":"error","mode":mode,"message":message}); publish(app, &inner.status); return;
+        crate::whisper::cancel(app,Some(id)); inner.job.finish(id); inner.status = json!({"id":id,"phase":"error","mode":mode,"message":message}); publish(app, &inner.status); return;
     }};
+    if settings.assistant.transcription_engine == "whisper" {
+        if let Err(message)=crate::whisper::start(app,id,&settings.assistant) {
+            inner.job.finish(id); inner.status=json!({"id":id,"phase":"error","mode":mode,"message":message}); publish(app,&inner.status); return;
+        }
+    }
     inner.provider = provider.into();
     command["provider"] = json!(provider);
     command["mode"] = json!(mode);
@@ -624,6 +659,7 @@ pub fn pressed(app: &AppHandle, mode: Mode, key: String, modifiers: String) {
     inner.status = json!({"id":id,"phase":"processing","mode":mode,"message":"Starting microphone…","text":"","provider":provider});
     // Wait for the native context snapshot before showing any new UI.
     if let Err(error) = send(app, &mut inner, command) {
+        crate::whisper::cancel(app,Some(id));
         inner.job.finish(id);
         inner.status = json!({"id":id,"phase":"error","mode":mode,"provider":provider,"message":error});
         publish(app, &inner.status);
@@ -647,6 +683,7 @@ pub fn cancel(app: &AppHandle) {
     cancel_locked(app, &mut inner);
 }
 fn cancel_locked(app: &AppHandle, inner: &mut Inner) {
+    crate::whisper::cancel(app,None);
     cancel_cloud(inner);
     inner.job.cancel();
     stop_assistant_speech(app, inner);
@@ -665,6 +702,7 @@ fn cancel_locked(app: &AppHandle, inner: &mut Inner) {
     publish(app, &inner.status);
 }
 pub fn shutdown(app: &AppHandle) {
+    crate::whisper::shutdown(app);
     if let Some(state) = app.try_state::<AssistantState>() {
         let mut inner = state.inner.lock().unwrap();
         cancel_cloud(&mut inner);
@@ -679,6 +717,9 @@ pub fn assistant_state(app: AppHandle) -> Value {
     let inner = state.inner.lock().unwrap();
     let mut availability = inner.availability.clone();
     cloud_availability(&app, &mut availability);
+    let preferences = app.state::<AppState>().settings.lock().unwrap().assistant.clone();
+    availability["whisperLanguages"] = crate::whisper_core::languages(&preferences.whisper_model);
+    availability["whisperReady"] = json!(crate::whisper_models::installed(&app, &preferences.whisper_model));
     json!({"status":inner.status,"availability":availability})
 }
 

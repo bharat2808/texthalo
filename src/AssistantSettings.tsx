@@ -5,9 +5,9 @@ import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { groupRecognitionLanguages, type RecognitionLanguage } from "./recognitionLanguages";
-export type AssistantPreferences = { language: string; instruction: string; dictation_output: string; provider?: "local" | "cloud" | "automatic"; cloud_consent_version?: number | null };
-export const defaultAssistantPreferences: AssistantPreferences = { language: "en-US", instruction: "", dictation_output: "insert", provider: "local", cloud_consent_version: null };
-export type Availability = { model?: string; microphone?: number; recognition?: number; accessibility?: boolean; screen?: boolean; imageInput?: boolean; cloudScreenInput?: boolean; holdError?: string; cloudConfigured?: boolean; cloudSignedIn?: boolean; provider?: string; effectiveProvider?: string; speechLanguages?: RecognitionLanguage[] };
+export type AssistantPreferences = { language: string; instruction: string; dictation_output: string; transcription_engine?: "apple" | "whisper"; whisper_model?: string; provider?: "local" | "cloud" | "automatic"; cloud_consent_version?: number | null };
+export const defaultAssistantPreferences: AssistantPreferences = { language: "en-US", transcription_engine: "whisper", whisper_model: "small", instruction: "", dictation_output: "insert", provider: "local", cloud_consent_version: null };
+export type Availability = { model?: string; microphone?: number; recognition?: number; accessibility?: boolean; screen?: boolean; imageInput?: boolean; cloudScreenInput?: boolean; holdError?: string; cloudConfigured?: boolean; cloudSignedIn?: boolean; provider?: string; effectiveProvider?: string; whisperReady?: boolean; whisperLanguages?: RecognitionLanguage[]; speechLanguages?: RecognitionLanguage[] };
 type SettingsProps = { value: AssistantPreferences; onChange: (value: AssistantPreferences) => void };
 type Props = SettingsProps & { onSignIn: () => void; onCancelSignIn: () => void; signingIn: boolean; warningIcon: ReactNode; accountMark: string; signInError: string };
 export function useAvailability() {
@@ -39,7 +39,7 @@ export function PermissionsSettings() {
   return <div>
     {([
       {name:"Microphone",key:"microphone",status:a.microphone,description:"Records while you hold Dictate or Assistant."},
-      {name:"Speech Recognition",key:"speech",status:a.recognition === 1 ? 2 : a.recognition === 2 ? 1 : a.recognition,description:"Converts your voice into text on this Mac."},
+      {name:"Speech Recognition",key:"speech",status:a.recognition === 1 ? 2 : a.recognition === 2 ? 1 : a.recognition,description:"Required only for macOS speech recognition."},
       {name:"Screen Recording",key:"screen",status:a.screen === undefined ? undefined : a.screen ? 3 : 0,description:a.imageInput === false && a.cloudScreenInput !== true ? "Screen context is unavailable on this Mac." : "Lets Assistant capture your current window when you make a request."},
     ]).map(p => <section className="permission-row" key={p.key}>
       <strong>{p.name}</strong><div className="card-note">{p.description}</div><p>{label(p.status)}</p>
@@ -111,16 +111,20 @@ export default function AssistantSettings({ value, onChange, onSignIn, onCancelS
 }
 export function TranscriptionSettings({value,onChange}: SettingsProps) {
   const {availability,error} = useAvailability();
-  const languages = availability.speechLanguages;
+  const whisper = value.transcription_engine === "whisper";
+  const languages = whisper ? availability.whisperLanguages : availability.speechLanguages;
+  const selectedLanguage = whisper ? value.language.split(/[-_]/)[0] : value.language;
+  const groupedLanguages = groupRecognitionLanguages(languages ?? [], navigator.language || "en");
   return <div className="assistant-settings">
     <div className="field"><label className="field-label" htmlFor="recognition-language">Language</label>
-      <select id="recognition-language" value={value.language} onChange={event => onChange({...value,language:event.target.value})}>
-        {!languages?.some(language => language.code === value.language) && <option value={value.language}>{value.language}</option>}
-        {groupRecognitionLanguages(languages ?? [], navigator.language || "en").map(group => <optgroup key={group.name} label={group.name}>
+      <select id="recognition-language" value={selectedLanguage} onChange={event => onChange({...value,language:event.target.value})}>
+        {whisper && <option value="auto">Automatic detection</option>}
+        {selectedLanguage !== "auto" && !languages?.some(language => language.code === selectedLanguage) && <option value={selectedLanguage}>{selectedLanguage}</option>}
+        {groupedLanguages.map(group => whisper ? <option key={group.name} value={group.languages[0].code}>{group.name}</option> : <optgroup key={group.name} label={group.name}>
           {group.languages.map(language => <option key={language.code} value={language.code}>{language.name}</option>)}
         </optgroup>)}
       </select>
-      <p className="card-note">Also used by Assistant. Speech is transcribed on this Mac using macOS speech recognition.</p>
+      <p className="card-note">Also used by Assistant. Speech is transcribed on this Mac using {whisper ? "Whisper. Choose a language for more consistent results; automatic detection can vary for mixed-language speech." : "macOS speech recognition."}</p>
     </div>
     <div className="field"><label className="field-label" htmlFor="dictation-output">When I finish speaking</label>
       <select id="dictation-output" value={value.dictation_output} onChange={event => onChange({...value,dictation_output:event.target.value})}>
@@ -153,7 +157,7 @@ export function TaskReadiness({ mode, needsAccessibility = true, accessibilityPr
   const permissions: FeaturePermission[] = [
     { name: "Microphone", key: "microphone", status: a.microphone, required: true },
     // Speech Recognition's denied/restricted enum values are reversed from Microphone.
-    { name: "Speech Recognition", key: "speech", status: a.recognition === 1 ? 2 : a.recognition === 2 ? 1 : a.recognition, required: true },
+    { name: "Speech Recognition", key: "speech", status: a.recognition === 1 ? 2 : a.recognition === 2 ? 1 : a.recognition, required: preferences.transcription_engine !== "whisper" },
     { name: "Accessibility", key: "accessibility", status: a.accessibility === undefined ? undefined : a.accessibility ? 3 : 0, required: needsAccessibility },
     ...(mode === "assistant" ? [{ name: "Screen Recording", key: "screen" as const, status: a.screen === undefined ? undefined : a.screen ? 3 : 0, required: (preferences.provider === "cloud" || (preferences.provider === "automatic" && a.model !== "available") ? a.cloudScreenInput ?? a.imageInput : a.imageInput) !== false }] : []),
   ];
@@ -193,7 +197,7 @@ export function TaskReadiness({ mode, needsAccessibility = true, accessibilityPr
         const granted = permission.status === 3;
         const restricted = permission.status === 1;
         const settings = permission.status === 2 || (permission.key === "accessibility" && accessibilityPrompted) || (permission.key === "screen" && screenRequested);
-        const label = !permission.required ? permission.key === "screen" ? "Unavailable for the selected provider on this Mac" : "Only for inserting text" : permission.status === undefined ? "Checking…" : granted ? "Allowed" : restricted ? "Restricted by macOS" : "Not allowed";
+        const label = !permission.required ? permission.key === "speech" ? "Only for macOS speech recognition" : permission.key === "screen" ? "Unavailable for the selected provider on this Mac" : "Only for inserting text" : permission.status === undefined ? "Checking…" : granted ? "Allowed" : restricted ? "Restricted by macOS" : "Not allowed";
         return <li key={permission.key}><div><span>{permission.name}</span><small>{label}</small></div>
           {permission.required && !granted && !restricted ? <button className="plain" disabled={pending !== null || permission.status === undefined} onClick={() => void request(permission)}>{pending === permission.key ? (permission.key === "microphone" || permission.key === "speech") && permission.status === 0 ? "Waiting for macOS…" : "Opening…" : settings ? `Open ${permission.name} Settings` : `Enable ${permission.name}`}</button> : null}
         </li>;

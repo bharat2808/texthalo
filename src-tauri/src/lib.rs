@@ -35,6 +35,9 @@ mod speech_job;
 pub mod spoken;
 mod streaming;
 mod transcription_history;
+mod whisper;
+pub mod whisper_core;
+mod whisper_models;
 mod update_safety;
 pub mod voices;
 
@@ -721,6 +724,7 @@ fn get_state(app: AppHandle) -> UiState {
 #[tauri::command]
 fn save_settings(app: AppHandle, settings: Settings) -> Result<UiState, String> {
     shortcuts::bindings(&settings)?; // validate before writing anything
+    whisper_models::validate_settings(&settings.assistant)?;
     use tauri_plugin_autostart::ManagerExt;
     let manager = app.autolaunch();
     let launch_changed = manager.is_enabled().unwrap_or_else(|_| {
@@ -1300,6 +1304,10 @@ pub fn run() {
             assistant::transcription_history,
             generation_history::generation_history,
             assistant::assistant_control,
+            whisper_models::whisper_models,
+            whisper_models::whisper_download,
+            whisper_models::whisper_cancel_download,
+            whisper_models::whisper_remove,
             get_state,
             get_speech_status,
             get_update_overlay_status,

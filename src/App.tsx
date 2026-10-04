@@ -1,3 +1,4 @@
+import TranscriptionSource from "./TranscriptionSource";
 import Row from "./SelectionRow";
 import { createPortal } from "react-dom";
 import { serviceReadiness } from "./serviceReadiness";
@@ -2218,6 +2219,7 @@ function MainApp() {
 
               </Card>
             ) : null}
+            {settings.engine === "fish" ? (
             <details className="disclosure" id="your-voices">
               <summary>Your voices</summary>
               {accountError ? <Note kind="error" icon={Icon.xCircle()}>{accountError}</Note> : null}
@@ -2249,6 +2251,7 @@ function MainApp() {
                 <button className="plain" onClick={() => setTab("account")}>{account ? "View voice cloning plans" : "Sign in to create a voice"}</button>
               </div> : null}
             </details>
+            ) : null}
           </div>
         ) : null}
 
@@ -2370,7 +2373,8 @@ function MainApp() {
           <div className="service-heading"><h1 className="pane-title">Dictate</h1>{readinessIcon("transcription", "Dictate")}</div>
           <p className="pane-subtitle">Hold your shortcut, speak, then release.</p>
           {shortcutControl("transcribe")}
-          <TaskReadiness mode="dictate" needsAccessibility={(settings.assistant ?? defaultAssistantPreferences).dictation_output === "insert"} accessibilityPrompted={settings.accessibility_prompted} onAccessibility={enableAccessibility} />
+          <Card title="Transcription source" icon={Icon.textCursor()}><TranscriptionSource value={settings.assistant ?? defaultAssistantPreferences} onChange={assistant => void save({ assistant })} availability={serviceAvailability.availability} warningIcon={Icon.warn()} downloadIcon={Icon.download()} /></Card>
+          <TaskReadiness mode="dictate" preferences={settings.assistant ?? defaultAssistantPreferences} needsAccessibility={(settings.assistant ?? defaultAssistantPreferences).dictation_output === "insert"} accessibilityPrompted={settings.accessibility_prompted} onAccessibility={enableAccessibility} />
           <Card title="Preferences" icon={Icon.textCursor()}><TranscriptionSettings value={settings.assistant ?? defaultAssistantPreferences} onChange={assistant => void save({ assistant })} /></Card>
           <button className="text" onClick={() => { setHistoryView("transcripts"); setTab("history"); }}>View transcripts</button>
         </div> : null}

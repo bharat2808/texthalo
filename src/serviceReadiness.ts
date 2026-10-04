@@ -29,7 +29,7 @@ export function serviceReadiness(input: Input): Record<string, string[]> {
       : `${name} access is restricted by macOS.`];
   const voiceInput = input.error ? ["Could not check readiness. Open the feature to retry."] : [
     ...access("Microphone", a.microphone, 2),
-    ...access("Speech Recognition", a.recognition, 1),
+    ...(p.transcription_engine === "whisper" ? a.whisperReady ? [] : [a.whisperReady === undefined ? "Checking the selected Whisper model…" : "Download the selected Whisper model in Dictate settings."] : access("Speech Recognition", a.recognition, 1)),
   ];
   const accessibility = input.trusted ? [] : ["Allow Accessibility access."];
   const focusedPasswordField = input.focusedPasswordField ? ["Leave the password field to use shortcuts."] : [];

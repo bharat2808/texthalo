@@ -78,6 +78,7 @@ struct Request: Decodable {
     var action: String?
     var message: String?
     var language: String?
+    var transcriptionEngine: String?
     var instruction: String?
     // Command-local capture choice for the explicit window/region action. It is
     // no longer a persisted Assistant context mode.

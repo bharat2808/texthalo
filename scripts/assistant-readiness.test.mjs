@@ -57,3 +57,13 @@ test('cloud screen capability is independent of local model screen gating', () =
   input.availability.screen = true;
   assert.deepEqual(serviceReadiness(input).assistant, []);
 });
+test('Whisper needs its model and microphone, without Speech Recognition permission', () => {
+  const input = ready(); input.preferences.transcription_engine = 'whisper';
+  input.availability.recognition = 1; input.availability.whisperReady = true;
+  assert.deepEqual(serviceReadiness(input).transcription, []);
+  assert.deepEqual(serviceReadiness(input).assistant, []);
+  input.availability.whisperReady = false;
+  assert.ok(serviceReadiness(input).transcription.some(reason => reason.includes('Download')));
+  input.availability.whisperReady = true; input.availability.microphone = 2;
+  assert.ok(serviceReadiness(input).transcription.some(reason => reason.includes('Microphone')));
+});

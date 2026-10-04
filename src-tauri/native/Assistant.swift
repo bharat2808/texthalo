@@ -5,9 +5,12 @@ import ApplicationServices
 import FoundationModels
 import OSLog
 
+private let outputLock = NSLock()
+
 func emit(_ value: [String: Any]) {
     guard let data = try? JSONSerialization.data(withJSONObject: value),
           let line = String(data: data, encoding: .utf8) else { return }
+    outputLock.lock(); defer { outputLock.unlock() }
     print(line)
     fflush(stdout)
 }
@@ -300,6 +303,8 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
     var screenPreparation: PreparedScreenContext?
     var screenImage: CGImage?
     var screenProcess: Process?
+    var whisperCapture: WhisperAudioCapture?
+    var whisperPreview = ""
     var recording = false
     var finishing = false
     var monitors: [Any] = []
@@ -326,6 +331,8 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
         recording = false
     }
     func cancel(cancelScreen: Bool = true) {
+        if request?.transcriptionEngine == "whisper", recording || finishing { emit(["id": id, "phase": "whisper_cancel"]) }
+        whisperCapture?.cancel(); whisperCapture = nil
         if cancelScreen { screenPreparation?.cancel(); screenPreparation = nil }
         insertion?.cancel(); insertion = nil
         generation?.cancel(); generation = nil
@@ -385,6 +392,18 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
         case "settings_microphone", "settings_speech", "settings_screen":
             let pane = command.command == "settings_microphone" ? "Privacy_Microphone" : command.command == "settings_speech" ? "Privacy_SpeechRecognition" : "Privacy_ScreenCapture"
             if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?" + pane) { NSWorkspace.shared.open(url) }
+        case "whisper_partial":
+            guard command.id == id, recording, request?.transcriptionEngine == "whisper" else { return }
+            whisperPreview = command.text ?? ""
+            event("recording", "Listening… Release to transcribe.", text: whisperPreview)
+        case "whisper_result":
+            guard command.id == id, finishing, request?.transcriptionEngine == "whisper" else { return }
+            completeTranscript(command.text ?? "")
+        case "whisper_error":
+            guard command.id == id, recording || finishing, request?.transcriptionEngine == "whisper" else { return }
+            let recovery = whisperPreview
+            cancel(); result = recovery
+            event("error", command.text ?? "Whisper transcription failed.", text: recovery)
         case "halt":
             guard command.id == id else { return }
             audit?.update(phase: "interrupted", message: "Generation halted by playback", text: result, action: "")
@@ -438,14 +457,16 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
         if command.mode != "assistant" {
             audit?.update(phase: "interrupted", message: "Replaced by dictation", text: result, action: "")
         }
-        cancel(); id = command.id; request = command; result = ""; context = ""; screenImage = nil; target = Target()
+        cancel(); id = command.id; request = command; result = ""; whisperPreview = ""; context = ""; screenImage = nil; target = Target()
         target?.trace("target-captured")
         if command.mode == "assistant" { context = sourceReference() }
         if command.mode == "assistant" { audit?.input(["source": target?.sourceContext.app ?? ""]) }
         else { audit = nil }
-        guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized,
-              SFSpeechRecognizer.authorizationStatus() == .authorized else {
-            event("error", "Enable Microphone and Speech Recognition in TextHalo’s Permissions section, then hold the shortcut again."); return
+        guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else {
+            event("error", "Enable Microphone in TextHalo’s Permissions section, then hold the shortcut again."); return
+        }
+        if command.transcriptionEngine != "whisper", SFSpeechRecognizer.authorizationStatus() != .authorized {
+            event("error", "Enable Speech Recognition in TextHalo’s Permissions section, then hold the shortcut again."); return
         }
         if command.output != "copy" || command.mode == "assistant" {
             guard AXIsProcessTrusted() else {
@@ -453,9 +474,12 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
             }
         }
         event("processing", "Starting microphone…")
-        let recognizer: SFSpeechRecognizer
-        do { recognizer = try localRecognizer(language: command.language ?? "en-US") }
-        catch { event("error", error.localizedDescription); return }
+        let usesWhisper = command.transcriptionEngine == "whisper"
+        var recognizer: SFSpeechRecognizer?
+        if !usesWhisper {
+            do { recognizer = try localRecognizer(language: command.language ?? "en-US") }
+            catch { event("error", error.localizedDescription); return }
+        }
         if command.mode == "assistant", command.provider != .cloud {
             guard #available(macOS 26.0, *) else { event("error", "Assistant requires macOS 26 or later."); return }
             guard SystemLanguageModel.default.isAvailable else { event("error", "Apple Intelligence is unavailable: \(SystemLanguageModel.default.availability)"); return }
@@ -463,26 +487,28 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
         }
         let currentID = id
         let bufferRequest = SFSpeechAudioBufferRecognitionRequest()
-        bufferRequest.requiresOnDeviceRecognition = true
-        bufferRequest.shouldReportPartialResults = true
-        audioRequest = bufferRequest
-        recognition = recognizer.recognitionTask(with: bufferRequest) { [weak self] response, error in
-            Task { @MainActor in
-                guard let self, self.id == currentID, self.recording || self.finishing else { return }
-                if let response {
-                    let transcription = response.bestTranscription
-                    let segments = transcription.segments
-                    let start = segments.first?.timestamp
-                    let end = segments.last.map { $0.timestamp + $0.duration }
-                    if let transcript = self.transcriptGate.recognized(transcription.formattedString,
-                        isFinal: response.isFinal, start: start, end: end,
-                        utteranceComplete: response.speechRecognitionMetadata != nil) {
-                        self.completeTranscript(transcript)
-                    } else if self.recording {
-                        self.event("recording", "Listening… Release to transcribe.", text: self.transcriptGate.text)
+        if let recognizer {
+            bufferRequest.requiresOnDeviceRecognition = true
+            bufferRequest.shouldReportPartialResults = true
+            audioRequest = bufferRequest
+            recognition = recognizer.recognitionTask(with: bufferRequest) { [weak self] response, error in
+                Task { @MainActor in
+                    guard let self, self.id == currentID, self.recording || self.finishing else { return }
+                    if let response {
+                        let transcription = response.bestTranscription
+                        let segments = transcription.segments
+                        let start = segments.first?.timestamp
+                        let end = segments.last.map { $0.timestamp + $0.duration }
+                        if let transcript = self.transcriptGate.recognized(transcription.formattedString,
+                            isFinal: response.isFinal, start: start, end: end,
+                            utteranceComplete: response.speechRecognitionMetadata != nil) {
+                            self.completeTranscript(transcript)
+                        } else if self.recording {
+                            self.event("recording", "Listening… Release to transcribe.", text: self.transcriptGate.text)
+                        }
+                    } else if let error {
+                        self.cancel(); self.event("error", "Transcription failed: \(error.localizedDescription)")
                     }
-                } else if let error {
-                    self.cancel(); self.event("error", "Transcription failed: \(error.localizedDescription)")
                 }
             }
         }
@@ -490,7 +516,15 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
         let input = audioEngine.inputNode
         let format = input.outputFormat(forBus: 0)
         guard format.sampleRate > 0, format.channelCount > 0 else { cancel(); event("error", "No microphone input is available."); return }
-        input.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in bufferRequest.append(buffer) }
+        if usesWhisper {
+            do {
+                let capture = try WhisperAudioCapture(format: format, id: currentID)
+                whisperCapture = capture
+                input.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in capture.append(buffer) }
+            } catch { cancel(); event("error", error.localizedDescription); return }
+        } else {
+            input.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in bufferRequest.append(buffer) }
+        }
         engine = audioEngine
         do {
             try audioEngine.start(); recording = true
@@ -523,7 +557,20 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
     }
     func finishRecording() {
         guard recording, !finishing else { return }
-        finishing = true; stopAudio(); event("processing", "Transcribing on this Mac…")
+        finishing = true; stopAudio(); event("processing", "Transcribing on this Mac…", text: whisperPreview)
+        if request?.transcriptionEngine == "whisper" {
+            whisperCapture?.finish()
+            deadline?.cancel()
+            let currentID = id
+            deadline = Task {
+                try? await Task.sleep(for: .seconds(120))
+                guard !Task.isCancelled, self.id == currentID, self.finishing else { return }
+                let recovery = self.whisperPreview
+                self.cancel(); self.result = recovery
+                self.event("error", "Transcription did not finish. Your preview is available to copy.", text: recovery)
+            }
+            return
+        }
         if let transcript = transcriptGate.release() { completeTranscript(transcript); return }
         deadline?.cancel()
         let currentID = id
