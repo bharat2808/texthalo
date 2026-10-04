@@ -160,12 +160,24 @@ pub(crate) fn position_sized(window: &tauri::WebviewWindow, width: f64, height: 
                 NSWindowCollectionBehavior::CanJoinAllSpaces
                     | NSWindowCollectionBehavior::FullScreenAuxiliary,
             );
+            let current = native.frame();
+            let visible = native.isVisible();
+            // Live updates must not snap a dragged widget back to its default
+            // position. When its height changes, keep its top edge in place.
+            if visible && current.size.width == width && current.size.height == height {
+                return;
+            }
+            let origin = if visible {
+                NSPoint::new(current.origin.x, current.origin.y + current.size.height - height)
+            } else {
+                NSPoint::new(
+                    frame.origin.x + (frame.size.width - width) / 2.0,
+                    frame.origin.y + frame.size.height - height - 6.0,
+                )
+            };
             native.setFrame_display(
                 NSRect::new(
-                    NSPoint::new(
-                        frame.origin.x + (frame.size.width - width) / 2.0,
-                        frame.origin.y + frame.size.height - height - 6.0,
-                    ),
+                    origin,
                     NSSize::new(width, height),
                 ),
                 true,

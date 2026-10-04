@@ -235,8 +235,41 @@ fn presentation(status: &Value) -> Presentation {
         && (busy || !matches!(status["action"].as_str(), Some("speak" | "applied")));
     let expanded = status["text"].as_str().is_some_and(|s| !s.is_empty()) && status["action"] != "applied";
     let compact = busy || matches!(status["action"].as_str(), Some("copied" | "undone"));
-    let height = if busy && expanded { 140.0 } else if compact { 44.0 } else if expanded { 360.0 } else { 140.0 };
+    let height = if busy && expanded {
+        if status["previewExpanded"] == true { status["previewHeight"].as_f64().unwrap_or(76.0).clamp(76.0, 4096.0) } else { 76.0 }
+    } else if compact { 44.0 } else if expanded { 360.0 } else { 140.0 };
     Presentation { show, compact, height }
+}
+
+fn set_preview_expanded(status: &mut Value, request_id: Option<u64>, expanded: bool) -> Result<(), String> {
+    let id = status["id"].as_u64().filter(|id| *id != 0);
+    if id.is_none() || request_id != id {
+        return Err("This preview is no longer current".into());
+    }
+    if !matches!(status["phase"].as_str(), Some("recording" | "processing" | "capturing_screen" | "streaming" | "speaking")) {
+        return Err("This preview is no longer live".into());
+    }
+    status["previewExpanded"] = json!(expanded);
+    if !expanded { status.as_object_mut().unwrap().remove("previewHeight"); }
+    Ok(())
+}
+
+fn preserve_preview(previous: &Value, next: &mut Value) {
+    if previous["id"].as_u64().is_some() && previous["id"] == next["id"] {
+        next["previewExpanded"] = json!(previous["previewExpanded"] == true);
+        if let Some(height) = previous["previewHeight"].as_f64() {
+            next["previewHeight"] = json!(height);
+        }
+    }
+}
+
+fn set_preview_height(status: &mut Value, request_id: Option<u64>, height: Option<f64>) -> Result<(), String> {
+    let height = height.filter(|height| height.is_finite() && (76.0..=4096.0).contains(height))
+        .ok_or("Invalid preview height")?;
+    if status["previewExpanded"] != true { return Err("This preview is collapsed".into()); }
+    set_preview_expanded(status, request_id, true)?;
+    status["previewHeight"] = json!(height.ceil());
+    Ok(())
 }
 
 fn publish(app: &AppHandle, status: &Value) {
@@ -284,8 +317,11 @@ fn publish(app: &AppHandle, status: &Value) {
                 if compact {
                     crate::overlay::position_sized(&window, 270.0, height);
                 } else {
+                    let already_visible = window.is_visible().unwrap_or(false);
                     let _ = window.set_size(tauri::LogicalSize::new(380.0, height));
-                    position_panel(&window, anchor.as_ref(), height);
+                    if !already_visible {
+                        position_panel(&window, anchor.as_ref(), height);
+                    }
                 }
                 #[cfg(target_os = "macos")]
                 if let Ok(raw) = window.ns_window() {
@@ -474,6 +510,7 @@ fn receive(app: &AppHandle, mut event: Value) {
     );
     event["provider"] = json!(inner.provider);
     event["usage"] = inner.usage.clone();
+    preserve_preview(&inner.status, &mut event);
     inner.status = event;
     publish(app, &inner.status);
 }
@@ -678,9 +715,20 @@ pub fn assistant_control(
     text: Option<String>,
     context: Option<String>,
     request_id: Option<u64>,
+    preview_height: Option<f64>,
 ) -> Result<(), String> {
     let state = app.state::<AssistantState>();
     let mut inner = state.inner.lock().unwrap();
+    if command == "resize_preview" {
+        set_preview_height(&mut inner.status, request_id, preview_height)?;
+        publish(&app, &inner.status);
+        return Ok(());
+    }
+    if command == "expand_preview" || command == "collapse_preview" {
+        set_preview_expanded(&mut inner.status, request_id, command == "expand_preview")?;
+        publish(&app, &inner.status);
+        return Ok(());
+    }
     if command == "cancel" {
         if request_id.is_some_and(|id| !inner.job.current(id)) {
             return Err("This result is no longer current".into());
@@ -832,9 +880,45 @@ mod tests {
     #[test]
     fn live_preview_keeps_the_assistant_visible_without_a_focusable_result() {
         let recording = presentation(&json!({"phase":"recording","text":"Hello there"}));
-        assert!(recording.show && recording.compact && recording.height == 140.0);
+        assert!(recording.show && recording.compact && recording.height == 76.0);
         let audio = presentation(&json!({"phase":"streaming","action":"speak","text":"A narrated answer."}));
-        assert!(audio.show && audio.compact && audio.height == 140.0);
+        assert!(audio.show && audio.compact && audio.height == 76.0);
+    }
+    #[test]
+    fn live_preview_expands_without_changing_the_recording_or_generation() {
+        let mut status = json!({"id":7,"phase":"recording","text":"First passage"});
+        set_preview_expanded(&mut status, Some(7), true).unwrap();
+        assert_eq!(status["phase"], "recording");
+        assert_eq!(presentation(&status).height, 76.0);
+        set_preview_height(&mut status, Some(7), Some(112.0)).unwrap();
+        assert_eq!(presentation(&status).height, 112.0);
+        let mut update = json!({"id":7,"phase":"streaming","text":"An answer keeps arriving"});
+        preserve_preview(&status, &mut update);
+        assert_eq!(presentation(&update).height, 112.0);
+        set_preview_expanded(&mut update, Some(7), false).unwrap();
+        assert_eq!(presentation(&update).height, 76.0);
+        assert!(update.get("previewHeight").is_none());
+        assert!(set_preview_height(&mut update, Some(7), Some(112.0)).is_err());
+        assert!(set_preview_expanded(&mut update, Some(6), true).is_err());
+        assert!(set_preview_expanded(&mut update, None, true).is_err());
+        let mut replacement = json!({"id":8,"phase":"recording","text":"New request"});
+        preserve_preview(&status, &mut replacement);
+        assert_eq!(presentation(&replacement).height, 76.0);
+        replacement["phase"] = json!("result");
+        assert!(set_preview_expanded(&mut replacement, Some(8), true).is_err());
+    }
+    #[test]
+    fn expanded_preview_resizing_is_scoped_and_bounded() {
+        let mut status = json!({"id":7,"phase":"recording","text":"Growing text","previewExpanded":true});
+        for height in [None, Some(f64::NAN), Some(f64::INFINITY), Some(-1.0), Some(5000.0)] {
+            assert!(set_preview_height(&mut status, Some(7), height).is_err());
+        }
+        assert!(set_preview_height(&mut status, Some(6), Some(100.0)).is_err());
+        set_preview_height(&mut status, Some(7), Some(130.4)).unwrap();
+        assert_eq!(presentation(&status).height, 131.0);
+        assert_eq!(status["text"], "Growing text");
+        status["phase"] = json!("result");
+        assert!(set_preview_height(&mut status, Some(7), Some(100.0)).is_err());
     }
     #[test]
     fn generation_configuration_preserves_user_preferences_without_a_context_mode() {

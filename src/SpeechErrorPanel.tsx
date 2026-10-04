@@ -14,7 +14,7 @@ type Props = {
 export default function SpeechErrorPanel(props: Props) {
   const { assistant, message, actionError, busy, actionLabel, dismiss, recover, useLocal, textRecovery } = props;
   return <div className={`overlay-root speech-overlay error error-panel${textRecovery ? " with-recovery" : ""}`}>
-    <div className="error-heading"><span className="activity" aria-hidden="true">!</span><strong>{assistant ? "Unable to answer" : "Unable to speak"}</strong>
+    <div className="error-heading"><OverlayGrip><span className="activity" aria-hidden="true">!</span></OverlayGrip><strong>{assistant ? "Unable to answer" : "Unable to speak"}</strong>
       <button className="dismiss" disabled={busy} aria-label={assistant ? "Dismiss Assistant error" : "Dismiss speech error"} title="Dismiss" onClick={dismiss}>×</button>
     </div>
     <p className="error-reason" role="alert">{message}</p>
@@ -28,3 +28,4 @@ export default function SpeechErrorPanel(props: Props) {
     </div>
   </div>;
 }
+import OverlayGrip from "./OverlayGrip";

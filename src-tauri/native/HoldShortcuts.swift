@@ -6,9 +6,28 @@ import IOKit.hidsystem
 final class HoldShortcuts {
     private let sendEvent: ([String: Any]) -> Void
     private let postEvent: (CGEvent) -> Void
+    private let allowsWidgetInteraction: (CGEvent) -> Bool
     init(sendEvent: @escaping ([String: Any]) -> Void = emit,
-         postEvent: @escaping (CGEvent) -> Void = { $0.post(tap: .cgSessionEventTap) }) {
+         postEvent: @escaping (CGEvent) -> Void = { $0.post(tap: .cgSessionEventTap) },
+         allowsWidgetInteraction: @escaping (CGEvent) -> Bool = { HoldShortcuts.isWidgetInteraction(at: $0.location) }) {
         self.sendEvent = sendEvent; self.postEvent = postEvent
+        self.allowsWidgetInteraction = allowsWidgetInteraction
+    }
+    static func isWidgetInteraction(at point: CGPoint) -> Bool {
+        guard let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { return false }
+        return isWidgetInteraction(at: point, windows: windows, ownerPID: getppid())
+    }
+    static func isWidgetInteraction(at point: CGPoint, windows: [[String: Any]], ownerPID: pid_t) -> Bool {
+        // Only the topmost window under the pointer may exempt a click. The
+        // parent app owns our floating windows at NSScreenSaverWindowLevel.
+        for window in windows {
+            guard let bounds = window[kCGWindowBounds as String] as? [String: Any],
+                  let rect = CGRect(dictionaryRepresentation: bounds as CFDictionary), rect.contains(point),
+                  (window[kCGWindowAlpha as String] as? NSNumber)?.doubleValue != 0 else { continue }
+            return (window[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == ownerPID
+                && (window[kCGWindowLayer as String] as? NSNumber)?.intValue == 1000
+        }
+        return false
     }
     static let codes: [String: CGKeyCode] = ["Hold:Fn": 63, "Hold:LeftOption": 58, "Hold:RightOption": 61, "Hold:Escape": 53]
     private static let replayTag: Int64 = 0x54455854484F4C44
@@ -107,7 +126,10 @@ final class HoldShortcuts {
             // Repeated Escape down must not dismiss the user's target window.
             return code == 53 && escapeDown != nil ? nil : pass
         }
-        if candidate != nil { interrupt(); return pass }
+        if candidate != nil {
+            if [.leftMouseDown, .rightMouseDown, .otherMouseDown].contains(type), allowsWidgetInteraction(event) { return pass }
+            interrupt(); return pass
+        }
         guard let key, type != .keyUp else { return pass }
         let allowed: CGEventFlags = code == 63 ? .maskSecondaryFn : code == 53 ? [] : .maskAlternate
         let modifiers: CGEventFlags = [.maskCommand, .maskControl, .maskAlternate, .maskShift, .maskSecondaryFn]

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import SpeechErrorPanel from "./SpeechErrorPanel";
+import OverlayGrip from "./OverlayGrip";
 import "./SpeechOverlay.css";
 
 type Status = { phase: "idle" | "capturing" | "preparing" | "speaking" | "error"; message?: string | null };
@@ -73,9 +74,9 @@ export default function SpeechOverlay() {
     : "Speaking";
   return (
     <div className={`overlay-root speech-overlay ${status.phase}`}>
-      <div className="activity" aria-hidden="true">
+      <OverlayGrip onError={setActionError}><div className="activity" aria-hidden="true">
         {[0, 1, 2, 3, 4].map((i) => <i key={i} style={{ animationDelay: `${i * -0.13}s` }} />)}
-      </div>
+      </div></OverlayGrip>
       <span className="speech-label" role="status" title={status.message ?? label}>{label}</span>
       <button aria-label="Stop speech"
         title="Stop speech (⌘⇧X)"

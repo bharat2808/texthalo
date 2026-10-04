@@ -3,5 +3,5 @@
   "identifier": "speech-overlay",
   "description": "Speech status events for the floating Stop panel",
   "windows": ["speech-overlay"],
-  "permissions": ["core:event:allow-listen", "core:event:allow-unlisten"]
+  "permissions": ["core:event:allow-listen", "core:event:allow-unlisten", "core:window:allow-start-dragging", "core:window:allow-set-position", "core:window:allow-outer-position", "core:window:allow-scale-factor"]
 }
