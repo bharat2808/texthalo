@@ -1733,11 +1733,6 @@ function MainApp() {
                   Find a voice you enjoy listening to.
                 </p>
               </div>
-              {!account ? (
-                <button className="plain" onClick={() => setTab("account")}>
-                  Sign in
-                </button>
-              ) : null}
             </div>
             <Card title="Voice source" icon={Icon.speaker()}>
               <div className="row-stack">
@@ -1759,12 +1754,23 @@ function MainApp() {
                   />
                 ))}
               </div>
-
               {activeEngine && !activeEngine.can_speak ? (
                 <Note kind="warning" icon={Icon.warn()}>
                   {activeEngine.status}
                 </Note>
               ) : null}
+
+              {settings.engine === "fish" && !account ? <>
+                <div className="account-brand">
+                  <img className="account-brand-mark" src={appLogo} alt="" />
+                  <div><strong>TextHalo</strong><div className="card-note">Your account for hosted speech</div></div>
+                  <div className="account-brand-actions">
+                    <button className="plain" disabled={accountBusy} onClick={() => void beginDesktopSignIn()}>{accountBusy ? "Waiting for browser sign-in…" : "Sign in"}</button>
+                    {accountBusy ? <button className="text" onClick={() => void cancelDesktopSignIn()}>Cancel</button> : null}
+                  </div>
+                </div>
+                {accountError ? <Note kind="error" icon={Icon.xCircle()}>{accountError}</Note> : null}
+              </> : null}
 
               {activeEngine?.needs_download ? (
                 <div className="field">
@@ -1827,8 +1833,6 @@ function MainApp() {
                     </div>
                     <span className="field-hint">Choose a voice, then use your Speak shortcut anywhere.</span>
                   </div>
-                  {!account ? <Note kind="warning" icon={Icon.warn()}>Sign in to use hosted speech. Preview samples are available without signing in.</Note> : null}
-                  {accountError ? <Note kind="error" icon={Icon.xCircle()}>{accountError}</Note> : null}
                   <div className="voice-list">
                     {hostedVoicesByLanguage.map(([code, voices]) => (
                       <div key={code}>
@@ -2372,7 +2376,7 @@ function MainApp() {
           <p className="pane-subtitle">Hold your shortcut and ask to write, edit, or read aloud.</p>
           {shortcutControl("assistant")}
           <TaskReadiness mode="assistant" preferences={settings.assistant ?? defaultAssistantPreferences} accessibilityPrompted={settings.accessibility_prompted} onAccessibility={enableAccessibility} />
-          <Card title="Make it yours" icon={Icon.textCursor()}><AssistantSettings value={settings.assistant ?? defaultAssistantPreferences} onChange={assistant => void save({ assistant })} /></Card>
+          <Card title="Make it yours" icon={Icon.textCursor()}><AssistantSettings value={settings.assistant ?? defaultAssistantPreferences} onChange={assistant => void save({ assistant })} onSignIn={() => void beginDesktopSignIn()} onCancelSignIn={() => void cancelDesktopSignIn()} signingIn={accountBusy} warningIcon={Icon.warn()} accountMark={appLogo} signInError={accountError} /></Card>
           <p className="card-note"><strong>Privacy:</strong> TextHalo captures your current window only while you use Assistant. Your latest 50 runs—including requests, selected text, screenshots, prompts, and answers—are saved locally in Assistant history. Cloud Assistant sends your request and text context to TextHalo and its model provider when cloud processing is enabled. A hosted voice separately sends the words being spoken to TextHalo and Fish Audio.</p>
           <button className="text" onClick={() => { setHistoryView("assistant"); setTab("history"); }}>View Assistant history</button>
           {(settings.assistant?.provider ?? "local") !== "local" && <button className="text" onClick={() => setTab("account")}>Account and credits</button>}

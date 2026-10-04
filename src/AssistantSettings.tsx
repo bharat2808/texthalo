@@ -1,11 +1,13 @@
 import SelectionRow from "./SelectionRow";
+import type { ReactNode } from "react";
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 export type AssistantPreferences = { language: string; instruction: string; dictation_output: string; provider?: "local" | "cloud" | "automatic"; cloud_consent_version?: number | null };
 export const defaultAssistantPreferences: AssistantPreferences = { language: "en-US", instruction: "", dictation_output: "insert", provider: "local", cloud_consent_version: null };
 export type Availability = { model?: string; microphone?: number; recognition?: number; accessibility?: boolean; screen?: boolean; imageInput?: boolean; cloudScreenInput?: boolean; diagnostic?: string; holdError?: string; cloudConfigured?: boolean; cloudSignedIn?: boolean; provider?: string; effectiveProvider?: string };
-type Props = { value: AssistantPreferences; onChange: (value: AssistantPreferences) => void };
+type SettingsProps = { value: AssistantPreferences; onChange: (value: AssistantPreferences) => void };
+type Props = SettingsProps & { onSignIn: () => void; onCancelSignIn: () => void; signingIn: boolean; warningIcon: ReactNode; accountMark: string; signInError: string };
 export function useAvailability() {
   const [availability, setAvailability] = useState<Availability>({});
   const [error, setError] = useState("");
@@ -45,7 +47,7 @@ export function PermissionsSettings() {
     {error && <p role="alert">{error}</p>}
   </div>;
 }
-export default function AssistantSettings({ value, onChange }: Props) {
+export default function AssistantSettings({ value, onChange, onSignIn, onCancelSignIn, signingIn, warningIcon, accountMark, signInError }: Props) {
   const {availability,error} = useAvailability();
   const [instruction, setInstruction] = useState(value.instruction);
   // Preserve the draft when another control saves in the same event turn.
@@ -73,7 +75,18 @@ export default function AssistantSettings({ value, onChange }: Props) {
       <label className="checkbox-row"><input type="checkbox" checked={value.cloud_consent_version === 1} onChange={event => onChange({ ...value, instruction: draft.current, cloud_consent_version: event.target.checked ? 1 : null })} />Enable cloud processing for Assistant</label>
       <p className="card-note">Your spoken request is transcribed on this Mac. For Cloud requests, the transcript, instructions, selected text, text read from your current window, and previous answer when used are sent to TextHalo and its model provider. Screenshots and microphone audio are not uploaded for Assistant generation. Generated answers use credits; a hosted voice uses additional credits. Canceling may still use credits for generation already performed.</p>
       {!availability.cloudConfigured && <p className="card-note">Cloud Assistant is not configured in this build.</p>}
-      {availability.cloudConfigured && !availability.cloudSignedIn && <p className="card-note">Sign in from Account to use Cloud Assistant.</p>}
+      {availability.cloudConfigured && !availability.cloudSignedIn && <>
+        <div className="note-line warning">{warningIcon}<span>Sign in to use Cloud Assistant.</span></div>
+        <div className="account-brand">
+          <img className="account-brand-mark" src={accountMark} alt="" />
+          <div><strong>TextHalo</strong><div className="card-note">Your account for Cloud Assistant</div></div>
+          <div className="account-brand-actions">
+            <button className="plain" disabled={signingIn} onClick={onSignIn}>{signingIn ? "Waiting for browser sign-in…" : "Sign in"}</button>
+            {signingIn && <button className="text" onClick={onCancelSignIn}>Cancel</button>}
+          </div>
+        </div>
+        {signInError && <p className="note-line error" role="alert">{signInError}</p>}
+      </>}
     </div>}
     <div className="field"><label className="field-label" htmlFor="assistant-instruction">Assistant instructions</label>
       <textarea id="assistant-instruction" rows={7} maxLength={2000} value={instruction} onChange={event => { draft.current = event.target.value; setInstruction(event.target.value); }} onBlur={() => { if (draft.current !== value.instruction) onChange({ ...value, instruction: draft.current }); }} placeholder="Use a warm tone. Keep writing concise. When I ask for a voiceover, write a script ready to read aloud." />
@@ -84,7 +97,7 @@ export default function AssistantSettings({ value, onChange }: Props) {
     {error && <p role="alert">{error}</p>}
   </div>;
 }
-export function TranscriptionSettings({value,onChange}: Props) {
+export function TranscriptionSettings({value,onChange}: SettingsProps) {
   const {availability,error,command} = useAvailability();
   return <div className="assistant-settings">
     <div className="field"><label className="field-label" htmlFor="recognition-language">Language</label>
