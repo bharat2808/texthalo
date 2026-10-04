@@ -31,6 +31,15 @@ const PUBLIC_TOPUP_PACKS: CreditTopupPack[] = [
   { id: "topup-20", priceCents: 2_000, credits: 120_000 },
 ];
 
+const FREE_FEATURES = [
+  "Apple native voices",
+  "Kokoro local AI voices",
+  "Chatterbox with built-in local voice cloning",
+  "Speech generated on your Mac",
+  "On-device dictation with macOS or Whisper",
+  "Apple Intelligence Assistant where available",
+];
+
 const FALLBACK_PLANS: PlanCard[] = [
   {
     id: "free" as const,
@@ -39,13 +48,8 @@ const FALLBACK_PLANS: PlanCard[] = [
     creditsPerPeriod: 0,
     cloneLimit: 0,
     displayOrder: 0,
-    description: "A calm place to start listening.",
-    features: [
-      "Apple native voices",
-      "Kokoro local AI voices",
-      "Chatterbox with built-in local voice cloning",
-      "Speech generated on your Mac",
-    ],
+    description: "Listen and dictate on your Mac.",
+    features: FREE_FEATURES,
     action: "Download TextHalo",
   },
   {
@@ -91,7 +95,6 @@ function formatPlanPrice(price: PlanCard["price"]): string {
   return `${amount} / ${count > 1 ? `${count} ` : ""}${price.interval}${count > 1 ? "s" : ""}`;
 }
 
-const SOURCE = "https://github.com/bharat2808/texthalo";
 const TURNSTILE_SITE_KEY = import.meta.env.VITE_TURNSTILE_SITE_KEY?.trim() ?? "";
 
 declare global {
@@ -142,7 +145,7 @@ export function SiteHeader() {
   }
 
   return <>
-    <div className="announcement"><span className="announcement-dot" /> TextHalo is open source <span className="announcement-separator">·</span> Requires Apple Silicon <a href={SOURCE} target="_blank" rel="noreferrer">Explore the project <span className="arrow">→</span></a></div>
+    <div className="announcement"><span className="announcement-dot" /> TextHalo is open source <span className="announcement-separator">·</span> Requires Apple Silicon </div>
     <header className="site-header billing-header">
       <a className="wordmark" href="/"><Mark /><span>TextHalo</span></a>
       <nav className={menuOpen ? "nav-open" : ""} aria-label="Main navigation">
@@ -154,7 +157,6 @@ export function SiteHeader() {
         <a href="/demo/" onClick={() => setMenuOpen(false)}>Demo</a>
         <a href="/stories/" onClick={() => setMenuOpen(false)}>Stories</a>
         <a href="/blog/" onClick={() => setMenuOpen(false)}>Blog</a>
-        <a className="nav-source" href={SOURCE} target="_blank" rel="noreferrer">Open source <span className="arrow">↗</span></a>
         <a className="button button-dark nav-download" href={DOWNLOAD} target="_blank" rel="noreferrer">Get TextHalo <span className="arrow">→</span></a>
       </nav>
       <div className="header-account-tools">
@@ -220,7 +222,7 @@ function TurnstileWidget({ active, onToken }: { active: boolean; onToken: (token
 }
 
 function BillingFooter() {
-  return <footer className="site-footer"><a className="wordmark footer-wordmark" href="/"><Mark /><span>TextHalo</span></a><span className="footer-copy">A little more room to listen.</span><div className="footer-links"><a href="/">Home</a><a href="/demo/">Demo</a><a href="https://github.com/bharat2808/texthalo">GitHub <span className="arrow">↗</span></a></div><span className="copyright">© {new Date().getFullYear()} TextHalo</span></footer>;
+  return <footer className="site-footer"><a className="wordmark footer-wordmark" href="/"><Mark /><span>TextHalo</span></a><span className="footer-copy">Listen. Dictate. Get a little help.</span><div className="footer-links"><a href="/">Home</a><a href="/demo/">Demo</a></div><span className="copyright">© {new Date().getFullYear()} TextHalo</span></footer>;
 }
 
 export function createDesktopHandoffAttempt() {
@@ -400,9 +402,9 @@ function PricingContent() {
   const planCards = billingState.unavailable || !billing ? FALLBACK_PLANS : billing.plans;
 
   return <div className="site-shell"><SiteHeader /><main className="pricing-page section-wrap">
-    <div className="eyebrow"><span className="eyebrow-line" /> A VOICE THAT FITS YOUR WORKFLOW</div>
-    <h1>Start free.<br /><em>Listen for longer.</em></h1>
-    <p className="pricing-intro">Every plan includes TextHalo’s local voices. Add Fish Audio hosted generation when you want the convenience of cloud voices and monthly usage credits.</p>
+    <div className="eyebrow"><span className="eyebrow-line" /> LOCAL FEATURES. OPTIONAL CLOUD CREDITS.</div>
+    <h1>Start free.<br /><em>Do more with your words.</em></h1>
+    <p className="pricing-intro">Local voices and on-device dictation are free. On-device Assistant is included where Apple Intelligence is available. Add a plan or credit pack for Fish Audio hosted speech and TextHalo Cloud Assistant.</p>
     <div className="plan-grid">
       {planCards.map((plan) => {
         const paid = plan.id !== "free";
@@ -415,8 +417,8 @@ function PricingContent() {
           {isCurrentPlan && <span className="plan-current-badge">CURRENT PLAN</span>}
           <div className="plan-name">{plan.name}</div>
           <div className="plan-price">{formatPlanPrice(plan.price)}</div>
-          <p className="plan-description">{plan.description}</p>
-          <ul>{plan.features.map((feature) => <li key={feature}><span aria-hidden="true">✓</span>{feature}</li>)}</ul>
+          <p className="plan-description">{plan.id === "free" ? "Listen and dictate on your Mac." : plan.description}</p>
+          <ul>{(plan.id === "free" ? FREE_FEATURES : [...plan.features, "Cloud Assistant using the same credit balance"]).map((feature) => <li key={feature}><span aria-hidden="true">✓</span>{feature}</li>)}</ul>
           {plan.id === "free"
             ? <a className="button button-plan button-plan-light" href={DOWNLOAD}>Download TextHalo <span className="arrow">→</span></a>
             : <button className={`button button-plan${plan.id === "creator" ? " button-plan-dark" : " button-plan-light"}`} type="button" disabled={disabled} onClick={() => plan.id !== "free" && void choosePlan(plan.id)}>
@@ -429,9 +431,9 @@ function PricingContent() {
     </div>
     {error && <p className="billing-error" role="alert">{error}</p>}
     <section className="credit-topup-panel pricing-topup-panel" aria-labelledby="pricing-topup-heading">
-      <div className="eyebrow"><span className="eyebrow-line" /> ONE-TIME HOSTED AUDIO</div>
-      <h2 id="pricing-topup-heading">Need a few more minutes?</h2>
-      <p>Buy a credit pack without starting a monthly plan. Your first top-up includes seven days with two active voice-clone slots; the trial waits while a plan already covers cloning.</p>
+      <div className="eyebrow"><span className="eyebrow-line" /> ONE-TIME CLOUD CREDITS</div>
+      <h2 id="pricing-topup-heading">More credits, when you need them.</h2>
+      <p>Buy credits for hosted speech and Cloud Assistant without starting a monthly plan. Your first top-up includes seven days with two active voice-clone slots; the trial waits while a plan already covers cloning.</p>
       <div className="credit-topup-grid">{topupPacks.map((pack) => {
         const price = new Intl.NumberFormat(undefined, { style: "currency", currency: "USD", maximumFractionDigits: 2 }).format(pack.priceCents / 100);
         const estimatedMinutes = Math.round((pack.credits * 1000) / (450 * 900));
@@ -448,9 +450,9 @@ function PricingContent() {
       <small className="credit-topup-note">Purchased top-up credits don’t expire. Monthly plan credits are used first and expire at the end of the billing period.</small>
       {topupError && <p className="billing-error" role="alert">{topupError}</p>}
     </section>
-    <p className="credit-estimate">* Audio length is an estimate based on about 900 characters of English per spoken minute. Credits are charged by text length, so actual time varies with language, wording, and voice.</p>
-    <section className="local-voice-note"><span className="local-note-mark"><Mark /></span><div><strong>Local cloning and hosted cloning are different.</strong><p>Chatterbox’s built-in voice cloning runs on your Mac and is included with Free. Saved Fish Audio clones are hosted by Fish Audio and are included with Creator, up to five.</p></div></section>
-    <p className="pricing-footnote">Local speech synthesis runs on your Mac; its speed depends on your device. Unused monthly plan credits expire at period end; purchased top-up credits don’t expire.</p>
+    <p className="credit-estimate">* Audio length is an estimate based on about 900 characters of English per spoken minute. Hosted speech credits are charged by text length, so actual time varies with language, wording, and voice. Cloud Assistant uses credits based on model usage; these audio estimates do not apply to Assistant requests. Reading an answer with a hosted voice uses additional credits.</p>
+    <section className="local-voice-note"><span className="local-note-mark"><Mark /></span><div><strong>Local cloning and hosted cloning are different.</strong><p>Chatterbox’s built-in voice cloning runs on your Mac and is included with Free. Saved Fish Audio clones are hosted by Fish Audio. Plan and trial limits are shown in your account and at checkout.</p></div></section>
+    <p className="pricing-footnote">Local speech and transcription run on your Mac. On-device Assistant requires macOS 26 or later, a supported Mac, and Apple Intelligence enabled and ready. Cloud Assistant requires sign-in and consent, and uses your available credits. Unused monthly plan credits expire at period end; purchased top-up credits don’t expire.</p>
   </main><BillingFooter /></div>;
 }
 
@@ -915,7 +917,7 @@ function BillingAccountContent() {
         </> : account && subscription && planName ? <><p>Your {planName} subscription is <strong>{subscription.status.replace(/_/g, " ")}</strong>. Hosted plan access is paused until the billing issue is resolved.</p><button className="button button-dark" type="button" disabled={busy} onClick={() => void manageSubscription(subscription.planId)}>{busy ? "Opening Stripe…" : "Manage subscription"}<span className="arrow">→</span></button></> : account ? <><p>You’re using the Free plan. Choose a hosted audio plan whenever you need Fish Audio voices and monthly credits.</p><a className="button button-plan-light" href="/pricing/">Compare plans <span className="arrow">→</span></a></> : null}
       </section>
       {billingState.status?.billingEnabled && billingState.status.topups && billingState.status.topups.length > 0 ? <section className="credit-topup-panel" aria-labelledby="account-topup-heading">
-        <div className="eyebrow"><span className="eyebrow-line" /> ONE-TIME HOSTED AUDIO</div>
+        <div className="eyebrow"><span className="eyebrow-line" /> ONE-TIME CLOUD CREDITS</div>
         <h2 id="account-topup-heading">Add a credit pack.</h2>
         <p>Top-up credits are separate from your monthly plan balance and don’t expire. Your first purchase includes seven days with two active voice-clone slots, paused while a plan covers cloning.</p>
         <div className="credit-topup-grid">{billingState.status.topups.map((pack) => {
@@ -924,7 +926,7 @@ function BillingAccountContent() {
           return <article className="credit-topup-option" key={pack.id}><strong>{pack.credits.toLocaleString()} credits</strong><span>About {estimatedMinutes} minutes of English audio*</span><button className="button button-dark" type="button" disabled={busyTopup !== null || busy} onClick={() => void buyCredits(pack)}>{busyTopup === pack.id ? "Opening checkout…" : `Buy for ${price}`}<span className="arrow">→</span></button></article>;
         })}</div>
         <small className="credit-topup-note">Monthly plan credits are used first and expire at the end of your billing period. Top-up credits don’t expire.</small>
-      </section> : <section className="credit-topup-panel" aria-labelledby="account-topup-heading"><div className="eyebrow"><span className="eyebrow-line" /> ONE-TIME HOSTED AUDIO</div><h2 id="account-topup-heading">Add a credit pack.</h2><p className="credit-topup-unavailable" role="status">{billingState.loading ? "Loading available credit packs…" : billingState.unavailable ? "Credit packs are temporarily unavailable while the billing service reconnects. Please refresh in a moment." : "One-time credit packs are not available right now."}</p></section>}
+      </section> : <section className="credit-topup-panel" aria-labelledby="account-topup-heading"><div className="eyebrow"><span className="eyebrow-line" /> ONE-TIME CLOUD CREDITS</div><h2 id="account-topup-heading">Add a credit pack.</h2><p className="credit-topup-unavailable" role="status">{billingState.loading ? "Loading available credit packs…" : billingState.unavailable ? "Credit packs are temporarily unavailable while the billing service reconnects. Please refresh in a moment." : "One-time credit packs are not available right now."}</p></section>}
     </> : <><p className="billing-account-message">Sign in to see the plan and credits for your account.</p><a className="button button-dark button-large success-signin" href="/sign-in/?returnTo=%2Faccount%2Fbilling%2F">Sign in to view billing <span className="arrow">→</span></a></>}
     {error && <p className="billing-error" role="alert">{error}</p>}
     {actionError && <p className="billing-error" role="alert">{actionError}</p>}
