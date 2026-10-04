@@ -80,11 +80,12 @@ export default function AssistantSettings({ value, onChange, onSignIn, onCancelS
       </>}
       <p className="card-note">Hold the same Assistant shortcut to speak. Cloud fulfills your request using your TextHalo credit balance. Automatic uses Cloud when Apple Intelligence is unavailable at the start of a request.</p>
     </div>
-    {value.provider && value.provider !== "local" && <div className="field">
-      <label className="checkbox-row"><input type="checkbox" checked={value.cloud_consent_version === 1} onChange={event => onChange({ ...value, instruction: draft.current, cloud_consent_version: event.target.checked ? 1 : null })} />Enable cloud processing for Assistant</label>
-      <p className="card-note">Your spoken request is transcribed on this Mac. For Cloud requests, the transcript, instructions, selected text, text read from your current window, and previous answer when used are sent to TextHalo and its model provider. Screenshots and microphone audio are not uploaded for Assistant generation. Generated answers use credits; a hosted voice uses additional credits. Canceling may still use credits for generation already performed.</p>
-      {!availability.cloudConfigured && <p className="card-note">Cloud Assistant is not configured in this build.</p>}
-      {availability.cloudConfigured && !availability.cloudSignedIn && <>
+    <div className="field">
+      {provider !== "local" && <label className="checkbox-row"><input type="checkbox" checked={value.cloud_consent_version === 1} onChange={event => onChange({ ...value, instruction: draft.current, cloud_consent_version: event.target.checked ? 1 : null })} />Enable cloud processing for Assistant</label>}
+      <p className="card-note"><strong>Privacy:</strong> Your spoken request is transcribed on this Mac. TextHalo captures your current window only while you use Assistant. Your latest 50 runs—including requests, selected text, screenshots, prompts, and answers—are saved locally in Assistant history. {provider !== "local" && <>Cloud processing sends your transcript, instructions, selected text, screen text, and previous answer when used to TextHalo and its model provider. Screenshots and microphone audio are not uploaded for Assistant generation. TextHalo’s server-side Assistant records do not store prompts or answers; account, billing, and usage records are retained. Providers may retain request content under their own policies. </>}A hosted voice separately sends the words being spoken to TextHalo and Fish Audio.</p>
+      {provider !== "local" && <p className="card-note">Cloud answers use credits; a hosted voice uses additional credits. Canceling may still use credits for generation already performed.</p>}
+      {provider !== "local" && !availability.cloudConfigured && <p className="card-note">Cloud Assistant is not configured in this build.</p>}
+      {provider !== "local" && availability.cloudConfigured && !availability.cloudSignedIn && <>
         <div className="note-line warning">{warningIcon}<span>Sign in to use Cloud Assistant.</span></div>
         <div className="account-brand">
           <img className="account-brand-mark" src={accountMark} alt="" />
@@ -96,12 +97,12 @@ export default function AssistantSettings({ value, onChange, onSignIn, onCancelS
         </div>
         {signInError && <p className="note-line error" role="alert">{signInError}</p>}
       </>}
-    </div>}
+    </div>
     <div className="field"><label className="field-label" htmlFor="assistant-instruction">Assistant instructions</label>
       <textarea id="assistant-instruction" rows={7} maxLength={2000} value={instruction} onChange={event => { draft.current = event.target.value; setInstruction(event.target.value); }} onBlur={() => { if (draft.current !== value.instruction) onChange({ ...value, instruction: draft.current }); }} placeholder="Use a warm tone. Keep writing concise. When I ask for a voiceover, write a script ready to read aloud." />
       <p className="card-note">Your preferences for every request. You can undo text edits.</p>
     </div>
-    <p className="card-note">{(usesCloud ? availability.cloudScreenInput : availability.imageInput) === false ? "Screen context is unavailable for the selected provider on this Mac. Assistant can still use your request and selected text." : "Assistant uses your selected text and, when supported, text from your original window. Cloud receives extracted text, not the screenshot."}</p>
+    {(usesCloud ? availability.cloudScreenInput : availability.imageInput) === false && <p className="card-note">Screen context is unavailable for the selected provider on this Mac. Assistant can still use your request and selected text.</p>}
     {error && <p role="alert">{error}</p>}
   </div>;
 }
