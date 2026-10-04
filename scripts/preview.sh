@@ -76,7 +76,7 @@ const state = {
                             ref_audio: null, keep_warm: false },
               voice: null,
               rate: 200, capture_mode: "ax_then_copy", max_chars: 5000, restore_clipboard: true },
-  voices: VOICES, engines: ENGINES, trusted: false, secure_input: false, speaking: false,
+  voices: VOICES, engines: ENGINES, trusted: false, focused_password_field: false, speaking: false,
   refused_shortcuts: [], system_language: SYSTEM_LANGUAGE,
   config_path: "/Users/home/Library/Application Support/com.kiegen.app/settings.json"
 };

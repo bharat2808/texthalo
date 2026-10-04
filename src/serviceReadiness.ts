@@ -5,7 +5,7 @@ type Input = {
   availability: Availability;
   error: string;
   trusted: boolean;
-  secureInput: boolean;
+  focusedPasswordField: boolean;
   shortcuts: { speak: string; transcribe: string; assistant: string };
   refused: string[];
   preferences: AssistantPreferences;
@@ -32,7 +32,7 @@ export function serviceReadiness(input: Input): Record<string, string[]> {
     ...access("Speech Recognition", a.recognition, 1),
   ];
   const accessibility = input.trusted ? [] : ["Allow Accessibility access."];
-  const secureInput = input.secureInput ? ["Leave the password field to use shortcuts."] : [];
+  const focusedPasswordField = input.focusedPasswordField ? ["Leave the password field to use shortcuts."] : [];
   const usesCloud = p.provider === "cloud" || (p.provider === "automatic" && a.model !== undefined && a.model !== "available");
   const cloud = [
     ...(p.cloud_consent_version === 1 ? [] : ["Enable cloud processing in Assistant settings."]),
@@ -46,10 +46,10 @@ export function serviceReadiness(input: Input): Record<string, string[]> {
       ? [a.screen === undefined ? "Checking Screen Recording access…" : "Allow Screen Recording to use Assistant."]
       : [];
   return {
-    voice: [...shortcut("speak", "Listen"), ...accessibility, ...secureInput,
+    voice: [...shortcut("speak", "Listen"), ...accessibility, ...focusedPasswordField,
       ...(input.engine?.can_speak ? [] : [input.engine?.status || "Checking the selected voice…"])],
     transcription: [...shortcut("transcribe", "Dictate"), ...voiceInput,
-      ...(p.dictation_output === "insert" ? accessibility : []), ...secureInput],
-    assistant: [...shortcut("assistant", "Assistant"), ...voiceInput, ...accessibility, ...secureInput, ...model, ...visualContext],
+      ...(p.dictation_output === "insert" ? accessibility : []), ...focusedPasswordField],
+    assistant: [...shortcut("assistant", "Assistant"), ...voiceInput, ...accessibility, ...focusedPasswordField, ...model, ...visualContext],
   };
 }

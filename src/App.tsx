@@ -158,7 +158,7 @@ type UiState = {
   voices: Voice[];
   engines: EngineInfo[];
   trusted: boolean;
-  secure_input: boolean;
+  focused_password_field: boolean;
   speaking: boolean;
   refused_shortcuts: string[];
   system_language: string;
@@ -1502,7 +1502,7 @@ function MainApp() {
 
   const readiness = serviceReadiness({
     availability: serviceAvailability.availability, error: serviceAvailability.error,
-    trusted: state.trusted, secureInput: state.secure_input,
+    trusted: state.trusted, focusedPasswordField: state.focused_password_field,
     shortcuts: settings.shortcuts, refused: state.refused_shortcuts,
     preferences: settings.assistant ?? defaultAssistantPreferences, engine: activeEngine,
   });
@@ -1637,7 +1637,7 @@ function MainApp() {
             {!state.trusted ? <div className="home-notice"><span>Allow Accessibility to read selected text.</span><button className="plain" onClick={() => void enableAccessibility().catch(cause => setError(String(cause)))}>{settings.accessibility_prompted ? "Open Accessibility Settings" : "Enable access"}</button></div>
               : activeEngine && !activeEngine.can_speak ? <div className="home-notice"><span>{activeEngine.status}</span><button className="plain" onClick={() => setTab("voice")}>Set up voice</button></div>
               : !settings.shortcuts.speak || state.refused_shortcuts.includes(settings.shortcuts.speak) ? <div className="home-notice"><span>Choose an available listening shortcut.</span></div>
-              : <p className="ready-label">{state.secure_input ? "Leave the password field to start listening." : "Ready when you are"}</p>}
+              : <p className="ready-label">{state.focused_password_field ? "Leave the password field to start listening." : "Ready when you are"}</p>}
             {shortcutControl("speak")}
             <div className="inline"><button className="primary-button" onClick={() => setTab("voice")}>Choose a voice</button><button className="plain" disabled={!activeEngine?.can_speak || state.speaking} onClick={() => preview(settings.engine === "apple" ? settings.voice : activeEngine?.selected_voice ?? null)}>Preview voice</button>{state.speaking ? <button className="plain" onClick={() => void invoke("stop_speaking").catch(cause => setError(String(cause)))}>Stop</button> : null}</div>
           </section>
@@ -2357,7 +2357,7 @@ function MainApp() {
 
                 </>
               )}
-              {state.secure_input ? (
+              {state.focused_password_field ? (
                 <Note kind="warning" icon={Icon.warn()}>
                   Leave the password field to use TextHalo.
                 </Note>

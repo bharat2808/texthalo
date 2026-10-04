@@ -118,9 +118,9 @@ struct UiState {
     /// adding an engine never means editing TypeScript.
     engines: Vec<engines::EngineInfo>,
     trusted: bool,
-    /// True while a password field has secure input on — a copy-mode capture will
-    /// refuse rather than fail mysteriously, and the UI says so up front.
-    secure_input: bool,
+    /// The focused Accessibility control is a password field. This is distinct
+    /// from system-wide Secure Input, which another app can leave enabled.
+    focused_password_field: bool,
     speaking: bool,
     refused_shortcuts: Vec<String>,
     /// `xx_YY` from the OS, so the voice browser can open on the user's own language.
@@ -144,7 +144,7 @@ fn ui_state(app: &AppHandle, refused_shortcuts: Vec<String>) -> UiState {
         voices: state.voices.clone(),
         engines,
         trusted: capture::is_trusted(),
-        secure_input: capture::secure_input_active(),
+        focused_password_field: capture::focused_password_field(),
         speaking: state.spoken.is_speaking(),
         refused_shortcuts,
         system_language: speech::system_language(),

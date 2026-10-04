@@ -6,13 +6,27 @@ const { serviceReadiness } = await loadTestModule(new URL('../src/serviceReadine
 const ready = () => ({
   availability: { model: 'unavailable', microphone: 3, recognition: 3, imageInput: false,
     cloudConfigured: true, cloudSignedIn: true },
-  error: '', trusted: true, secureInput: false,
+  error: '', trusted: true, focusedPasswordField: false,
   shortcuts: { speak: 'Cmd+S', transcribe: 'Hold:Fn', assistant: 'Hold:RightOption' },
   refused: [], preferences: { language: 'en-US', instruction: '', dictation_output: 'insert', provider: 'cloud', cloud_consent_version: 1 },
   engine: { can_speak: true, status: 'Ready' },
 });
 test('cloud voice Assistant works without Apple Intelligence', () => {
   assert.deepEqual(serviceReadiness(ready()).assistant, []);
+});
+test('another app enabling global Secure Input does not mark features unavailable', () => {
+  const input = ready(); input.secureInput = true;
+  const readiness = serviceReadiness(input);
+  for (const feature of ['voice', 'transcription', 'assistant']) {
+    assert.deepEqual(readiness[feature], []);
+  }
+});
+test('a focused password field shows the contextual warning', () => {
+  const input = ready(); input.focusedPasswordField = true;
+  const readiness = serviceReadiness(input);
+  for (const feature of ['voice', 'transcription', 'assistant']) {
+    assert.deepEqual(readiness[feature], ['Leave the password field to use shortcuts.']);
+  }
 });
 test('cloud still requires voice recognition and microphone access', () => {
   const input = ready(); input.availability.microphone = 2; input.availability.recognition = 1;
