@@ -58,7 +58,7 @@ export default function AssistantPanel() {
     return <main className={`overlay-root speech-overlay ${livePreview ? "with-transcript" : ""} ${busy ? status.phase === "recording" ? "recording" : status.phase === "speaking" ? "speaking" : "preparing" : "completed"}`}>
       <div className="speech-status">
       {busy ? <div className="activity" aria-hidden="true">{[0,1,2,3,4].map(index => <i key={index} style={{animationDelay:`${index * -0.13}s`}} />)}</div> : <span aria-hidden="true">✓</span>}
-      <span className="speech-label" role={error ? "alert" : "status"} title={error || `${providerLabel}${usageLabel ? ` · ${usageLabel}` : ""}`}>{error || label}{status.provider === "cloud" && <small className="assistant-provider-label">Cloud</small>}</span>
+      <span className="speech-label" role={error ? "alert" : "status"} title={error || `${providerLabel}${usageLabel ? ` · ${usageLabel}` : ""}`}>{error || label}{status.provider === "cloud" && <small className="assistant-provider-label">{status.usage?.outputLimited ? "Cloud · shorter answer limit" : "Cloud"}</small>}</span>
       {applied && status.canUndo ? <button className="overlay-undo" disabled={pending} onClick={() => void action("undo")}>Undo</button>
         : <button aria-label={busy ? "Cancel" : "Dismiss"} title={busy ? "Cancel (Esc)" : "Dismiss"} onClick={() => void action("cancel")}><span /></button>}
       </div>

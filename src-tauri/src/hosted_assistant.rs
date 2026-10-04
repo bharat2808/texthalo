@@ -50,9 +50,9 @@ impl Decoder {
             Some("accepted") if !self.accepted => {
                 self.accepted = true;
                 self.reserved_credits = v["reservedCredits"].clone();
-                Ok(Event::Usage(
-                    json!({"billingStatus":"reserved","reservedCredits":self.reserved_credits}),
-                ))
+                let mut usage = merge_usage(None, &v, &self.reserved_credits);
+                usage["billingStatus"] = json!("reserved");
+                Ok(Event::Usage(usage))
             }
             Some("action") if self.accepted && self.action.is_none() && !self.generated => {
                 let action = v["action"]
@@ -334,6 +334,8 @@ fn merge_usage(previous: Option<&Value>, incoming: &Value, reserved: &Value) -> 
         "chargedCredits",
         "refundedCredits",
         "availableCredits",
+        "outputLimited",
+        "maxOutputTokens",
     ] {
         if let Some(value) = incoming.get(key).filter(|value| !value.is_null()) {
             usage[key] = value.clone();
@@ -358,7 +360,7 @@ fn definitive_failure_usage(decoder: &Decoder) -> Option<Value> {
 fn server_error(value: &Value) -> String {
     match value["error"].as_str().unwrap_or("") {
         "insufficient_credits" => {
-            "You’re out of cloud Assistant credits. Open Billing to add credits."
+            "Not enough cloud Assistant credits for this request. Shorten your request or open Billing to add credits."
         }
         "cloud_disabled" | "feature_disabled" => {
             "Cloud Assistant is unavailable on this server. Choose Local in Assistant settings."
@@ -366,6 +368,7 @@ fn server_error(value: &Value) -> String {
         "rate_changed" => {
             "Cloud Assistant pricing changed. Start a new voice request to use the current rate."
         }
+        "credit_ceiling_exceeded" => "This request exceeds its credit limit. Shorten your request and try again.",
         "request_in_progress" => "This cloud Assistant request is already running. Its credit usage will be reconciled.",
         "request_already_completed" => "This cloud Assistant request has already finished. Start a new voice request to try again.",
         "provider_unavailable" => "Cloud Assistant is temporarily unavailable. Try again later.",
