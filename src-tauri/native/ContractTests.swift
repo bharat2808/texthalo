@@ -2,6 +2,40 @@ import CoreGraphics
 import Foundation
 @main struct ContractTests {
     @MainActor static func main() async throws {
+        var active = true
+        var enabled = false
+        var waits = 0
+        func capture(prepare: Bool = true, switchAfterRead: Bool = false) -> String? {
+            FocusCapture.resolve(prepare: prepare, sourceIsActive: { active }, read: {
+                guard enabled, waits >= 2 else { return nil }
+                if switchAfterRead { active = false }
+                return "original-editor"
+            }, enable: { enabled = true; return true }, wait: { waits += 1 })
+        }
+        assert(capture() == "original-editor", "Capture waits for a lazily published editor")
+        assert(enabled && waits == 2)
+        enabled = false; waits = 0
+        assert(capture(prepare: false) == nil && !enabled && waits == 0,
+               "Delivery never activates accessibility or captures a new target")
+        let switched: String? = FocusCapture.resolve(prepare: true, sourceIsActive: { active },
+            read: { nil }, enable: { true }, wait: { active = false; waits += 1 })
+        assert(switched == nil && waits == 1, "Switching apps aborts capture immediately")
+        active = true; enabled = true; waits = 2
+        assert(capture(switchAfterRead: true) == nil, "Reject focus returned after the source changes")
+        active = true; waits = 0
+        let missing: String? = FocusCapture.resolve(prepare: true, sourceIsActive: { active },
+            read: { nil }, enable: { true }, wait: { waits += 1 })
+        assert(missing == nil && waits == 10, "Unavailable focus has a bounded retry budget")
+        waits = 0
+        let unsupported: String? = FocusCapture.resolve(prepare: true, sourceIsActive: { active },
+            read: { nil }, enable: { false }, wait: { waits += 1 })
+        assert(unsupported == nil && waits == 10, "Unsupported activation still gets bounded focus retries")
+        waits = 0
+        let nativeEditor: String? = FocusCapture.resolve(prepare: true, sourceIsActive: { active },
+            read: { waits >= 2 ? "native-webview-editor" : nil },
+            enable: { false }, wait: { waits += 1 })
+        assert(nativeEditor == "native-webview-editor" && waits == 2,
+               "Native apps publish focus even when Electron activation is unsupported")
         var trigger = HoldTrigger()
         trigger.press(at: 1)
         assert(!trigger.activate(at: 1.349))

@@ -21,7 +21,12 @@ func attribute(_ element: AXUIElement, _ name: CFString) -> CFTypeRef? {
     guard let front = NSWorkspace.shared.frontmostApplication else { return nil }
     let app = AXUIElementCreateApplication(front.processIdentifier)
     func readFocus() -> AXUIElement? {
-        for owner in [app, AXUIElementCreateSystemWide()] {
+        var owners = [app, AXUIElementCreateSystemWide()]
+        if let window = attribute(app, kAXFocusedWindowAttribute as CFString),
+           CFGetTypeID(window) == AXUIElementGetTypeID() {
+            owners.append(unsafeBitCast(window, to: AXUIElement.self))
+        }
+        for owner in owners {
             guard let value = attribute(owner, kAXFocusedUIElementAttribute as CFString),
                   CFGetTypeID(value) == AXUIElementGetTypeID() else { continue }
             let element = unsafeBitCast(value, to: AXUIElement.self)
@@ -30,15 +35,14 @@ func attribute(_ element: AXUIElement, _ name: CFString) -> CFTypeRef? {
         }
         return nil
     }
-    if let element = readFocus() { return element }
-    // Electron exposes its editor tree lazily. Request its documented
-    // accessibility support when capturing the target, before taking a snapshot.
+    // Electron and native webviews can expose their editor trees lazily.
+    // Request Electron support when available, but retry native apps too.
     // This does not grant macOS permissions or move keyboard focus.
-    if prepareAccessibility,
-       AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanTrue) == .success {
-        return readFocus()
-    }
-    return nil
+    return FocusCapture.resolve(prepare: prepareAccessibility,
+        sourceIsActive: { !front.isTerminated && NSWorkspace.shared.frontmostApplication?.processIdentifier == front.processIdentifier },
+        read: readFocus,
+        enable: { AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanTrue) == .success },
+        wait: { Thread.sleep(forTimeInterval: 0.02) })
 }
 func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
     guard let value = attribute(element, kAXValueAttribute as CFString) as? String,
@@ -134,6 +138,7 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
         let focused = focusedElement()
         let current = element.flatMap(snapshot)
         let record: [String: Any] = ["time": Date().timeIntervalSince1970, "stage": stage,
+            "accessibilityTrusted": AXIsProcessTrusted(),
             "app": sourceContext.app, "role": sourceContext.focusedRole,
             "frontmost": NSWorkspace.shared.frontmostApplication == application,
             "sameElement": element.map { original in focused.map { CFEqual(original, $0) } ?? false } ?? false,

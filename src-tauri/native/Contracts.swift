@@ -1,6 +1,27 @@
 import CoreGraphics
 import Foundation
 
+enum FocusCapture {
+    // Accessibility activation may return before the source app publishes focus.
+    // This runs only at capture, before recording, never at delivery.
+    static func resolve<Element>(prepare: Bool, sourceIsActive: () -> Bool,
+                                 read: () -> Element?, enable: () -> Bool,
+                                 wait: () -> Void) -> Element? {
+        guard sourceIsActive() else { return nil }
+        if let element = read() { return sourceIsActive() ? element : nil }
+        guard prepare else { return nil }
+        // Native webviews can publish focus lazily without implementing the
+        // Electron activation attribute. Its failure must not skip the retry.
+        _ = enable()
+        for attempt in 0...10 {
+            if attempt > 0 { wait() }
+            guard sourceIsActive() else { return nil }
+            if let element = read() { return sourceIsActive() ? element : nil }
+        }
+        return nil
+    }
+}
+
 // A pending hold cannot become active after another keyboard or mouse action.
 struct HoldTrigger {
     enum Release { case none, tap, stop }
