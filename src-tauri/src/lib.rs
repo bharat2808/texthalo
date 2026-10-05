@@ -1022,6 +1022,23 @@ fn install_engine(app: AppHandle, engine: config::Engine, quant: Option<String>)
     Ok(())
 }
 
+#[tauri::command]
+async fn delete_local_model(app: AppHandle, engine: config::Engine, quant: String) -> Result<UiState, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        {
+            let state = app.state::<AppState>();
+            // Keep installs from starting while weights are being removed.
+            let downloading = state.model_download.lock().unwrap();
+            if *downloading { return Err("Wait for the voice model download to finish before deleting a model.".into()); }
+            let _synthesis = state.synthesis.for_engine(engine).try_lock()
+                .map_err(|_| "This voice source is in use. Stop speech and try again.")?;
+            if state.spoken.is_speaking() { return Err("Stop speech before deleting a model.".into()); }
+            state.spoken.delete_model(engine, &quant)?;
+        }
+        Ok(ui_state(&app, Vec::new()))
+    }).await.map_err(|error| error.to_string())?
+}
+
 /// Install espeak-ng — the extra back end for Kokoro's five non-English languages.
 ///
 /// Threaded and event-reported rather than returning a value, because a package-manager run
@@ -1372,6 +1389,7 @@ pub fn run() {
             play_audio_history,
             stop_speaking,
             install_engine,
+            delete_local_model,
             install_espeak_ng,
             add_chatterbox_voice,
             delete_chatterbox_voice,

@@ -36,6 +36,18 @@ test('Kokoro picker shows installed variants and forwards the chosen model ID', 
     assert.deepEqual(deleted,['fp32']);
     assert.equal(Picker({...deleteProps,disabled:true}).props.children.find(child=>child?.type==='button').props.disabled,true);
     assert.doesNotMatch(renderToStaticMarkup(React.createElement(Picker,{...deleteProps,selected:'q8f16'})),/Delete selected model/);
+    const partialProps={...deleteProps,selected:'q8f16',models:models.map(model=>({...model,removable:model.id==='q8f16'}))};
+    assert.match(renderToStaticMarkup(React.createElement(Picker,partialProps)),/Delete selected model/);
+    assert.equal(Picker({...deleteProps,deleteDisabled:true}).props.children.find(child=>child?.type==='button').props.disabled,true);
+    const downloads=[];
+    const downloadProps={...props,onDownload:()=>downloads.push('q8f16')};
+    assert.match(renderToStaticMarkup(React.createElement(Picker,downloadProps)),/Download selected model/);
+    const downloadButton=Picker(downloadProps).props.children.find(child=>child?.type==='button');
+    downloadButton.props.onClick();
+    assert.deepEqual(downloads,['q8f16']);
+    assert.equal(Picker({...downloadProps,disabled:true}).props.children.find(child=>child?.type==='button').props.disabled,true);
+    assert.doesNotMatch(renderToStaticMarkup(React.createElement(Picker,{...downloadProps,selected:'fp32'})),/Download selected model/);
+    assert.match(renderToStaticMarkup(React.createElement(Picker,{...downloadProps,selected:'fp32',needsDownload:true})),/Download selected model/);
     const tree=Picker(props);
     const select=tree.props.children[1];
     assert.equal(select.type,'select');

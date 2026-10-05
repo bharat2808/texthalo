@@ -82,6 +82,8 @@ pub fn catalog() -> Vec<ModelOption> {
                 .map(|entry| entry.bytes)
                 .sum(),
             installed: crate::engine_paths::chatterbox_installed_variant(model.id),
+            removable: crate::engine_paths::chatterbox_dir().is_some_and(|dir|
+                crate::model_storage::has_variant(&dir, crate::config::Engine::Chatterbox, model.id)),
         })
         .collect()
 }

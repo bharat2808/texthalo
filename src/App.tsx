@@ -602,6 +602,8 @@ function MainApp() {
   const [rateDraft, setRateDraft] = useState<number | null>(null);
   const [install, setInstall] = useState<InstallEvent | null>(null);
   const [installStarting, setInstallStarting] = useState(false);
+  const [modelDeleting, setModelDeleting] = useState(false);
+  const [advancedVoiceOpen, setAdvancedVoiceOpen] = useState(false);
   // The last word from adding or deleting a reference voice. Kept rather than timed out: it is
   // the only answer the user gets, and a refusal here is a reason, not a transient toast.
   const [voiceMessage, setVoiceMessage] = useState<string | null>(null);
@@ -1137,6 +1139,14 @@ function MainApp() {
    */
   const engines = state?.engines ?? [];
   const activeEngine = engines.find((entry) => entry.id === state?.settings.engine) ?? null;
+  const advancedModelId = state?.settings.engine === "kokoro"
+    ? state.settings.kokoro.quant : state?.settings.chatterbox.quant;
+  const advancedNeedsDownload = Boolean(activeEngine?.needs_download
+    || activeEngine?.models.find(model => model.id === advancedModelId)?.installed === false);
+  useEffect(() => {
+    if (tab === "voice" && advancedNeedsDownload) setAdvancedVoiceOpen(true);
+  }, [tab, advancedNeedsDownload, state?.settings.engine, advancedModelId]);
+
   const engineVoices = activeEngine?.voices ?? [];
   const engineVoicesByLanguage = useMemo(() => {
     const map = new Map<string, EngineVoice[]>();
@@ -1300,7 +1310,7 @@ function MainApp() {
    */
   const installForEngine = install && install.engine === settings.engine
     && (!install.quant || install.quant === (settings.engine === "kokoro" ? settings.kokoro.quant : settings.chatterbox.quant)) ? install : null;
-  const modelDownloadBusy = installStarting || install?.phase === "downloading";
+  const modelDownloadBusy = modelDeleting || installStarting || install?.phase === "downloading";
   const installing = installForEngine?.phase === "downloading";
   const installPercent =
     installForEngine && installForEngine.total > 0
@@ -1749,20 +1759,47 @@ function MainApp() {
             </Card>
 
             {settings.engine === "kokoro" || settings.engine === "chatterbox" ? (
-              <details className="disclosure"><summary>Advanced voice settings</summary>
+              <details className="disclosure" open={advancedVoiceOpen}
+                onToggle={event => setAdvancedVoiceOpen(event.currentTarget.open)}>
+                <summary>Advanced voice settings</summary>
                 <KokoroModelPicker engine={settings.engine === "kokoro" ? "Kokoro" : "Chatterbox"}
                   models={activeEngine?.models ?? []}
                   selected={settings.engine === "kokoro" ? settings.kokoro.quant : settings.chatterbox.quant}
                   disabled={modelDownloadBusy}
+                  needsDownload={activeEngine?.needs_download}
+                  downloadLabel={installStarting ? "Starting…" : installing ? "Downloading…" : "Download selected model"}
+                  onDownload={async () => {
+                    setInstallStarting(true);
+                    try {
+                      await saveTail.current;
+                      await invoke("install_engine", { engine: settings.engine,
+                        quant: settings.engine === "kokoro" ? settings.kokoro.quant : settings.chatterbox.quant });
+                    } catch (cause) { setError(String(cause)); }
+                    finally { setInstallStarting(false); }
+                  }}
+                  deleting={modelDeleting}
+                  deleteDisabled={state.speaking}
+                  onDelete={async () => {
+                    setModelDeleting(true);
+                    try {
+                      await saveTail.current;
+                      await invoke<UiState>("delete_local_model", { engine: settings.engine,
+                        quant: settings.engine === "kokoro" ? settings.kokoro.quant : settings.chatterbox.quant });
+                      setInstall(null);
+                      setError(null);
+                      await refresh();
+                    } catch (cause) { setError(String(cause)); }
+                    finally { setModelDeleting(false); }
+                  }}
                   onSelect={quant => {
                     setInstall(null);
                     void save(settings.engine === "kokoro"
                       ? { kokoro: { ...settings.kokoro, quant } }
                       : { chatterbox: { ...settings.chatterbox, quant } });
                   }} />
-                {activeEngine?.needs_download ? (
+                {installing || installForEngine?.phase === "error" ? (
                   <div className="field">
-                    <span className="field-label">Voice download</span>
+                    <span className="field-label">Model download</span>
                     {installing && installForEngine ? (
                       <>
                         <div className="progress">
@@ -1780,24 +1817,7 @@ function MainApp() {
                           {formatBytes(installForEngine.total)}
                         </span>
                       </>
-                    ) : (
-                      <div className="inline">
-                        <button
-                          className="plain"
-                          disabled={modelDownloadBusy}
-                          onClick={async () => {
-                            setInstallStarting(true);
-                            try {
-                              await invoke("install_engine", { engine: settings.engine,
-                                quant: settings.engine === "kokoro" ? settings.kokoro.quant : settings.chatterbox.quant });
-                            } catch (cause) { setError(String(cause)); }
-                            finally { setInstallStarting(false); }
-                          }}
-                        >
-                          {Icon.download()} {installStarting ? "Starting…" : `Download ${formatBytes(activeEngine.download_bytes)}`}
-                        </button>
-                      </div>
-                    )}
+                    ) : null}
                     {installForEngine?.phase === "error" ? (
                       <Note kind="error" icon={Icon.xCircle()}>
                         <span className="truncate" title={installForEngine.message ?? ""}>

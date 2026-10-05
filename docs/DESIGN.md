@@ -534,3 +534,9 @@ To check actual Chatterbox download and speech generation across all choices:
 KIEGEN_MODELS_DIR=/path/to/scratch-support cargo test --manifest-path src-tauri/Cargo.toml \
   --test chatterbox selected_language_models_download_and_render -- --ignored --nocapture
 ```
+
+Delete selected model in Advanced voice settings removes only that variant's graph
+and weights (plus its partial download), and evicts its cached session. Shared
+assets, other downloaded variants, and custom voice clips remain. Deletion is
+blocked while a voice download or speech operation uses the engine. The selected
+variant then becomes available to download again.

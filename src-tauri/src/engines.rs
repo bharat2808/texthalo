@@ -463,7 +463,7 @@ pub fn catalog_with(settings: &Settings, clips: Vec<crate::voices::VoiceClip>) -
             status: if kokoro_weights {
                 "Ready".to_string()
             } else {
-                "Weights missing".to_string()
+                "Weights missing — download from below".to_string()
             },
             blocked_reason: if kokoro_weights {
                 None
@@ -496,7 +496,7 @@ pub fn catalog_with(settings: &Settings, clips: Vec<crate::voices::VoiceClip>) -
             status: if chatterbox_weights {
                 "Ready".to_string()
             } else {
-                "Weights missing".to_string()
+                "Weights missing — download from below".to_string()
             },
             blocked_reason: if chatterbox_weights {
                 None

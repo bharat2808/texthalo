@@ -306,7 +306,7 @@ impl Spoken {
         P: FnMut(&Arc<crate::pcm::Player>) -> Result<(), String>,
     {
         use std::time::{Duration, Instant};
-        let began = Instant::now();
+        let began = std::time::Instant::now();
         let (first_chars, next_chars) = match settings.engine {
             Engine::Kokoro => (180, 240),
             Engine::Chatterbox => (100, 160),
@@ -611,6 +611,28 @@ impl Spoken {
         self.release_idle_models();
     }
 
+    /// Evict the selected cached session before unlinking its weights. Try-locking keeps
+    /// deletion from waiting on an active inference, including callers outside speech jobs.
+    pub fn delete_model(&self, engine: Engine, quant: &str) -> Result<(), String> {
+        match engine {
+            Engine::Kokoro => {
+                crate::kokoro_models::get(quant)?;
+                let dir = engine_paths::kokoro_dir().ok_or("Could not locate model storage.")?;
+                let mut loaded = self.kokoro.try_lock().map_err(|_| "This model is in use. Stop speech and try again.")?;
+                if loaded.as_ref().is_some_and(|model| model.model == quant) { *loaded = None; }
+                crate::model_storage::remove_variant(&dir, engine, quant)
+            }
+            Engine::Chatterbox => {
+                crate::chatterbox_models::get(quant)?;
+                let dir = engine_paths::chatterbox_dir().ok_or("Could not locate model storage.")?;
+                let mut loaded = self.chatterbox.try_lock().map_err(|_| "This model is in use. Stop speech and try again.")?;
+                if loaded.as_ref().is_some_and(|model| model.model == quant) { *loaded = None; }
+                crate::model_storage::remove_variant(&dir, engine, quant)
+            }
+            _ => Err("This voice source has no downloaded local model.".into()),
+        }
+    }
+
     fn release_idle_models(&self) {
         // Release the graph unless the user asked to keep it. Stopping is not the same as
         // unloading: with `keep_warm` on, the next selection speaks immediately instead of
@@ -691,6 +713,19 @@ fn chatterbox_language_guard(language: &str) -> Result<(), String> {
 mod tests {
     use super::*;
     use crate::config::Settings;
+
+    #[test]
+    fn deleting_a_model_in_use_refuses_without_waiting_for_inference() {
+        let spoken = Spoken::new();
+        let _kokoro = spoken.kokoro.lock().unwrap();
+        let _chatterbox = spoken.chatterbox.lock().unwrap();
+        for (engine, quant) in [(Engine::Kokoro, "fp32"), (Engine::Chatterbox, "q4f16")] {
+            let began = std::time::Instant::now();
+            let error = spoken.delete_model(engine, quant).unwrap_err();
+            assert!(error.contains("in use"), "{error}");
+            assert!(began.elapsed() < std::time::Duration::from_millis(100));
+        }
+    }
 
     #[test]
     fn cancelled_stream_cleanup_preserves_current_player() {
