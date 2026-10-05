@@ -185,7 +185,10 @@ pub fn kokoro_plan_for(quant: &str, espeak_ready: bool) -> Result<Vec<Entry>, St
     plan.push(Entry {
         path: model.file.to_string(),
         bytes: model.bytes,
-        url: format!("{HF_BASE}/{KOKORO_REPO}/resolve/{KOKORO_COMMIT}/{}", model.file),
+        url: format!(
+            "{HF_BASE}/{KOKORO_REPO}/resolve/{KOKORO_COMMIT}/{}",
+            model.file
+        ),
         sha256: Some(model.sha256.to_string()),
     });
 
@@ -237,28 +240,44 @@ pub fn chatterbox_plan() -> Vec<Entry> {
 
 pub fn chatterbox_plan_for(quant: &str) -> Result<Vec<Entry>, String> {
     let model = crate::chatterbox_models::get(quant)?;
-    let mut plan: Vec<Entry> = CHATTERBOX_FILES.iter()
+    let mut plan: Vec<Entry> = CHATTERBOX_FILES
+        .iter()
         .filter(|(path, _)| !path.starts_with("onnx/language_model"))
         .map(|(path, bytes)| Entry {
-            path: (*path).into(), bytes: *bytes,
+            path: (*path).into(),
+            bytes: *bytes,
             url: format!("{HF_BASE}/{CHATTERBOX_REPO}/resolve/{CHATTERBOX_COMMIT}/{path}"),
             sha256: None,
-        }).collect();
+        })
+        .collect();
     // Keep the language graph and its sidecar together; shared graphs are reused.
     for (index, (path, bytes, hash)) in [
         (model.graph, model.graph_bytes, model.graph_sha256),
         (model.weights, model.weights_bytes, model.weights_sha256),
-    ].into_iter().enumerate() {
-        plan.insert(5 + index, Entry { path: path.into(), bytes,
-            url: format!("{HF_BASE}/{CHATTERBOX_REPO}/resolve/{CHATTERBOX_COMMIT}/{path}"),
-            sha256: Some(hash.into()) });
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        plan.insert(
+            5 + index,
+            Entry {
+                path: path.into(),
+                bytes,
+                url: format!("{HF_BASE}/{CHATTERBOX_REPO}/resolve/{CHATTERBOX_COMMIT}/{path}"),
+                sha256: Some(hash.into()),
+            },
+        );
     }
     Ok(plan)
 }
 
 pub fn chatterbox_missing_bytes_for(quant: &str) -> u64 {
-    let Ok(plan) = chatterbox_plan_for(quant) else { return 0; };
-    let Some(dir) = crate::engine_paths::chatterbox_dir() else { return plan.iter().map(|entry| entry.bytes).sum(); };
+    let Ok(plan) = chatterbox_plan_for(quant) else {
+        return 0;
+    };
+    let Some(dir) = crate::engine_paths::chatterbox_dir() else {
+        return plan.iter().map(|entry| entry.bytes).sum();
+    };
     missing_bytes_in(&plan, Some(&dir))
 }
 
@@ -583,7 +602,9 @@ pub fn install_chatterbox_into(
 }
 
 pub fn install_chatterbox_variant_into(
-    dir: &Path, quant: &str, on_progress: &mut dyn FnMut(&str, u64, u64),
+    dir: &Path,
+    quant: &str,
+    on_progress: &mut dyn FnMut(&str, u64, u64),
 ) -> Result<(), String> {
     let plan = chatterbox_plan_for(quant)?;
     install_plan_into(&plan, dir, on_progress)
@@ -778,7 +799,11 @@ mod tests {
                 .collect();
             assert_eq!(
                 hashed,
-                vec!["lexicon/us_gold.json", "lexicon/us_silver.json", "onnx/model.onnx"],
+                vec![
+                    "lexicon/us_gold.json",
+                    "lexicon/us_silver.json",
+                    "onnx/model.onnx"
+                ],
                 "the dictionaries and graph must be pinned by hash"
             );
 
@@ -995,7 +1020,10 @@ mod tests {
             assert_eq!(graphs[0].bytes, bytes);
             assert_eq!(graphs[0].sha256.as_ref().unwrap().len(), 64);
             assert!(graphs[0].url.ends_with(path));
-            assert_eq!(missing_bytes_in(&plan, Some(&dir)), if id == "fp32" { 0 } else { bytes });
+            assert_eq!(
+                missing_bytes_in(&plan, Some(&dir)),
+                if id == "fp32" { 0 } else { bytes }
+            );
         }
         assert!(kokoro_plan_for("../../custom", false).is_err());
         fs::remove_dir_all(dir).unwrap();
@@ -1008,18 +1036,32 @@ mod tests {
         for entry in chatterbox_plan() {
             let path = dir.join(entry.path);
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-            std::fs::File::create(path).unwrap().set_len(entry.bytes).unwrap();
+            std::fs::File::create(path)
+                .unwrap()
+                .set_len(entry.bytes)
+                .unwrap();
         }
         for model in crate::chatterbox_models::MODELS {
             let plan = chatterbox_plan_for(model.id).unwrap();
-            let language: Vec<_> = plan.iter().filter(|entry| entry.path.contains("language_model")).collect();
+            let language: Vec<_> = plan
+                .iter()
+                .filter(|entry| entry.path.contains("language_model"))
+                .collect();
             assert_eq!(language.len(), 2);
-            assert!(language.iter().any(|entry| entry.path == model.graph && entry.sha256.as_deref() == Some(model.graph_sha256)));
-            assert!(language.iter().any(|entry| entry.path == model.weights && entry.sha256.as_deref() == Some(model.weights_sha256)));
-            assert_eq!(missing_bytes_in(&plan, Some(&dir)), if model.id == "q4f16" { 0 } else { model.graph_bytes + model.weights_bytes });
+            assert!(language.iter().any(|entry| entry.path == model.graph
+                && entry.sha256.as_deref() == Some(model.graph_sha256)));
+            assert!(language.iter().any(|entry| entry.path == model.weights
+                && entry.sha256.as_deref() == Some(model.weights_sha256)));
+            assert_eq!(
+                missing_bytes_in(&plan, Some(&dir)),
+                if model.id == "q4f16" {
+                    0
+                } else {
+                    model.graph_bytes + model.weights_bytes
+                }
+            );
         }
         assert!(chatterbox_plan_for("../model").is_err());
         std::fs::remove_dir_all(dir).unwrap();
     }
-
 }

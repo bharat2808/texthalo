@@ -71,8 +71,9 @@ pub fn catalog() -> Vec<ModelOption> {
             description: model.description,
             bytes: model.bytes,
             installed: crate::engine_paths::kokoro_installed_variant(model.id),
-            removable: crate::engine_paths::kokoro_dir().is_some_and(|dir|
-                crate::model_storage::has_variant(&dir, crate::config::Engine::Kokoro, model.id)),
+            removable: crate::engine_paths::kokoro_dir().is_some_and(|dir| {
+                crate::model_storage::has_variant(&dir, crate::config::Engine::Kokoro, model.id)
+            }),
         })
         .collect()
 }

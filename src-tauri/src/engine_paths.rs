@@ -99,9 +99,13 @@ fn chatterbox_installed_at(dir: &Path) -> bool {
 }
 
 fn chatterbox_installed_variant_at(dir: &Path, quant: &str) -> bool {
-    let Ok(plan) = crate::download::chatterbox_plan_for(quant) else { return false; };
-    plan.iter().all(|entry| std::fs::metadata(dir.join(&entry.path))
-        .is_ok_and(|meta| meta.is_file() && meta.len() == entry.bytes))
+    let Ok(plan) = crate::download::chatterbox_plan_for(quant) else {
+        return false;
+    };
+    plan.iter().all(|entry| {
+        std::fs::metadata(dir.join(&entry.path))
+            .is_ok_and(|meta| meta.is_file() && meta.len() == entry.bytes)
+    })
 }
 
 /// Is a complete-enough Kokoro install on disk? Deliberately checks the three files the
@@ -120,10 +124,13 @@ fn kokoro_installed_at(dir: &Path) -> bool {
 }
 
 fn kokoro_installed_variant_at(dir: &Path, quant: &str) -> bool {
-    let Ok(model) = crate::kokoro_models::get(quant) else { return false; };
+    let Ok(model) = crate::kokoro_models::get(quant) else {
+        return false;
+    };
     let graph = dir.join(model.file);
     if !std::fs::metadata(graph).is_ok_and(|meta| meta.is_file() && meta.len() == model.bytes)
-        || !dir.join(KOKORO_TOKENIZER_FILE).is_file() {
+        || !dir.join(KOKORO_TOKENIZER_FILE).is_file()
+    {
         return false;
     }
     // The dictionaries count: an install without them is an engine that cannot read.
@@ -227,7 +234,10 @@ mod tests {
     #[test]
     fn a_model_without_a_voice_is_not_installed() {
         let dir = scratch("novoice");
-        std::fs::File::create(dir.join(KOKORO_MODEL_FILE)).unwrap().set_len(325_532_232).unwrap();
+        std::fs::File::create(dir.join(KOKORO_MODEL_FILE))
+            .unwrap()
+            .set_len(325_532_232)
+            .unwrap();
         std::fs::write(dir.join(KOKORO_TOKENIZER_FILE), b"x").unwrap();
         assert!(!kokoro_installed_at(&dir));
     }
@@ -244,7 +254,10 @@ mod tests {
     fn every_required_file_together_reads_as_installed() {
         let dir = scratch("complete");
         std::fs::create_dir_all(dir.join("lexicon")).unwrap();
-        std::fs::File::create(dir.join(KOKORO_MODEL_FILE)).unwrap().set_len(325_532_232).unwrap();
+        std::fs::File::create(dir.join(KOKORO_MODEL_FILE))
+            .unwrap()
+            .set_len(325_532_232)
+            .unwrap();
         std::fs::write(dir.join(KOKORO_TOKENIZER_FILE), b"x").unwrap();
         std::fs::write(dir.join(LEXICON_GOLD_FILE), b"x").unwrap();
         std::fs::write(dir.join(LEXICON_SILVER_FILE), b"x").unwrap();
@@ -259,7 +272,10 @@ mod tests {
     #[test]
     fn a_graph_without_the_dictionaries_is_not_installed() {
         let dir = scratch("no-lexicon");
-        std::fs::File::create(dir.join(KOKORO_MODEL_FILE)).unwrap().set_len(325_532_232).unwrap();
+        std::fs::File::create(dir.join(KOKORO_MODEL_FILE))
+            .unwrap()
+            .set_len(325_532_232)
+            .unwrap();
         std::fs::write(dir.join(KOKORO_TOKENIZER_FILE), b"x").unwrap();
         std::fs::write(dir.join("voices/af_heart.bin"), b"x").unwrap();
         assert!(!kokoro_installed_at(&dir));
@@ -283,7 +299,10 @@ mod tests {
         for entry in crate::download::chatterbox_plan() {
             let path = dir.join(&entry.path);
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-            std::fs::File::create(path).unwrap().set_len(entry.bytes).unwrap();
+            std::fs::File::create(path)
+                .unwrap()
+                .set_len(entry.bytes)
+                .unwrap();
         }
         assert!(chatterbox_installed_at(&dir));
 
@@ -292,7 +311,10 @@ mod tests {
         assert!(!chatterbox_installed_at(&dir));
 
         // Drop one graph: the pipeline is missing a stage.
-        std::fs::File::create(dir.join(CHATTERBOX_TOKENIZER_FILE)).unwrap().set_len(71_798).unwrap();
+        std::fs::File::create(dir.join(CHATTERBOX_TOKENIZER_FILE))
+            .unwrap()
+            .set_len(71_798)
+            .unwrap();
         std::fs::remove_file(dir.join(CHATTERBOX_ENCODER_FILE)).unwrap();
         assert!(!chatterbox_installed_at(&dir));
     }
@@ -316,7 +338,12 @@ mod tests {
     #[test]
     fn variant_detection_checks_the_selected_graph_and_rejects_partial_files() {
         let dir = scratch("variant");
-        for file in [KOKORO_TOKENIZER_FILE, LEXICON_GOLD_FILE, LEXICON_SILVER_FILE, "voices/af_heart.bin"] {
+        for file in [
+            KOKORO_TOKENIZER_FILE,
+            LEXICON_GOLD_FILE,
+            LEXICON_SILVER_FILE,
+            "voices/af_heart.bin",
+        ] {
             let path = dir.join(file);
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
             std::fs::write(path, b"x").unwrap();
@@ -341,14 +368,19 @@ mod tests {
         for entry in crate::download::chatterbox_plan_for("q4").unwrap() {
             let path = dir.join(entry.path);
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-            std::fs::File::create(path).unwrap().set_len(entry.bytes).unwrap();
+            std::fs::File::create(path)
+                .unwrap()
+                .set_len(entry.bytes)
+                .unwrap();
         }
         assert!(chatterbox_installed_variant_at(&dir, "q4"));
         assert!(!chatterbox_installed_variant_at(&dir, "q4f16"));
         let model = crate::chatterbox_models::get("q4").unwrap();
-        std::fs::File::create(dir.join(model.weights)).unwrap().set_len(model.weights_bytes - 1).unwrap();
+        std::fs::File::create(dir.join(model.weights))
+            .unwrap()
+            .set_len(model.weights_bytes - 1)
+            .unwrap();
         assert!(!chatterbox_installed_variant_at(&dir, "q4"));
         assert!(!chatterbox_installed_variant_at(&dir, "../model"));
     }
-
 }

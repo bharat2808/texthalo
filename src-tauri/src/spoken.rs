@@ -526,8 +526,11 @@ impl Spoken {
         *self.keep_warm.lock().unwrap() = settings.kokoro.keep_warm;
 
         let mut guard = self.kokoro.lock().unwrap();
-        let stale = guard.as_ref().is_none_or(|loaded| loaded.voice != voice
-            || loaded.model != model.id || loaded.speed != settings.kokoro.speed);
+        let stale = guard.as_ref().is_none_or(|loaded| {
+            loaded.voice != voice
+                || loaded.model != model.id
+                || loaded.speed != settings.kokoro.speed
+        });
         if stale {
             // Release the previous graph before loading another, keeping peak memory down.
             *guard = None;
@@ -543,7 +546,12 @@ impl Spoken {
                 &voice_file,
                 settings.kokoro.speed,
             )?;
-            *guard = Some(Loaded { engine, voice, model: model.id.to_string(), speed: settings.kokoro.speed });
+            *guard = Some(Loaded {
+                engine,
+                voice,
+                model: model.id.to_string(),
+                speed: settings.kokoro.speed,
+            });
         }
         let loaded = guard.as_mut().expect("just loaded");
         let (samples, dropped) = loaded.engine.synthesize(&phonemes)?;
@@ -618,15 +626,26 @@ impl Spoken {
             Engine::Kokoro => {
                 crate::kokoro_models::get(quant)?;
                 let dir = engine_paths::kokoro_dir().ok_or("Could not locate model storage.")?;
-                let mut loaded = self.kokoro.try_lock().map_err(|_| "This model is in use. Stop speech and try again.")?;
-                if loaded.as_ref().is_some_and(|model| model.model == quant) { *loaded = None; }
+                let mut loaded = self
+                    .kokoro
+                    .try_lock()
+                    .map_err(|_| "This model is in use. Stop speech and try again.")?;
+                if loaded.as_ref().is_some_and(|model| model.model == quant) {
+                    *loaded = None;
+                }
                 crate::model_storage::remove_variant(&dir, engine, quant)
             }
             Engine::Chatterbox => {
                 crate::chatterbox_models::get(quant)?;
-                let dir = engine_paths::chatterbox_dir().ok_or("Could not locate model storage.")?;
-                let mut loaded = self.chatterbox.try_lock().map_err(|_| "This model is in use. Stop speech and try again.")?;
-                if loaded.as_ref().is_some_and(|model| model.model == quant) { *loaded = None; }
+                let dir =
+                    engine_paths::chatterbox_dir().ok_or("Could not locate model storage.")?;
+                let mut loaded = self
+                    .chatterbox
+                    .try_lock()
+                    .map_err(|_| "This model is in use. Stop speech and try again.")?;
+                if loaded.as_ref().is_some_and(|model| model.model == quant) {
+                    *loaded = None;
+                }
                 crate::model_storage::remove_variant(&dir, engine, quant)
             }
             _ => Err("This voice source has no downloaded local model.".into()),

@@ -432,7 +432,8 @@ pub fn catalog_with(settings: &Settings, clips: Vec<crate::voices::VoiceClip>) -
     // Chatterbox's files are the app's own now, so this is a directory check like Kokoro's
     // rather than a look into a cache layout somebody else owns. Whether it can *speak* is a
     // separate question with a separate answer.
-    let chatterbox_weights = crate::engine_paths::chatterbox_installed_variant(&settings.chatterbox.quant);
+    let chatterbox_weights =
+        crate::engine_paths::chatterbox_installed_variant(&settings.chatterbox.quant);
 
     vec![
         EngineInfo {

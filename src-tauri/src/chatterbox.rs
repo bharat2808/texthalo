@@ -213,8 +213,7 @@ impl Chatterbox {
         }
 
         let kv_f16 = f16_cache(&lm).ok_or_else(|| {
-            "the language model does not declare a supported KV cache"
-                .to_string()
+            "the language model does not declare a supported KV cache".to_string()
         })?;
 
         let encoder_outputs: Vec<String> = encoder

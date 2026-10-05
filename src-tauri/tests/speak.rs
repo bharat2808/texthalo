@@ -209,14 +209,24 @@ fn selected_model_sizes_download_and_render_with_one_cached_voice() {
         assert!(engine_paths::kokoro_installed_variant(quant));
         settings.kokoro.quant = quant.into();
         let path = support.join("cache").join(format!("model-{quant}.wav"));
-        let report = spoken.render(&settings, text, &path)
+        let report = spoken
+            .render(&settings, text, &path)
             .unwrap_or_else(|error| panic!("render {quant}: {error}"));
         let (_, samples) = read_wav(&path);
-        assert!(report.seconds > 1.0, "{quant} must produce speech-length audio");
-        assert!(samples.iter().any(|sample| sample.abs() > 0.02), "{quant} must be audible");
+        assert!(
+            report.seconds > 1.0,
+            "{quant} must produce speech-length audio"
+        );
+        assert!(
+            samples.iter().any(|sample| sample.abs() > 0.02),
+            "{quant} must be audible"
+        );
         let audio = std::fs::read(&path).unwrap();
         if let Some(previous) = previous_audio {
-            assert_ne!(audio, previous, "{quant} must not reuse the previous graph's cached output");
+            assert_ne!(
+                audio, previous,
+                "{quant} must not reuse the previous graph's cached output"
+            );
         }
         previous_audio = Some(audio);
         println!("{quant}: {}", report.summary());
