@@ -14,7 +14,6 @@ import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import SetupWizard, { type SetupPlansResponse } from "./SetupWizard";
-import textHaloLicense from "../LICENSE-TEXTHALO.md?raw";
 import appLogo from "../src-tauri/icons/icon.png";
 import "./App.css";
 
@@ -1667,49 +1666,8 @@ function MainApp() {
               </label>
             </Card>
 
-            <details className="disclosure"><summary>Advanced voice settings</summary>
-              <p className="card-note">Keeping a voice ready uses more memory.</p>
-                <div className="field">
-                  <span className="field-label">Kokoro model size</span>
-                  <select
-                    value={settings.kokoro.quant}
-                    onChange={(event) =>
-                      void save({ kokoro: { ...settings.kokoro, quant: event.target.value } })
-                    }
-                  >
-                    <option value="fp32">fp32 — 325 MB</option>
-                    <option value="fp16">fp16 — 163 MB</option>
-                    <option value="q8f16">q8f16 — 86 MB, about half the speed</option>
-                  </select>
-                </div>
-                <label className="toggle-row">
-                  <input
-                    type="checkbox"
-                    checked={settings.kokoro.keep_warm}
-                    onChange={(event) =>
-                      void save({
-                        kokoro: { ...settings.kokoro, keep_warm: event.target.checked },
-                      })
-                    }
-                  />
-                  <span>Keep Kokoro ready in memory</span>
-                </label>
-                <label className="toggle-row">
-                  <input
-                    type="checkbox"
-                    checked={settings.chatterbox.keep_warm}
-                    onChange={(event) =>
-                      void save({
-                        chatterbox: { ...settings.chatterbox, keep_warm: event.target.checked },
-                      })
-                    }
-                  />
-                  <span>Keep Chatterbox ready in memory</span>
-                </label>
-            </details>
             <Card title="About" icon={Icon.box()}>
-              <div className="card-note">Version {appVersion ?? "…"} · TextHalo Source Available License 1.0</div>
-              <details className="disclosure"><summary>License terms</summary><pre style={{ whiteSpace: "pre-wrap", maxHeight: 300, overflowY: "auto", font: "inherit" }}>{textHaloLicense.replace(/^#{1,2} /gm, "").replace(/\*\*/g, "").replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")}</pre></details>
+              <div className="card-note">Version {appVersion ?? "…"}</div>
               <div className="inline">
                 <button className="plain" onClick={() => void checkForUpdates()} disabled={checkingUpdate || installingUpdate}>
                   {checkingUpdate ? "Checking…" : "Check for Updates"}
@@ -1820,6 +1778,40 @@ function MainApp() {
                 </div>
               ) : null}
             </Card>
+
+            {settings.engine === "kokoro" || settings.engine === "chatterbox" ? (
+              <details className="disclosure"><summary>Advanced voice settings</summary>
+                <p className="card-note">Keeping a voice in memory uses more memory but makes playback start faster.</p>
+                {settings.engine === "kokoro" ? (
+                  <label className="toggle-row">
+                    <input
+                      type="checkbox"
+                      checked={settings.kokoro.keep_warm}
+                      onChange={(event) =>
+                        void save({
+                          kokoro: { ...settings.kokoro, keep_warm: event.target.checked },
+                        })
+                      }
+                    />
+                    <span>Keep Kokoro ready in memory</span>
+                  </label>
+                ) : null}
+                {settings.engine === "chatterbox" ? (
+                  <label className="toggle-row">
+                    <input
+                      type="checkbox"
+                      checked={settings.chatterbox.keep_warm}
+                      onChange={(event) =>
+                        void save({
+                          chatterbox: { ...settings.chatterbox, keep_warm: event.target.checked },
+                        })
+                      }
+                    />
+                    <span>Keep Chatterbox ready in memory</span>
+                  </label>
+                ) : null}
+              </details>
+            ) : null}
 
             {settings.engine === "fish" ? (
               <>

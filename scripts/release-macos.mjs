@@ -8,7 +8,9 @@ import { join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createManifest, inspectArchive } from "./write-updater-manifest.mjs";
 
-const REPO = "bharat2808/texthalo";
+export const RELEASE_BUCKET = "texthalo-storage";
+export const RELEASE_BASE_URL = "https://storage.texthalo.app";
+export const releaseAssetUrl = (version, name) => `${RELEASE_BASE_URL}/releases/${version}/${name}`;
 const ARCHITECTURES = ["aarch64"];
 const ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const assetNames = () => [...ARCHITECTURES.flatMap(a => [`TextHalo-macOS-${a}.dmg`, `TextHalo-${a}.app.tar.gz`, `TextHalo-${a}.app.tar.gz.sig`]), "latest.json"];
@@ -149,7 +151,7 @@ async function verifiedManifest(directory, version, config) {
     const archive = join(directory, `TextHalo-${arch}.app.tar.gz`);
     const signature = await readFile(`${archive}.sig`, "utf8");
     await verifyUpdaterSignature(archive, signature, config.plugins.updater.pubkey);
-    entries.push(await inspectArchive(`darwin-${arch}`, `https://github.com/${REPO}/releases/download/v${version}/TextHalo-${arch}.app.tar.gz`, archive, `${archive}.sig`, async app => {
+    entries.push(await inspectArchive(`darwin-${arch}`, releaseAssetUrl(version, `TextHalo-${arch}.app.tar.gz`), archive, `${archive}.sig`, async app => {
       run("/usr/bin/codesign", ["--verify", "--deep", "--strict", app]);
       run("xcrun", ["stapler", "validate", app]);
       run("/usr/sbin/spctl", ["--assess", "--type", "execute", app]);
@@ -208,45 +210,119 @@ async function receiptFor(directory, version, config) {
   return receipt;
 }
 
-async function verifyPublicAssets(receipt) {
-  const latest = JSON.parse(run("gh", ["api", `repos/${REPO}/releases/latest`], { capture: true }));
-  if (latest.tag_name !== `v${receipt.version}` || latest.draft || latest.prerelease) throw new Error("The prepared version is not the latest public stable release");
-  for (const name of assetNames()) {
-    const response = await fetch(`https://github.com/${REPO}/releases/latest/download/${name}`, { signal: AbortSignal.timeout(300_000) });
-    if (!response.ok || !response.body) throw new Error(`Public download unavailable: ${name} (${response.status})`);
+async function fetchReleaseAsset(url, method = "GET") {
+  return fetch(url, { method, headers: { "Cache-Control": "no-cache" }, cache: "no-store", signal: AbortSignal.timeout(300_000) });
+}
+
+export async function verifyPublicFile(url, expectedHash, {
+  fetchAsset = fetchReleaseAsset, pause = delay => new Promise(resolve => setTimeout(resolve, delay)),
+} = {}) {
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const response = await fetchAsset(url);
+    if ((response.status === 404 || response.status >= 500) && attempt < 7) {
+      await response.body?.cancel();
+      await pause(Math.min(1000 * 2 ** attempt, 4000));
+      continue;
+    }
+    if (!response.ok || !response.body) throw new Error(`Public download unavailable: ${url} (${response.status})`);
     const hash = createHash("sha256");
     for await (const chunk of response.body) hash.update(chunk);
-    if (hash.digest("hex") !== receipt.files[name]) throw new Error(`Public download checksum mismatch: ${name}`);
+    if (hash.digest("hex") !== expectedHash) throw new Error(`Public download checksum mismatch: ${url}`);
+    return;
   }
 }
 
-export async function publishRelease(directory, receipt, execute = run, verifyPublic = verifyPublicAssets) {
-  await validateAssetSet(directory, receipt);
-  // An existing tag could point at different code. Never reuse or overwrite it.
-  const refs = await execute("git", ["ls-remote", "--tags", `https://github.com/${REPO}.git`, `refs/tags/v${receipt.version}`], { capture: true });
-  if (refs) throw new Error("This version already has a remote tag. Bump the version; do not overwrite a release.");
-  await execute("gh", ["release", "create", `v${receipt.version}`, ...assetNames().map(name => join(directory, name)), "--repo", REPO, "--target", receipt.commit, "--title", `TextHalo v${receipt.version}`, "--generate-notes", "--draft"]);
-  const downloaded = await mkdtemp(join(tmpdir(), "texthalo-release-upload-"));
-  try {
-    await execute("gh", ["release", "download", `v${receipt.version}`, "--repo", REPO, "--dir", downloaded]);
-    await validateAssetSet(downloaded, receipt);
-  } finally { await rm(downloaded, { recursive: true, force: true }); }
-  await execute("gh", ["release", "edit", `v${receipt.version}`, "--repo", REPO, "--draft=false", "--latest"]);
-  await verifyPublic(receipt);
+async function readLatestManifest() {
+  const response = await fetchReleaseAsset(`${RELEASE_BASE_URL}/latest.json`);
+  if (response.status === 404) return null;
+  if (!response.ok) throw new Error(`Cannot read the current R2 release (${response.status})`);
+  return response.json();
 }
 
-async function deploy(receipt) {
+export async function assetExists(url, fetchAsset = fetchReleaseAsset) {
+  // A HEAD miss can cache a 404 at Cloudflare before the upload. Isolate probes
+  // from the canonical URLs that users and post-upload verification will fetch.
+  const probe = new URL(url);
+  probe.searchParams.set("probe", Date.now().toString());
+  const response = await fetchAsset(probe.toString(), "HEAD");
+  if (response.status === 404) return false;
+  if (!response.ok) throw new Error(`Cannot inspect existing R2 artifact (${response.status})`);
+  return true;
+}
+
+async function verifyPublicAssets(receipt) {
+  const latest = await readLatestManifest();
+  if (latest?.version !== receipt.version) throw new Error("The prepared version is not the latest R2 release");
+  for (const name of assetNames()) await verifyPublicFile(releaseAssetUrl(receipt.version, name), receipt.files[name]);
+  await verifyPublicFile(`${RELEASE_BASE_URL}/TextHalo-macOS-aarch64.dmg`, receipt.files["TextHalo-macOS-aarch64.dmg"]);
+  await verifyPublicFile(`${RELEASE_BASE_URL}/latest.json`, receipt.files["latest.json"]);
+}
+
+export async function publishRelease(directory, receipt, {
+  execute = run, verifyFile = verifyPublicFile, readLatest = readLatestManifest, exists = assetExists,
+} = {}) {
+  await validateAssetSet(directory, receipt);
+  const parseVersion = value => {
+    if (!/^\d+\.\d+\.\d+$/.test(value)) throw new Error("R2 releases require stable semantic versions");
+    return value.split(".").map(Number);
+  };
+  const version = parseVersion(receipt.version);
+  const latest = await readLatest();
+  if (latest) {
+    const current = parseVersion(latest.version);
+    const different = current.findIndex((part, index) => part !== version[index]);
+    if (different >= 0 && current[different] > version[different]) throw new Error("A newer R2 release is already published; refusing a downgrade");
+  }
+  const upload = async (key, name, mutable = false) => {
+    const type = name.endsWith(".json") ? "application/json" : name.endsWith(".dmg") ? "application/x-apple-diskimage" : "application/octet-stream";
+    await execute("npx", ["--no-install", "wrangler", "r2", "object", "put", `${RELEASE_BUCKET}/${key}`, "--remote",
+      "--file", join(directory, name), "--content-type", type, "--cache-control", mutable ? "no-store" : "public, max-age=31536000, immutable"]);
+  };
+  // Versioned artifacts are immutable. A retry can reuse only identical bytes.
+  // Check every existing object before uploading anything, including the manifest.
+  const missing = [];
+  for (const name of assetNames()) {
+    const url = releaseAssetUrl(receipt.version, name);
+    if (await exists(url)) await verifyFile(url, receipt.files[name]);
+    else missing.push(name);
+  }
+  for (const name of missing) {
+    await upload(`releases/${receipt.version}/${name}`, name);
+    await verifyFile(releaseAssetUrl(receipt.version, name), receipt.files[name]);
+  }
+  // Promote the mutable download first; latest.json advertises the update last.
+  const dmg = "TextHalo-macOS-aarch64.dmg";
+  await upload(dmg, dmg, true);
+  await verifyFile(`${RELEASE_BASE_URL}/${dmg}`, receipt.files[dmg]);
+  await upload("latest.json", "latest.json", true);
+  await verifyFile(`${RELEASE_BASE_URL}/latest.json`, receipt.files["latest.json"]);
+}
+
+export async function deploy(receipt) {
   // Verify the published artifacts before deploying the download page.
   await verifyPublicAssets(receipt);
   const { branch, account } = await pagesProject();
-  run("npm", ["run", "website:build"]);
+  run("npm", ["run", "website:build"], { env: { ...process.env, VITE_TEXTHALO_DOWNLOAD_VERSION: receipt.version } });
   run("npx", ["--no-install", "wrangler", "pages", "deploy", "dist-website", "--project-name", "texthalo", "--branch", branch, "--commit-hash", receipt.commit], { env: { ...process.env, CLOUDFLARE_ACCOUNT_ID: account } });
-  const response = await fetch(`https://texthalo.app/?release=${receipt.version}`, { signal: AbortSignal.timeout(30_000), cache: "no-store" });
-  const html = await response.text();
-  if (!response.ok || !ARCHITECTURES.every(arch => html.includes(`TextHalo-macOS-${arch}.dmg`))) throw new Error("Deployment submitted, but the live download page has not verified. Check Pages status before retrying.");
-  const redirect = await fetch("https://texthalo.app/download/", { redirect: "manual", signal: AbortSignal.timeout(30_000) });
-  if (redirect.status !== 302 || redirect.headers.get("location") !== `https://github.com/${REPO}/releases/latest/download/TextHalo-macOS-aarch64.dmg`) throw new Error("Legacy download redirect did not verify.");
+  await verifyWebsite(receipt);
   console.log("Verified production download links and legacy redirect: https://texthalo.app/");
+}
+
+export async function verifyWebsite(receipt, {
+  fetchPage = fetch, pause = delay => new Promise(resolve => setTimeout(resolve, delay)),
+} = {}) {
+  const url = `${RELEASE_BASE_URL}/TextHalo-macOS-aarch64.dmg`;
+  for (let attempt = 0; attempt < 24; attempt++) {
+    const options = { headers: { "Cache-Control": "no-cache" }, signal: AbortSignal.timeout(30_000), cache: "no-store" };
+    const response = await fetchPage(`https://texthalo.app/?release=${receipt.version}`, options);
+    const html = (await response.text()).replace(/<!--.*?-->/g, "");
+    const redirect = await fetchPage("https://texthalo.app/download/", { ...options, redirect: "manual", signal: AbortSignal.timeout(30_000) });
+    if (response.ok && html.includes(`href="${url}"`) && html.includes(`Current version ${receipt.version}`)
+      && !/open.source|source.available/i.test(html)
+      && redirect.status === 302 && redirect.headers.get("location") === url) return;
+    if (attempt < 23) await pause(5000);
+  }
+  throw new Error("Deployment submitted, but production R2 links, version, or redirect have not propagated. Check Pages status before retrying.");
 }
 
 export function parseReleaseArgs(args) {
@@ -267,7 +343,7 @@ export async function runReleaseWorkflow({ mode, deployCloudflare }, operations)
   if (mode === "deploy" || deployCloudflare) {
     try { await operations.deploy(receipt); }
     catch (error) {
-      throw new Error(`Website deployment failed; the GitHub release is not rolled back. After resolving the error, retry with npm run release:mac -- deploy. ${error.message}`, { cause: error });
+      throw new Error(`Website deployment failed; the R2 release is not rolled back. After resolving the error, retry with npm run release:mac -- deploy. ${error.message}`, { cause: error });
     }
   }
 }

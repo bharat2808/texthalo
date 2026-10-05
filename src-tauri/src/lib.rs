@@ -1209,7 +1209,14 @@ pub fn run() {
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
         ))
-        .plugin(tauri_plugin_updater::Builder::new().build())
+        // Both native/background and Settings checks inherit these headers and
+        // the R2 latest.json endpoint from tauri.conf.json. Revalidate each check.
+        .plugin(
+            tauri_plugin_updater::Builder::new()
+                .header("Cache-Control", "no-cache")
+                .expect("static updater cache-control header is valid")
+                .build(),
+        )
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, shortcut, event| {

@@ -12,12 +12,12 @@ test("all download buttons link directly to the Apple Silicon DMG; old routes re
     assert.ok(!getSitePaths().includes("/download/"));
     for (const pathname of getSitePaths()) {
       const html = renderToStaticMarkup(React.createElement(SitePage, { pathname }));
-        assert.match(html, /href="https:\/\/github.com\/bharat2808\/texthalo\/releases\/latest\/download\/TextHalo-macOS-aarch64.dmg"/);
+        assert.match(html, /href="https:\/\/storage.texthalo.app\/TextHalo-macOS-aarch64.dmg"/);
         assert.doesNotMatch(html, /href="[^"]*x86_64[^"]*"/);
         assert.doesNotMatch(html, /href="\/download\/"/);
         assert.match(html, /Requires Apple Silicon/);
     }
-    const url = "https://github.com/bharat2808/texthalo/releases/latest/download/TextHalo-macOS-aarch64.dmg";
+    const url = "https://storage.texthalo.app/TextHalo-macOS-aarch64.dmg";
     assert.equal(getSeoMetadata("/").schema.downloadUrl, url);
     const redirects = await readFile("website/public/_redirects", "utf8");
     for (const path of ["/download", "/download/"]) assert.ok(redirects.split("\n").includes(`${path} ${url} 302`));

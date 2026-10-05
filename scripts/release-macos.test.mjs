@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { buildPlan, executePlan, validateAssetSet, verifyUpdaterSignature, productionBranch, publishRelease, parseReleaseArgs, runReleaseWorkflow, validateReleaseBuildEnvironment } from "./release-macos.mjs";
+import { buildPlan, executePlan, validateAssetSet, verifyUpdaterSignature, productionBranch, publishRelease, verifyPublicFile, assetExists, verifyWebsite, parseReleaseArgs, runReleaseWorkflow, validateReleaseBuildEnvironment } from "./release-macos.mjs";
 
 test("combined release accepts only explicit supported deployment flags", () => {
   assert.deepEqual(parseReleaseArgs(["release"]), { mode: "release", deployCloudflare: false });
@@ -99,7 +99,7 @@ test("production release requires API and Turnstile browser configuration", () =
   }));
 });
 
-test("a failed upload stays a draft; a verified upload alone can become latest", async () => {
+test("R2 publication verifies versioned uploads before promoting downloads and latest manifest", async () => {
   const dir = await mkdtemp(join(tmpdir(), "texthalo-publish-test-"));
   try {
     const names = ["TextHalo-macOS-aarch64.dmg", "TextHalo-aarch64.app.tar.gz", "TextHalo-aarch64.app.tar.gz.sig", "latest.json"];
@@ -110,22 +110,45 @@ test("a failed upload stays a draft; a verified upload alone can become latest",
     }
     for (const corrupt of [true, false]) {
       const actions = [];
-      let publicVerified = false;
-      const execute = async (command, args) => {
-        actions.push([command, ...args]);
-        if (command === "git") return "";
-        if (args[1] === "download") {
-          const destination = args[args.indexOf("--dir") + 1];
-          for (const name of names) await writeFile(join(destination, name), corrupt && name.includes("aarch64.dmg") ? "wrong binary" : name);
-        }
-        return "";
+      const execute = async (command, args) => { actions.push([command, ...args]); return ""; };
+      const verifyFile = async (url, hash) => {
+        actions.push(["verify", url, hash]);
+        if (corrupt && url.endsWith(".app.tar.gz")) throw new Error("Public download checksum mismatch");
       };
-      const publish = publishRelease(dir, receipt, execute, async () => { publicVerified = true; });
+      const publish = publishRelease(dir, receipt, { execute, verifyFile, readLatest: async () => null, exists: async () => false });
       if (corrupt) await assert.rejects(publish, /checksum/); else await publish;
-      assert.ok(actions.find(a => a[2] === "create").includes("--draft"));
-      assert.equal(actions.some(a => a.includes("--latest")), !corrupt);
-      assert.equal(publicVerified, !corrupt);
+      const uploads = actions.filter(a => a[0] === "npx");
+      assert.ok(uploads.every(a => a.includes("--remote")));
+      assert.ok(uploads.every(a => a.some(arg => arg.startsWith("texthalo-storage/"))));
+      assert.equal(uploads.some(a => a.includes("texthalo-storage/latest.json")), !corrupt);
+      assert.equal(uploads.some(a => a.includes("texthalo-storage/TextHalo-macOS-aarch64.dmg")), !corrupt);
+      if (!corrupt) {
+        const promotion = actions.findIndex(a => a.includes("texthalo-storage/latest.json"));
+        for (const name of names) {
+          assert.ok(actions.findIndex(a => a[0] === "verify" && a[1] === `https://storage.texthalo.app/releases/1.2.3/${name}`) < promotion);
+        }
+        assert.ok(uploads.find(a => a.includes("texthalo-storage/latest.json")).includes("no-store"));
+      }
+      assert.ok(!actions.some(a => a[0] === "gh" || a[0] === "git"));
     }
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test("R2 publication refuses downgrades and verifies existing versioned assets without overwriting", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "texthalo-publish-retry-"));
+  try {
+    const receipt = { version: "1.2.3", files: {} };
+    for (const name of ["TextHalo-macOS-aarch64.dmg", "TextHalo-aarch64.app.tar.gz", "TextHalo-aarch64.app.tar.gz.sig", "latest.json"]) {
+      await writeFile(join(dir, name), name);
+      receipt.files[name] = createHash("sha256").update(name).digest("hex");
+    }
+    const actions = [];
+    const options = { execute: async (_, args) => actions.push(args), exists: async () => true,
+      verifyFile: async () => { throw new Error("checksum mismatch"); }, readLatest: async () => ({ version: "1.2.4" }) };
+    await assert.rejects(publishRelease(dir, receipt, options), /newer|downgrade/i);
+    assert.equal(actions.length, 0);
+    await assert.rejects(publishRelease(dir, receipt, { ...options, readLatest: async () => ({version:"1.2.3"}) }), /checksum/);
+    assert.equal(actions.length, 0);
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
@@ -145,4 +168,54 @@ test("updater signatures verify against the trusted key and reject changed archi
     await writeFile(archive, "changed archive");
     await assert.rejects(verifyUpdaterSignature(archive, await readFile(`${archive}.sig`, "utf8"), publicKey), /signature/i);
   } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test("public verification retries R2 propagation errors but stops on changed bytes", async () => {
+  const bytes = "verified release";
+  const hash = createHash("sha256").update(bytes).digest("hex");
+  const statuses = [404, 503, 200];
+  let attempts = 0;
+  const pauses = [];
+  await verifyPublicFile("https://storage.texthalo.app/test", hash, {
+    fetchAsset: async () => new Response(bytes, { status: statuses[attempts++] }),
+    pause: async delay => pauses.push(delay),
+  });
+  assert.equal(attempts, 3);
+  assert.equal(pauses.length, 2);
+  attempts = 0;
+  await assert.rejects(verifyPublicFile("https://storage.texthalo.app/test", hash, {
+    fetchAsset: async () => { attempts++; return new Response("tampered"); }, pause: async () => {},
+  }), /checksum/);
+  assert.equal(attempts, 1);
+  attempts = 0;
+  await assert.rejects(verifyPublicFile("https://storage.texthalo.app/test", hash, {
+    fetchAsset: async () => { attempts++; return new Response(null, {status: 404}); }, pause: async () => {},
+  }), /unavailable/);
+  assert.equal(attempts, 8);
+});
+
+test("existence probes do not cache a miss at the canonical download URL", async () => {
+  const canonical = "https://storage.texthalo.app/releases/1.2.3/TextHalo-aarch64.app.tar.gz";
+  let requested;
+  assert.equal(await assetExists(canonical, async (url, method) => {
+    requested = new URL(url);
+    assert.equal(method, "HEAD");
+    return new Response(null, {status: 404});
+  }), false);
+  assert.equal(requested.origin + requested.pathname, canonical);
+  assert.ok(requested.searchParams.has("probe"));
+});
+
+test("website verification waits for R2 links, the published version, and redirect propagation", async () => {
+  let calls = 0;
+  const url = "https://storage.texthalo.app/TextHalo-macOS-aarch64.dmg";
+  await verifyWebsite({version: "0.1.12"}, {
+    pause: async () => {},
+    fetchPage: async target => {
+      if (target.includes("/download/")) return new Response(null, {status:302,headers:{location: calls < 3 ? "https://github.com/old.dmg" : url}});
+      calls++;
+      return new Response(`<a href="${url}">Download</a>Current version <!-- -->0.1.${calls < 2 ? "13" : "12"}<!-- -->`);
+    },
+  });
+  assert.equal(calls, 3);
 });

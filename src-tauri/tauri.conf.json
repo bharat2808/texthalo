@@ -55,7 +55,7 @@
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDg2Q0VFQjgyMzgzNjVDREEKUldUYVhEWTRndXZPaHRzV0pyNElhTFZ3VnR2QlhwRk1aN2xVanh3eGFZN3k2ZTM1UWpqUGM0LzQK",
       "endpoints": [
-        "https://github.com/bharat2808/texthalo/releases/latest/download/latest.json"
+        "https://storage.texthalo.app/latest.json"
       ]
     }
   }

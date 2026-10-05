@@ -1,1 +1,1 @@
-export const MAC_DOWNLOAD = "https://github.com/bharat2808/texthalo/releases/latest/download/TextHalo-macOS-aarch64.dmg";
+export const MAC_DOWNLOAD = "https://storage.texthalo.app/TextHalo-macOS-aarch64.dmg";

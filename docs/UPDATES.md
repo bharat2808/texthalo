@@ -1,6 +1,9 @@
 # Application updates
 
-TextHalo uses Tauri's signed updater with a static manifest attached to GitHub Releases.
+TextHalo uses Tauri's signed updater with a static manifest at `https://storage.texthalo.app/latest.json`.
+Release artifacts are stored in the existing `texthalo-storage` R2 bucket.
+The Rust updater plugin requests cache revalidation for both native/background
+checks and Settings checks, and only offers versions newer than the installed app.
 Release builds check at startup and every six hours. Users can also check from the tray
 or Settings → General. Tray checks show a dedicated result panel; background checks
 update the tray quietly. Installation always requires an explicit Install action.
@@ -38,15 +41,14 @@ not part of the release workflow. The signed updater manifest contains only
 
 `scripts/release-macos.mjs` uses the existing Developer ID identity and a
 notarytool Keychain profile. Prerequisites are Xcode Command Line Tools, the
-`aarch64-apple-darwin` Rust target, Node dependencies, and authenticated gh.
-Wrangler authentication is required only for Cloudflare deployment.
+`aarch64-apple-darwin` Rust target, Node dependencies, and authenticated Wrangler for R2 publication and Pages deployment.
 Before any production build/deploy, also set `VITE_TEXTHALO_API_URL` to the
 HTTPS API origin and `VITE_TURNSTILE_SITE_KEY` to the public widget site key.
 The script refuses to make a production build if either is absent; these values
 are embedded in the desktop app and static website, respectively.
 
 For a single local command that builds, signs, notarizes, verifies, and publishes
-the GitHub release:
+the R2 release:
 
 ```sh
 export NOTARY_KEYCHAIN_PROFILE="your-existing-profile-name"
@@ -58,9 +60,9 @@ npm run release:mac -- release --deploy-cloudflare
 ```
 
 The website is built/tested during preparation. Its stable download URL follows
-the latest GitHub release automatically; publishing the updated website itself
+the stable R2 download object automatically; publishing the updated website itself
 requires `--deploy-cloudflare`. Publication and deployment run sequentially, not
-atomically: a failed website deployment does not roll back the GitHub release.
+atomically: a failed website deployment does not roll back the R2 release.
 Resolve the deployment error and retry with `npm run release:mac -- deploy`,
 without rebuilding or republishing. If you already prepared the artifacts, use
 `npm run release:mac -- publish --deploy-cloudflare`.
@@ -82,8 +84,8 @@ npm run release:mac -- deploy
 Before preparation, bump all version fields in package.json, Cargo.toml,
 tauri.conf.json and both lockfiles, then commit the intended release changes.
 The script refuses dirty worktrees, mixed versions, reused output folders, and
-publication over an existing tag. Push the source commit before publishing so
-GitHub can resolve the release target. It never switches branches, commits, or
+changed bytes at an existing release path. Commit and preserve the intended
+release source before publishing. It never switches branches, commits, or
 bumps versions automatically.
 
 `prepare` runs tests, builds the Apple Silicon app, signs it with Developer ID,
@@ -96,7 +98,7 @@ and staples the DMG. It verifies Gatekeeper, the actual Mach-O architecture,
 bundle version, and updater signature against the existing trusted public key.
 Apple notarization must return Accepted. Outputs and a source-commit/checksum
 receipt are saved in `release-artifacts/VERSION/`. Preparation submits artifacts
-to Apple but does not publish to GitHub or deploy the website.
+to Apple but does not publish to R2 or deploy the website.
 
 The updater key is read from `TAURI_SIGNING_PRIVATE_KEY`, or the Keychain service
 named by `TAURI_SIGNING_KEYCHAIN_SERVICE`, or `TAURI_SIGNING_PRIVATE_KEY_PATH`
@@ -105,17 +107,23 @@ named by `TAURI_SIGNING_KEYCHAIN_SERVICE`, or `TAURI_SIGNING_PRIVATE_KEY_PATH`
 printed or passed as command arguments. Failed output folders remain available
 for inspection; move one aside before retrying.
 
-`publish` rechecks the receipt and signatures and uploads these four assets as
-a draft release:
+`publish` rechecks the receipt and signatures and uploads these four assets
+under `releases/VERSION/` in `texthalo-storage`:
 
 - `TextHalo-macOS-aarch64.dmg`
 - `TextHalo-aarch64.app.tar.gz`
 - `TextHalo-aarch64.app.tar.gz.sig`
 - `latest.json`
 
-It downloads and compares the uploaded checksums before making the release
-public/latest. Failed upload verification leaves a draft for inspection.
-It then verifies the public latest-download URLs against the same checksums.
+Versioned files use immutable cache headers. Existence probes use a separate
+query URL so a missing object cannot cache a 404 at its canonical download URL. Existing versioned objects are
+verified against the prepared checksums and never overwritten; retries can reuse
+identical files. A release older than the current R2 manifest is rejected.
+The script verifies public checksums before updating the root DMG download,
+then publishes root `latest.json` last. Both mutable root objects use `no-store`.
+The manifest always references the immutable versioned updater archive.
+An upload or verification failure before promotion leaves the current manifest
+unchanged; publication and promotion of the two root objects are sequential.
 
 `deploy` verifies the public artifacts first, reads the existing texthalo Pages
 project's actual production branch using Wrangler's active credentials, builds
@@ -123,8 +131,11 @@ and deploys the website, and checks the live direct download links and legacy re
 `CLOUDFLARE_ACCOUNT_ID` if the authenticated user has multiple accounts.
 The script never creates a project or changes its production branch.
 
-All website download buttons link directly to the stable Apple Silicon DMG URL.
-The website states the Apple Silicon requirement. `/download` and `/download/`
+All website download buttons link directly to
+`https://storage.texthalo.app/TextHalo-macOS-aarch64.dmg`.
+The website states the Apple Silicon requirement. Deployment sets
+`VITE_TEXTHALO_DOWNLOAD_VERSION` to the published artifact version; it defaults
+to package.json for normal development and release builds. `/download` and `/download/`
 remain as HTTP 302 redirects for existing links; there is no separate download
 page, Intel download, or browser architecture detection.
 
@@ -136,7 +147,7 @@ After signing and notarizing the app and refreshing its updater archive/signatur
 node scripts/write-updater-manifest.mjs \
   0.1.13 latest.json \
   --platform darwin-aarch64 \
-  https://github.com/bharat2808/texthalo/releases/download/v0.1.13/TextHalo-aarch64.app.tar.gz \
+  https://storage.texthalo.app/releases/0.1.13/TextHalo-aarch64.app.tar.gz \
   release/arm64/TextHalo.app.tar.gz release/arm64/TextHalo.app.tar.gz.sig
 ```
 
@@ -159,3 +170,17 @@ Keep production latest.json unchanged during staging tests.
 The bundle identifier and user-data paths retain their original Kiegen values
 so existing Accessibility permission, settings, and downloaded models survive
 updates. Keep those values stable.
+
+## Migration from private GitHub Releases
+
+On October 5, 2026, the existing signed v0.1.12 artifacts were retrieved from
+GitHub using the repository owner's account and published to R2.
+The installer, updater archive, and signature keep their original bytes; only
+the manifest's archive URL changes. Preserve the existing updater signing key.
+The source tree is v0.1.13; moving v0.1.12 does not publish a new app version.
+
+Already distributed apps, including the migrated v0.1.12 installer, still embed
+the GitHub updater endpoint. Those binaries need a manual installation of the
+first app release built with the R2 configuration. Uploading their old artifacts
+or changing website links cannot change the endpoint inside an installed binary.
+Subsequent releases built from the migrated source check R2 automatically.
