@@ -36,7 +36,8 @@
     "macOS": {
       "signingIdentity": "Developer ID Application: Bharat Bharat (BQVR37A9HG)",
       "hardenedRuntime": true,
-      "entitlements": "entitlements.plist"
+      "entitlements": "entitlements.plist",
+      "minimumSystemVersion": "14.0"
     },
     "category": "Productivity",
     "shortDescription": "Speak any selected text, from anywhere",
