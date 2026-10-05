@@ -2319,6 +2319,9 @@ function MainApp() {
               </div> : null}
             </details>
             ) : null}
+            <Card title="Listen shortcut" icon={Icon.command()}>
+              {shortcutControl("speak")}
+            </Card>
           </div>
         ) : null}
 

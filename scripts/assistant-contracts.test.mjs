@@ -47,8 +47,9 @@ test("development app declares the same privacy purposes as the release app", {s
   };
   const dev = readPlist("src-tauri/DevInfo.plist");
   const release = readPlist("src-tauri/Info.plist");
-  assert.equal(dev.CFBundleExecutable, "kiegen");
+  assert.equal(dev.CFBundleExecutable, "texthalo");
   const config = JSON.parse(readFileSync("src-tauri/tauri.conf.json", "utf8"));
+  assert.equal(config.mainBinaryName, dev.CFBundleExecutable);
   assert.equal(dev.CFBundleIdentifier, config.identifier);
   assert.equal(dev.CFBundleName, config.productName);
   assert.equal(dev.CFBundleDisplayName, config.productName);

@@ -56,7 +56,11 @@ pub fn launch() -> Result<bool, Box<dyn std::error::Error>> {
         contents.join("Info.plist"),
         include_str!("../DevInfo.plist"),
     )?;
-    fs::copy(&executable, macos.join("kiegen"))?;
+    let legacy_executable = macos.join("kiegen");
+    if legacy_executable.exists() {
+        fs::remove_file(legacy_executable)?;
+    }
+    fs::copy(&executable, macos.join("texthalo"))?;
     fs::copy(
         env!("TEXTHALO_ASSISTANT_DEV_PATH"),
         macos.join("texthalo-assistant"),
@@ -122,9 +126,9 @@ mod tests {
     }
     #[test]
     fn only_bundle_executables_skip_launch_services() {
-        assert!(!inside_bundle(Path::new("/project/target/debug/kiegen")));
+        assert!(!inside_bundle(Path::new("/project/target/debug/texthalo")));
         assert!(inside_bundle(Path::new(
-            "/project/target/debug/TextHalo.app/Contents/MacOS/kiegen"
+            "/project/target/debug/TextHalo.app/Contents/MacOS/texthalo"
         )));
     }
 }

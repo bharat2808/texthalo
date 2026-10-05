@@ -137,6 +137,7 @@ export function TranscriptionSettings({value,onChange}: SettingsProps) {
 
 type FeaturePermission = {
   name: string;
+  description: string;
   key: "microphone" | "speech" | "accessibility" | "screen";
   status: number | undefined;
   required: boolean;
@@ -155,11 +156,11 @@ export function TaskReadiness({ mode, needsAccessibility = true, accessibilityPr
   const [screenRequested, setScreenRequested] = useState(false);
   const requesting = useRef(false);
   const permissions: FeaturePermission[] = [
-    { name: "Microphone", key: "microphone", status: a.microphone, required: true },
+    { name: "Microphone", description: mode === "dictate" ? "Records your speech for dictation." : "Records your spoken requests.", key: "microphone", status: a.microphone, required: true },
     // Speech Recognition's denied/restricted enum values are reversed from Microphone.
-    { name: "Speech Recognition", key: "speech", status: a.recognition === 1 ? 2 : a.recognition === 2 ? 1 : a.recognition, required: preferences.transcription_engine !== "whisper" },
-    { name: "Accessibility", key: "accessibility", status: a.accessibility === undefined ? undefined : a.accessibility ? 3 : 0, required: needsAccessibility },
-    ...(mode === "assistant" ? [{ name: "Screen Recording", key: "screen" as const, status: a.screen === undefined ? undefined : a.screen ? 3 : 0, required: (preferences.provider === "cloud" || (preferences.provider === "automatic" && a.model !== "available") ? a.cloudScreenInput ?? a.imageInput : a.imageInput) !== false }] : []),
+    { name: "Speech Recognition", description: "Converts your speech to text using macOS.", key: "speech", status: a.recognition === 1 ? 2 : a.recognition === 2 ? 1 : a.recognition, required: preferences.transcription_engine !== "whisper" },
+    { name: "Accessibility", description: mode === "dictate" ? "Inserts dictated text into the current app." : "Reads selected text and inserts responses into other apps.", key: "accessibility", status: a.accessibility === undefined ? undefined : a.accessibility ? 3 : 0, required: needsAccessibility },
+    ...(mode === "assistant" ? [{ name: "Screen Recording", description: "Captures the current window as context for your request.", key: "screen" as const, status: a.screen === undefined ? undefined : a.screen ? 3 : 0, required: (preferences.provider === "cloud" || (preferences.provider === "automatic" && a.model !== "available") ? a.cloudScreenInput ?? a.imageInput : a.imageInput) !== false }] : []),
   ];
   const missing = permissions.filter(permission => permission.required && permission.status !== 3);
   const checking = missing.some(permission => permission.status === undefined);
@@ -198,7 +199,7 @@ export function TaskReadiness({ mode, needsAccessibility = true, accessibilityPr
         const restricted = permission.status === 1;
         const settings = permission.status === 2 || (permission.key === "accessibility" && accessibilityPrompted) || (permission.key === "screen" && screenRequested);
         const label = !permission.required ? permission.key === "speech" ? "Only for macOS speech recognition" : permission.key === "screen" ? "Unavailable for the selected provider on this Mac" : "Only for inserting text" : permission.status === undefined ? "Checking…" : granted ? "Allowed" : restricted ? "Restricted by macOS" : "Not allowed";
-        return <li key={permission.key}><div><span>{permission.name}</span><small>{label}</small></div>
+        return <li key={permission.key}><div><span>{permission.name}</span><small>{label}</small>{permission.required && !granted ? <small>{permission.description}</small> : null}</div>
           {permission.required && !granted && !restricted ? <button className="plain" disabled={pending !== null || permission.status === undefined} onClick={() => void request(permission)}>{pending === permission.key ? (permission.key === "microphone" || permission.key === "speech") && permission.status === 0 ? "Waiting for macOS…" : "Opening…" : settings ? `Open ${permission.name} Settings` : `Enable ${permission.name}`}</button> : null}
         </li>;
       })}

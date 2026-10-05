@@ -1,11 +1,16 @@
 [package]
 name = "kiegen"
+default-run = "texthalo"
 version = "0.1.13"
 description = "Speak any selected text, from anywhere in macOS"
 authors = ["bharat2808 <vermabhrat642@gmail.com>"]
 edition = "2021"
 license-file = "../LICENSE-TEXTHALO.md"
 publish = false
+
+[[bin]]
+name = "texthalo"
+path = "src/main.rs"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
