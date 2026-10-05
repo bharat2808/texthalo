@@ -79,7 +79,7 @@
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  justify-content: center;
+  justify-content: flex-start;
   gap: 14px;
   padding: 20px 0;
   font-size: 14px;
@@ -129,6 +129,7 @@
 
 .setup-field select {
   width: 100%;
+  height: 36px;
   padding: 8px 10px;
   border: 1px solid var(--separator);
   border-radius: var(--radius-control);
@@ -267,3 +268,36 @@
 @media (max-height: 700px) {
   .setup-wizard-content { justify-content: flex-start; overflow-y: auto; }
 }
+
+.setup-features, .setup-shortcuts { width: 100%; display: grid; gap: 10px; }
+.setup-features { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.setup-features article, .setup-shortcut-card {
+  min-width: 0; padding: 14px; border: 1px solid var(--separator);
+  border-radius: var(--radius-card); background: var(--control-bg);
+}
+.setup-features h2 { margin: 0 0 8px; font-size: 15px; }
+.setup-features article p, .setup-shortcut-card p { font-size: 12px; line-height: 1.55; }
+.setup-advanced { width: 100%; }
+.setup-advanced > .field { margin-top: 12px; }
+.setup-advanced > p { margin: 12px 0; font-size: 12px; }
+.setup-download-status { width: 100%; }
+.setup-shortcut-card { display: grid; grid-template-columns: 1fr auto; gap: 10px; }
+.setup-shortcut-card > div { grid-column: 1 / -1; }
+.setup-shortcut-card kbd { align-self: center; overflow-wrap: anywhere; }
+@media (max-width: 700px) {
+  .setup-wizard { padding: 14px 20px 10px; }
+  .setup-features { grid-template-columns: 1fr; }
+  .setup-shortcut-card { grid-template-columns: 1fr; }
+}
+
+.setup-voice-group { width: 100%; }
+.setup-voice-group h2 { margin: 0 0 6px; font-size: 16px; }
+.setup-voice-group > p { margin-bottom: 12px; }
+
+.setup-wizard-content > * { flex-shrink: 0; }
+.setup-wizard-content h1 { font-size: 25px; }
+.setup-wizard-content p { font-size: 12px; line-height: 1.5; }
+.setup-wizard-content .setup-hint { margin-top: -6px; }
+.setup-shortcuts { width: 100%; }
+.setup-shortcut-card { padding: 12px 14px; }
+.setup-later { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-top: 12px; border-top: 1px solid var(--separator); font-size: 12px; color: var(--label-secondary); }

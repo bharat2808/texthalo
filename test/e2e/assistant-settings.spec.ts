@@ -52,10 +52,10 @@ async function boot(page: Page, untrusted = false, speechStatus = 3, onboarding 
       shortcuts:{speak:"Alt+S",stop:"Alt+X",transcribe:"",assistant:""},
       assistant:{language:"en-US",instruction:"",dictation_output:"insert"},
       engine,voice:null,rate:200,capture_mode:"copy_only",max_chars:10000,restore_clipboard:true,
-      kokoro:{voice:"af_heart",quant:"q8",speed:1,keep_warm:false,idle_unload_minutes:5},
-      chatterbox:{voice:"en",exaggeration:0.5,cfg_weight:0.5,ref_audio:null,keep_warm:false},
+      kokoro:{voice:"af_heart",quant:"q8f16",speed:1,keep_warm:false,idle_unload_minutes:5},
+      chatterbox:{quant:"q4f16",voice:"en",exaggeration:0.5,cfg_weight:0.5,ref_audio:null,keep_warm:false},
       fish:{voice_id:"",model_id:"fish-s21-pro",enhance_text:false,privacy_accepted:false}
-    }, voices:[], engines:[{id:"apple",label:"Apple voices",summary:"",can_speak:true,status:"Ready",blocked_reason:null,needs_download:false,download_bytes:0,repo:"",voices:[],ref_voices:[],selected_voice:""}], trusted:!untrusted,secure_input:false,speaking:false,refused_shortcuts:[],system_language:"en_US",config_path:"/test/settings.json" };
+    }, voices:[], engines:[{id:"apple",label:"Apple voices",summary:"",can_speak:true,status:"Ready",blocked_reason:null,needs_download:false,download_bytes:0,repo:"",voices:[],ref_voices:[],selected_voice:""},{id:"fish",label:"Fish Audio hosted voices",summary:"Cloud",can_speak:false,status:"Sign in",blocked_reason:null,needs_download:false,download_bytes:0,repo:"",voices:[],ref_voices:[],models:[],selected_voice:""}], trusted:!untrusted,secure_input:false,speaking:false,refused_shortcuts:[],system_language:"en_US",config_path:"/test/settings.json" };
     let entries = [{id:"1",createdAt:1700000000000,text:"Synthetic transcript",source:"Test editor"}];
     Object.assign(window, {__availability:{model:"available",microphone:3,recognition:speechStatus,screen:false,imageInput:true,accessibility:!untrusted,...availability},__calls:[],__state:state,__native:async (command:string,args:any) => {
       (window as any).__calls.push({command,args});
@@ -80,7 +80,7 @@ async function boot(page: Page, untrusted = false, speechStatus = 3, onboarding 
       }
     }});
   }, {untrusted,speechStatus,onboarding,engine,availability});
-  await page.route("**/src/main.tsx", route => route.fulfill({contentType:"application/javascript",body:`
+  await page.route(url => url.pathname === "/src/main.tsx" && !url.searchParams.has("e2e"), route => route.fulfill({contentType:"application/javascript",body:`
     import { mockIPC } from "/node_modules/@tauri-apps/api/mocks.js";
     mockIPC(window.__native,{shouldMockEvents:true});
     await import("/src/main.tsx?e2e");
@@ -162,13 +162,13 @@ test("denied Speech Recognition remains actionable",async({page})=>{
 
 test("setup previews a voice before permission and finishes without pricing", async ({page}) => {
   await boot(page, false, 3, true);
-  await expect(page.getByRole("heading", {name:"Find your voice"})).toBeVisible();
+  await expect(page.getByRole("heading", {name:"Choose a voice"})).toBeVisible();
   await page.getByRole("button", {name:"Preview voice",exact:true}).click();
   expect(await page.evaluate(()=>(window as any).__calls.find((call:any)=>call.command === "preview_voice").args.engine)).toBe("apple");
   await page.getByRole("button", {name:"Continue",exact:true}).click();
-  await expect(page.getByRole("heading", {name:"Read from any app"})).toBeVisible();
+  await expect(page.getByRole("heading", {name:"Allow text access"})).toBeVisible();
   await page.getByRole("button", {name:"Continue",exact:true}).click();
-  await expect(page.getByRole("heading", {name:"Try your shortcut"})).toBeVisible();
+  await expect(page.getByRole("heading", {name:"Reading shortcuts"})).toBeVisible();
   await expect(page.getByText("Compare plans", {exact:false})).toHaveCount(0);
   await page.getByRole("button", {name:"Finish setup",exact:true}).click();
   await expect(page.getByRole("heading", {name:"Home",exact:true})).toBeVisible();
@@ -178,11 +178,11 @@ test("setup previews a voice before permission and finishes without pricing", as
  test("setup stays open when saving fails and allows retry", async ({page}) => {
   await boot(page, false, 3, true);
   await page.getByRole("button", {name:"Continue",exact:true}).click();
-  await page.getByRole("button", {name:"Continue",exact:true}).click();
+  await page.getByRole("button", {name:"Skip for now",exact:true}).click();
   await page.evaluate(() => { (window as any).__failSave = true; });
   await page.getByRole("button", {name:"Finish setup",exact:true}).click();
   await expect(page.getByRole("alert")).toContainText("save");
-  await expect(page.getByRole("heading", {name:"Try your shortcut"})).toBeVisible();
+  await expect(page.getByRole("heading", {name:"Reading shortcuts"})).toBeVisible();
   await page.evaluate(() => { (window as any).__failSave = false; });
   await page.getByRole("button", {name:"Finish setup",exact:true}).click();
   await expect(page.getByRole("heading", {name:"Home",exact:true})).toBeVisible();
@@ -205,12 +205,47 @@ test("setup previews a voice before permission and finishes without pricing", as
   await page.screenshot({path:testInfo.outputPath("home-dark.png")});
 });
 
-test("setup preview selects its voice source before playing", async ({page}) => {
+test("setup preview preserves its selected voice source", async ({page}) => {
   await boot(page, false, 3, true, "kokoro");
+  await page.evaluate(() => {
+    (window as any).__state.engines.push({id:"kokoro",label:"Kokoro 82M",summary:"Local",can_speak:true,status:"Ready",needs_download:false,download_bytes:0,
+      models:[{id:"q8f16",label:"Low memory",description:"Compact",bytes:86033585,installed:true}],
+      voices:[{id:"af_heart",label:"Heart",language:"en",unavailable:null}],ref_voices:[],selected_voice:"af_heart"});
+  });
   await page.getByRole("button", {name:"Preview voice",exact:true}).click();
-  await expect.poll(() => page.evaluate(() => (window as any).__state.settings.engine)).toBe("apple");
-  const commands = await page.evaluate(() => (window as any).__calls.map((call:any) => call.command));
-  expect(commands.indexOf("save_settings")).toBeLessThan(commands.indexOf("preview_voice"));
+  expect(await page.evaluate(() => (window as any).__state.settings.engine)).toBe("kokoro");
+  const preview = await page.evaluate(() => (window as any).__calls.find((call:any) => call.command === "preview_voice"));
+  expect(preview.args.engine).toBe("kokoro");
+  expect(preview.args.voice).toBe("af_heart");
+});
+
+test("setup skips optional steps without enabling features or requesting access", async ({page}) => {
+  await boot(page, true, 0, true);
+  for (let step = 0; step < 3; step++) await page.getByRole("button", {name:"Skip for now",exact:true}).click();
+  await expect(page.getByRole("heading", {name:"Home",exact:true})).toBeVisible();
+  const result=await page.evaluate(() => ({settings:(window as any).__state.settings,calls:(window as any).__calls}));
+  expect(result.settings.engine).toBe("apple");
+  expect(result.settings.shortcuts.transcribe).toBe("");
+  expect(result.settings.shortcuts.assistant).toBe("");
+  expect(result.settings.onboarding_completed).toBe(true);
+  expect(result.calls.some((call:any)=>call.command === "install_engine" || call.command === "request_accessibility" || call.args?.command?.startsWith("permission_"))).toBe(false);
+});
+
+test("setup offers local and cloud voices and points optional features to Settings", async ({page}) => {
+  await boot(page, false, 3, true);
+  const source=page.getByLabel("Voice source",{exact:true});
+  await expect(source.locator('optgroup[label="Local"]')).toHaveCount(1);
+  await expect(source.locator('optgroup[label="Cloud"]')).toHaveCount(1);
+  await source.selectOption("fish");
+  await expect(page.getByText(/Text is sent to the cloud to generate audio/)).toBeVisible();
+  await page.getByRole("button", {name:"Skip for now",exact:true}).click();
+  await expect(page.getByText("Optional Dictation and Assistant permissions", {exact:true})).toHaveCount(0);
+  await page.getByRole("button", {name:"Skip for now",exact:true}).click();
+  await expect(page.locator(".setup-shortcut-card")).toHaveCount(2);
+  await page.getByRole("button", {name:"Open Settings",exact:true}).click();
+  await expect(page.getByRole("heading", {name:"General",exact:true})).toBeVisible();
+  await page.getByRole("button", {name:"Set up Dictation",exact:true}).click();
+  await expect(page.getByRole("heading", {name:"Dictate",exact:true})).toBeVisible();
 });
 
 for (const [screen, role] of [["Dictate", "transcribe"], ["Assistant", "assistant"]]) {

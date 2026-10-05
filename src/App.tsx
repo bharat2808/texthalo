@@ -1142,7 +1142,7 @@ function MainApp() {
   const advancedModelId = state?.settings.engine === "kokoro"
     ? state.settings.kokoro.quant : state?.settings.chatterbox.quant;
   const advancedNeedsDownload = Boolean(activeEngine?.needs_download
-    || activeEngine?.models.find(model => model.id === advancedModelId)?.installed === false);
+    || activeEngine?.models?.find(model => model.id === advancedModelId)?.installed === false);
   useEffect(() => {
     if (tab === "voice" && advancedNeedsDownload) setAdvancedVoiceOpen(true);
   }, [tab, advancedNeedsDownload, state?.settings.engine, advancedModelId]);
@@ -1286,23 +1286,6 @@ function MainApp() {
     (voice) => voice.id === activeEngine?.selected_voice,
   );
 
-  if (setupOpen || !settings.onboarding_completed) {
-    return <SetupWizard
-      key={setupRevision}
-      settings={settings}
-      voices={voices}
-      trusted={state.trusted}
-      recordingShortcut={recording === "speak"}
-      onSave={async (patch) => { if (!await save(patch)) throw new Error("Could not save your preferences. Please try again."); }}
-      externalError={error}
-      onRequestAccessibility={() => { void requestAccessibility(); }}
-      onOpenAccessibilitySettings={() => { void invoke("open_accessibility_settings").catch(cause => setError(String(cause))); }}
-      onPreviewVoice={(voice) => invoke("preview_voice", { engine: "apple", voice, rate: settings.rate, text: null })}
-      onRecordShortcut={() => setRecording("speak")}
-      onFinish={() => { setSetupOpen(false); setTab("home"); }}
-    />;
-  }
-
   /*
    * Download progress, when the Rust side is fetching weights for the engine on screen.
    * Keyed to the active engine so a background download for another one cannot post its
@@ -1316,6 +1299,64 @@ function MainApp() {
     installForEngine && installForEngine.total > 0
       ? Math.min(100, Math.round((installForEngine.done / installForEngine.total) * 100))
       : 0;
+
+
+  const downloadSelectedModel = async () => {
+    setInstallStarting(true);
+    try {
+      await saveTail.current;
+      await invoke("install_engine", { engine: settings.engine,
+        quant: settings.engine === "kokoro" ? settings.kokoro.quant : settings.chatterbox.quant });
+    } finally { setInstallStarting(false); }
+  };
+
+  const shortcutControl = (role: ShortcutRole) => <div className="shortcut-control">
+    <div className="task-shortcut">
+      <kbd aria-live="polite">{recording === role ? "Press a key combination…" : shortcutLabel(settings.shortcuts[role]) || "No shortcut yet"}</kbd>
+      <button className="plain" disabled={shortcutSaving} onClick={() => { setShortcutFeedback(null); setRecording(recording === role ? null : role); }}>{recording === role ? "Cancel" : "Change shortcut"}</button>
+      {(role === "transcribe" || role === "assistant") && settings.shortcuts[role] && recording !== role ? <button className="text" disabled={shortcutSaving} onClick={() => void saveShortcut(role, "")}>Clear shortcut</button> : null}
+    </div>
+    {recording === role ? <>
+      {(role === "transcribe" || role === "assistant") && <div className="inline" style={{flexWrap:"wrap", marginTop:8}}>{Object.entries(holdKeys).map(([key,label]) => <button className="plain hold-key-button" key={key} disabled={shortcutSaving} onClick={() => void saveShortcut(role,key)}><span className="hold-key-symbol" aria-hidden="true">{holdKeySymbols[key]}</span>{label}</button>)}</div>}
+      <p className="card-note">{role === "transcribe" || role === "assistant" ? "Choose a hold key, hold one for a moment, or press a key combination. Tap Esc to cancel." : "Press your new shortcut. Esc to cancel."}</p>
+    </> : null}
+    {settings.shortcuts[role]?.startsWith("Hold:") && <p className="card-note">Hold for 0.35 seconds to speak. Release to finish.{settings.shortcuts[role] === "Hold:Escape" ? " Quick Escape taps take effect on release." : " Other keys or clicks cancel the hold."}{settings.shortcuts[role] === "Hold:Fn" ? " If the Globe key also opens emoji or dictation, change its action in macOS Keyboard settings." : ""}</p>}
+    {settings.shortcuts[role]?.startsWith("Hold:") && serviceAvailability.availability.holdError && <p role="alert" className="shortcut-error">{serviceAvailability.availability.holdError}</p>}
+    {shortcutFeedback?.role === role ? <p className={shortcutFeedback.error ? "shortcut-error" : "card-note"} role={shortcutFeedback.error ? "alert" : "status"}>{shortcutFeedback.message}</p> : null}
+  </div>;
+
+
+  if (setupOpen || !settings.onboarding_completed) {
+    return <SetupWizard
+      key={setupRevision}
+      settings={settings}
+      voices={voices}
+      trusted={state.trusted}
+      engines={engines}
+      recordingShortcut={recording}
+      shortcutSaving={shortcutSaving}
+      speaking={state.speaking}
+      downloadBusy={modelDownloadBusy}
+      install={installForEngine}
+      onDownload={downloadSelectedModel}
+      onStopPreview={() => void invoke("stop_speaking").catch(cause => setError(String(cause)))}
+      onSave={async (patch) => { if (!await save(patch)) throw new Error("Could not save your preferences. Please try again."); }}
+      externalError={error}
+      onRequestAccessibility={() => { void requestAccessibility(); }}
+      onOpenAccessibilitySettings={() => { void invoke("open_accessibility_settings").catch(cause => setError(String(cause))); }}
+      onPreviewVoice={async () => {
+        await saveTail.current;
+        const current = latestState.current?.settings;
+        if (!current) return;
+        const voice = current.engine === "apple" ? current.voice : current.engine === "kokoro"
+          ? current.kokoro.voice : current.engine === "chatterbox" ? current.chatterbox.voice : current.fish.voice_id;
+        return invoke("preview_voice", { engine: current.engine, voice, rate: current.rate, text: null });
+      }}
+      renderShortcut={shortcutControl}
+      onFinish={destination => { setSetupOpen(false); setTab(destination); }}
+    />;
+  }
+
 
   /**
    * Choosing a voice writes to whichever engine owns it. Apple's voices are top-level
@@ -1488,20 +1529,6 @@ function MainApp() {
     }
   };
 
-  const shortcutControl = (role: ShortcutRole) => <div className="shortcut-control">
-    <div className="task-shortcut">
-      <kbd aria-live="polite">{recording === role ? "Press a key combination…" : shortcutLabel(settings.shortcuts[role]) || "No shortcut yet"}</kbd>
-      <button className="plain" disabled={shortcutSaving} onClick={() => { setShortcutFeedback(null); setRecording(recording === role ? null : role); }}>{recording === role ? "Cancel" : "Change shortcut"}</button>
-      {(role === "transcribe" || role === "assistant") && settings.shortcuts[role] && recording !== role ? <button className="text" disabled={shortcutSaving} onClick={() => void saveShortcut(role, "")}>Clear shortcut</button> : null}
-    </div>
-    {recording === role ? <>
-      {(role === "transcribe" || role === "assistant") && <div className="inline" style={{flexWrap:"wrap", marginTop:8}}>{Object.entries(holdKeys).map(([key,label]) => <button className="plain hold-key-button" key={key} disabled={shortcutSaving} onClick={() => void saveShortcut(role,key)}><span className="hold-key-symbol" aria-hidden="true">{holdKeySymbols[key]}</span>{label}</button>)}</div>}
-      <p className="card-note">{role === "transcribe" || role === "assistant" ? "Choose a hold key, hold one for a moment, or press a key combination. Tap Esc to cancel." : "Press your new shortcut. Esc to cancel."}</p>
-    </> : null}
-    {settings.shortcuts[role]?.startsWith("Hold:") && <p className="card-note">Hold for 0.35 seconds to speak. Release to finish.{settings.shortcuts[role] === "Hold:Escape" ? " Quick Escape taps take effect on release." : " Other keys or clicks cancel the hold."}{settings.shortcuts[role] === "Hold:Fn" ? " If the Globe key also opens emoji or dictation, change its action in macOS Keyboard settings." : ""}</p>}
-    {settings.shortcuts[role]?.startsWith("Hold:") && serviceAvailability.availability.holdError && <p role="alert" className="shortcut-error">{serviceAvailability.availability.holdError}</p>}
-    {shortcutFeedback?.role === role ? <p className={shortcutFeedback.error ? "shortcut-error" : "card-note"} role={shortcutFeedback.error ? "alert" : "status"}>{shortcutFeedback.message}</p> : null}
-  </div>;
 
   const settingsTabs: { id: Tab; title: string }[] = [
     { id: "general", title: "General" },
@@ -1683,6 +1710,14 @@ function MainApp() {
               </label>
             </Card>
 
+            <Card title="Optional features" icon={Icon.gear()}>
+              <p className="card-note">Set up Dictation or Assistant when you want to use them.</p>
+              <div className="inline">
+                <button className="plain" onClick={() => setTab("transcription")}>Set up Dictation</button>
+                <button className="plain" onClick={() => setTab("assistant")}>Set up Assistant</button>
+              </div>
+            </Card>
+
             <Card title="About" icon={Icon.box()}>
               <div className="card-note">Version {appVersion ?? "…"}</div>
               <div className="inline">
@@ -1768,15 +1803,7 @@ function MainApp() {
                   disabled={modelDownloadBusy}
                   needsDownload={activeEngine?.needs_download}
                   downloadLabel={installStarting ? "Starting…" : installing ? "Downloading…" : "Download selected model"}
-                  onDownload={async () => {
-                    setInstallStarting(true);
-                    try {
-                      await saveTail.current;
-                      await invoke("install_engine", { engine: settings.engine,
-                        quant: settings.engine === "kokoro" ? settings.kokoro.quant : settings.chatterbox.quant });
-                    } catch (cause) { setError(String(cause)); }
-                    finally { setInstallStarting(false); }
-                  }}
+                  onDownload={() => void downloadSelectedModel().catch(cause => setError(String(cause)))}
                   deleting={modelDeleting}
                   deleteDisabled={state.speaking}
                   onDelete={async () => {
