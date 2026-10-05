@@ -21,13 +21,6 @@ pub const KOKORO_REPO: &str = "onnx-community/Kokoro-82M-v1.0-ONNX";
 /// is no espeak in it to avoid, and no Python to run it.
 pub const CHATTERBOX_REPO: &str = "onnx-community/chatterbox-multilingual-ONNX";
 
-/// Chatterbox's total, derived the same way. It used to be a hand-written constant summing
-/// two MLX repositories, which is exactly the kind of figure that drifts once the plan
-/// changes — as it has.
-fn chatterbox_weights_bytes() -> u64 {
-    crate::download::chatterbox_bytes()
-}
-
 /// One selectable voice, whatever the engine calls it.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -85,6 +78,7 @@ pub struct EngineInfo {
     pub ref_voices: Vec<RefVoice>,
     /// The id currently chosen for this engine, so the UI can mark the row.
     pub selected_voice: String,
+    pub models: Vec<crate::kokoro_models::ModelOption>,
 }
 
 // ──────────────────────────────── Kokoro ────────────────────────────────
@@ -433,12 +427,12 @@ pub fn catalog_with(settings: &Settings, clips: Vec<crate::voices::VoiceClip>) -
     let fish_configured = crate::hosted::service_configured();
     let fish_signed_in = crate::hosted::is_signed_in();
 
-    let kokoro_weights = crate::engine_paths::kokoro_installed();
-    let kokoro_missing_bytes = crate::download::kokoro_missing_bytes();
+    let kokoro_weights = crate::engine_paths::kokoro_installed_variant(&settings.kokoro.quant);
+    let kokoro_missing_bytes = crate::download::kokoro_missing_bytes_for(&settings.kokoro.quant);
     // Chatterbox's files are the app's own now, so this is a directory check like Kokoro's
     // rather than a look into a cache layout somebody else owns. Whether it can *speak* is a
     // separate question with a separate answer.
-    let chatterbox_weights = crate::engine_paths::chatterbox_installed();
+    let chatterbox_weights = crate::engine_paths::chatterbox_installed_variant(&settings.chatterbox.quant);
 
     vec![
         EngineInfo {
@@ -454,6 +448,7 @@ pub fn catalog_with(settings: &Settings, clips: Vec<crate::voices::VoiceClip>) -
             voices: Vec::new(), // the Apple list is its own field; see `UiState::voices`
             ref_voices: Vec::new(),
             selected_voice: settings.voice.clone().unwrap_or_default(),
+            models: Vec::new(),
         },
         EngineInfo {
             id: Engine::Kokoro,
@@ -488,6 +483,7 @@ pub fn catalog_with(settings: &Settings, clips: Vec<crate::voices::VoiceClip>) -
             voices: kokoro,
             ref_voices: Vec::new(),
             selected_voice: settings.kokoro.voice.clone(),
+            models: crate::kokoro_models::catalog(),
         },
         EngineInfo {
             id: Engine::Chatterbox,
@@ -515,12 +511,13 @@ pub fn catalog_with(settings: &Settings, clips: Vec<crate::voices::VoiceClip>) -
             download_bytes: if chatterbox_weights {
                 0
             } else {
-                chatterbox_weights_bytes()
+                crate::download::chatterbox_missing_bytes_for(&settings.chatterbox.quant)
             },
             repo: CHATTERBOX_REPO,
             voices: chatterbox,
             ref_voices,
             selected_voice: settings.chatterbox.voice.clone(),
+            models: crate::chatterbox_models::catalog(),
         },
         EngineInfo {
             id: Engine::Fish,
@@ -561,6 +558,7 @@ pub fn catalog_with(settings: &Settings, clips: Vec<crate::voices::VoiceClip>) -
             voices: Vec::new(),
             ref_voices: Vec::new(),
             selected_voice: settings.fish.voice_id.clone(),
+            models: Vec::new(),
         },
     ]
 }

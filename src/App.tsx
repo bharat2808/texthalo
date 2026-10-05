@@ -13,6 +13,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import KokoroModelPicker, { type KokoroModelOption } from "./KokoroModelPicker";
 import SetupWizard, { type SetupPlansResponse } from "./SetupWizard";
 import appLogo from "../src-tauri/icons/icon.png";
 import "./App.css";
@@ -68,6 +69,7 @@ type EngineInfo = {
   /** Cloning engines only: the reference clips, built-in first. */
   ref_voices: RefVoice[];
   selected_voice: string;
+  models: KokoroModelOption[];
 };
 
 type KokoroSettings = {
@@ -84,6 +86,7 @@ type KokoroSettings = {
  * which of its languages to read in.
  */
 type ChatterboxSettings = {
+  quant: string;
   voice: string;
   exaggeration: number;
   cfg_weight: number;
@@ -117,6 +120,7 @@ const websiteUrl = (import.meta.env.VITE_TEXTHALO_WEBSITE_URL || "https://textha
 /** Progress of a weight download, emitted by the Rust side as `kiegen:install`. */
 type InstallEvent = {
   engine: EngineId;
+  quant?: string | null;
   phase: "downloading" | "done" | "error";
   file: string;
   done: number;
@@ -597,6 +601,7 @@ function MainApp() {
   const [recording, setRecording] = useState<ShortcutRole | null>(null);
   const [rateDraft, setRateDraft] = useState<number | null>(null);
   const [install, setInstall] = useState<InstallEvent | null>(null);
+  const [installStarting, setInstallStarting] = useState(false);
   // The last word from adding or deleting a reference voice. Kept rather than timed out: it is
   // the only answer the user gets, and a refusal here is a reason, not a transient toast.
   const [voiceMessage, setVoiceMessage] = useState<string | null>(null);
@@ -1293,7 +1298,9 @@ function MainApp() {
    * Keyed to the active engine so a background download for another one cannot post its
    * bar under the wrong row.
    */
-  const installForEngine = install && install.engine === settings.engine ? install : null;
+  const installForEngine = install && install.engine === settings.engine
+    && (!install.quant || install.quant === (settings.engine === "kokoro" ? settings.kokoro.quant : settings.chatterbox.quant)) ? install : null;
+  const modelDownloadBusy = installStarting || install?.phase === "downloading";
   const installing = installForEngine?.phase === "downloading";
   const installPercent =
     installForEngine && installForEngine.total > 0
@@ -1714,10 +1721,12 @@ function MainApp() {
                           ? `Needs ${formatBytes(engine.download_bytes)}`
                           : "Not ready"
                     }
+                    disabled={modelDownloadBusy}
                     onSelect={() => void save({ engine: engine.id })}
                   />
                 ))}
               </div>
+
               {activeEngine && !activeEngine.can_speak ? (
                 <Note kind="warning" icon={Icon.warn()}>
                   {activeEngine.status}
@@ -1736,51 +1745,68 @@ function MainApp() {
                 {accountError ? <Note kind="error" icon={Icon.xCircle()}>{accountError}</Note> : null}
               </> : null}
 
-              {activeEngine?.needs_download ? (
-                <div className="field">
-                  <span className="field-label">Voice download</span>
-                  {installing && installForEngine ? (
-                    <>
-                      <div className="progress">
-                        <div
-                          className="progress-bar"
-                          style={{ width: `${installPercent}%` }}
-                          role="progressbar"
-                          aria-valuenow={installPercent}
-                          aria-valuemin={0}
-                          aria-valuemax={100}
-                        />
-                      </div>
-                      <span className="field-hint">
-                        {installPercent}% · {formatBytes(installForEngine.done)} of{" "}
-                        {formatBytes(installForEngine.total)}
-                      </span>
-                    </>
-                  ) : (
-                    <div className="inline">
-                      <button
-                        className="plain"
-                        onClick={() =>
-                          void invoke("install_engine", { engine: settings.engine })
-                        }
-                      >
-                        {Icon.download()} Download {formatBytes(activeEngine.download_bytes)}
-                      </button>
-                    </div>
-                  )}
-                  {installForEngine?.phase === "error" ? (
-                    <Note kind="error" icon={Icon.xCircle()}>
-                      <span className="truncate" title={installForEngine.message ?? ""}>
-                        {installForEngine.message}
-                      </span>
-                    </Note>
-                  ) : null}
-                </div>
-              ) : null}
+
             </Card>
 
             {settings.engine === "kokoro" || settings.engine === "chatterbox" ? (
               <details className="disclosure"><summary>Advanced voice settings</summary>
+                <KokoroModelPicker engine={settings.engine === "kokoro" ? "Kokoro" : "Chatterbox"}
+                  models={activeEngine?.models ?? []}
+                  selected={settings.engine === "kokoro" ? settings.kokoro.quant : settings.chatterbox.quant}
+                  disabled={modelDownloadBusy}
+                  onSelect={quant => {
+                    setInstall(null);
+                    void save(settings.engine === "kokoro"
+                      ? { kokoro: { ...settings.kokoro, quant } }
+                      : { chatterbox: { ...settings.chatterbox, quant } });
+                  }} />
+                {activeEngine?.needs_download ? (
+                  <div className="field">
+                    <span className="field-label">Voice download</span>
+                    {installing && installForEngine ? (
+                      <>
+                        <div className="progress">
+                          <div
+                            className="progress-bar"
+                            style={{ width: `${installPercent}%` }}
+                            role="progressbar"
+                            aria-valuenow={installPercent}
+                            aria-valuemin={0}
+                            aria-valuemax={100}
+                          />
+                        </div>
+                        <span className="field-hint">
+                          {installPercent}% · {formatBytes(installForEngine.done)} of{" "}
+                          {formatBytes(installForEngine.total)}
+                        </span>
+                      </>
+                    ) : (
+                      <div className="inline">
+                        <button
+                          className="plain"
+                          disabled={modelDownloadBusy}
+                          onClick={async () => {
+                            setInstallStarting(true);
+                            try {
+                              await invoke("install_engine", { engine: settings.engine,
+                                quant: settings.engine === "kokoro" ? settings.kokoro.quant : settings.chatterbox.quant });
+                            } catch (cause) { setError(String(cause)); }
+                            finally { setInstallStarting(false); }
+                          }}
+                        >
+                          {Icon.download()} {installStarting ? "Starting…" : `Download ${formatBytes(activeEngine.download_bytes)}`}
+                        </button>
+                      </div>
+                    )}
+                    {installForEngine?.phase === "error" ? (
+                      <Note kind="error" icon={Icon.xCircle()}>
+                        <span className="truncate" title={installForEngine.message ?? ""}>
+                          {installForEngine.message}
+                        </span>
+                      </Note>
+                    ) : null}
+                  </div>
+                ) : null}
                 <p className="card-note">Keeping a voice in memory uses more memory but makes playback start faster.</p>
                 {settings.engine === "kokoro" ? (
                   <label className="toggle-row">

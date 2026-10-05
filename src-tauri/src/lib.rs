@@ -24,6 +24,9 @@ mod hosted_input;
 #[cfg(target_os = "macos")]
 mod instance;
 pub mod kokoro;
+pub mod kokoro_models;
+pub mod model_storage;
+pub mod chatterbox_models;
 pub mod lexicon;
 pub mod numbers;
 mod overlay;
@@ -67,6 +70,7 @@ pub struct AppState {
     pub settings: Mutex<Settings>,
     job: Mutex<speech_job::SpeechJob>,
     synthesis: engine_locks::EngineLocks,
+    model_download: Mutex<bool>,
     /// Every engine the app can speak with, routed by the settings. The Apple path lives
     /// inside it rather than beside it so there is one place that decides what speaks.
     pub spoken: spoken::Spoken,
@@ -725,6 +729,8 @@ fn get_state(app: AppHandle) -> UiState {
 fn save_settings(app: AppHandle, settings: Settings) -> Result<UiState, String> {
     shortcuts::bindings(&settings)?; // validate before writing anything
     whisper_models::validate_settings(&settings.assistant)?;
+    kokoro_models::get(&settings.kokoro.quant)?;
+    chatterbox_models::get(&settings.chatterbox.quant)?;
     use tauri_plugin_autostart::ManagerExt;
     let manager = app.autolaunch();
     let launch_changed = manager.is_enabled().unwrap_or_else(|_| {
@@ -862,6 +868,7 @@ fn stop_speaking(app: AppHandle) {
 #[derive(Serialize, Clone)]
 struct InstallEvent {
     engine: config::Engine,
+    quant: Option<String>,
     phase: &'static str,
     file: String,
     done: u64,
@@ -877,11 +884,13 @@ fn emit_install(
     done: u64,
     total: u64,
     message: Option<String>,
+    quant: Option<&str>,
 ) {
     let _ = app.emit(
         "kiegen:install",
         InstallEvent {
             engine,
+            quant: quant.map(str::to_string),
             phase,
             file: file.to_string(),
             done,
@@ -922,7 +931,7 @@ fn delete_chatterbox_voice(app: AppHandle, file: String) -> Result<UiState, Stri
 /// Kokoro's and Chatterbox's weights are plain files the app fetches and verifies itself.
 /// Nothing here is installed by another runtime: the app owns every file it needs, which is
 /// what makes the local engines work with no Python on the machine at all.
-fn install_local_engine(app: &AppHandle, engine: config::Engine) -> Result<(), String> {
+fn install_local_engine(app: &AppHandle, engine: config::Engine, quant: Option<&str>) -> Result<(), String> {
     let dir = match engine {
         config::Engine::Kokoro => engine_paths::kokoro_dir(),
         config::Engine::Chatterbox => engine_paths::chatterbox_dir(),
@@ -946,25 +955,25 @@ fn install_local_engine(app: &AppHandle, engine: config::Engine) -> Result<(), S
         if done.saturating_sub(emitted) >= 1 << 20 || path != emitted_path {
             emitted = done;
             emitted_path = path.to_string();
-            emit_install(app, engine, "downloading", path, done, total, None);
+            emit_install(app, engine, "downloading", path, done, total, None, quant);
         }
     };
 
     match engine {
-        config::Engine::Kokoro => download::install_kokoro_into(&dir, &mut on_progress)?,
-        _ => download::install_chatterbox_into(&dir, &mut on_progress)?,
+        config::Engine::Kokoro => download::install_kokoro_variant_into(&dir, quant.unwrap_or("fp32"), &mut on_progress)?,
+        _ => download::install_chatterbox_variant_into(&dir, quant.unwrap_or("q4f16"), &mut on_progress)?,
     }
-    emit_install(app, engine, "done", "", actual, last_total, None);
+    emit_install(app, engine, "done", "", actual, last_total, None, quant);
     Ok(())
 }
 
-fn install_engine_blocking(app: &AppHandle, engine: config::Engine) {
+fn install_engine_blocking(app: &AppHandle, engine: config::Engine, quant: Option<&str>) {
     match engine {
         // Already on the machine; nothing to fetch.
         config::Engine::Apple => {}
         config::Engine::Kokoro | config::Engine::Chatterbox => {
-            if let Err(error) = install_local_engine(app, engine) {
-                emit_install(app, engine, "error", "", 0, 0, Some(error));
+            if let Err(error) = install_local_engine(app, engine, quant) {
+                emit_install(app, engine, "error", "", 0, 0, Some(error), quant);
             }
         }
         config::Engine::Fish => emit_install(
@@ -975,13 +984,42 @@ fn install_engine_blocking(app: &AppHandle, engine: config::Engine) {
             0,
             0,
             Some("Fish Audio is hosted and needs no model download.".into()),
+            None,
         ),
     }
 }
 
 #[tauri::command]
-fn install_engine(app: AppHandle, engine: config::Engine) {
-    std::thread::spawn(move || install_engine_blocking(&app, engine));
+fn install_engine(app: AppHandle, engine: config::Engine, quant: Option<String>) -> Result<(), String> {
+    let quant = if engine == config::Engine::Kokoro {
+        let id = quant.unwrap_or_else(|| app.state::<AppState>().settings.lock().unwrap().kokoro.quant.clone());
+        kokoro_models::get(&id)?;
+        Some(id)
+    } else if engine == config::Engine::Chatterbox {
+        let id = quant.unwrap_or_else(|| app.state::<AppState>().settings.lock().unwrap().chatterbox.quant.clone());
+        chatterbox_models::get(&id)?;
+        Some(id)
+    } else { None };
+    if !matches!(engine, config::Engine::Kokoro | config::Engine::Chatterbox) {
+        return Err("This voice source needs no model download.".into());
+    }
+    let state = app.state::<AppState>();
+    let mut downloading = state.model_download.lock().unwrap();
+    if *downloading { return Err("A voice model download is already running.".into()); }
+    *downloading = true;
+    drop(downloading);
+    emit_install(&app, engine, "downloading", "", 0, 0, None, quant.as_deref());
+    std::thread::spawn(move || {
+        let state = app.state::<AppState>();
+        // Reset even if the worker unwinds; concurrent installs must not share .part files.
+        struct Reset<'a>(&'a Mutex<bool>);
+        impl Drop for Reset<'_> {
+            fn drop(&mut self) { *self.0.lock().unwrap_or_else(|error| error.into_inner()) = false; }
+        }
+        let _reset = Reset(&state.model_download);
+        install_engine_blocking(&app, engine, quant.as_deref());
+    });
+    Ok(())
 }
 
 /// Install espeak-ng — the extra back end for Kokoro's five non-English languages.
@@ -1276,6 +1314,7 @@ pub fn run() {
                 settings: Mutex::new(settings),
                 job: Mutex::new(speech_job::SpeechJob::default()),
                 synthesis: engine_locks::EngineLocks::default(),
+                model_download: Mutex::new(false),
                 spoken: spoken::Spoken::new(),
                 voices,
                 bindings: Mutex::new(Vec::new()),

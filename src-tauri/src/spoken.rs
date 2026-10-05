@@ -64,6 +64,8 @@ impl Report {
 struct Loaded {
     engine: Kokoro,
     voice: String,
+    model: String,
+    speed: f32,
 }
 
 /// A loaded Chatterbox session plus the three things that would make it the wrong session.
@@ -73,6 +75,7 @@ struct Loaded {
 /// `embed_tokens` rather than a sampling parameter.
 struct ChatterboxLoaded {
     engine: Chatterbox,
+    model: String,
     voice: String,
     language: String,
     exaggeration: String,
@@ -218,7 +221,7 @@ impl Spoken {
             Engine::Kokoro => {
                 let dir =
                     engine_paths::kokoro_dir().ok_or("cannot locate the app support directory")?;
-                if !engine_paths::kokoro_installed() {
+                if !engine_paths::kokoro_installed_variant(&settings.kokoro.quant) {
                     return Err(
                         "Kokoro's files are not installed. Use Download in its engine card first."
                             .to_string(),
@@ -235,7 +238,7 @@ impl Spoken {
                 // weights are on disk. A user who picked Japanese should be told that, not
                 // told to download 1.5 GB that would not help.
                 chatterbox_language_guard(&settings.chatterbox.voice)?;
-                if !engine_paths::chatterbox_installed() {
+                if !engine_paths::chatterbox_installed_variant(&settings.chatterbox.quant) {
                     return Err(
                         "Chatterbox's weights are not installed. Use Download in its engine card \
                          first."
@@ -456,13 +459,16 @@ impl Spoken {
             current.voice != voice
                 || current.language != language
                 || current.exaggeration != exaggeration_key
+                || current.model != settings.chatterbox.quant
         });
         if stale {
+            *guard = None;
             *guard = Some(ChatterboxLoaded {
                 voice,
                 language: language.clone(),
                 exaggeration: exaggeration_key,
-                engine: Chatterbox::load(dir, exaggeration)?,
+                engine: Chatterbox::load_variant(dir, exaggeration, &settings.chatterbox.quant)?,
+                model: settings.chatterbox.quant.clone(),
             });
         }
         let engine = &mut guard.as_mut().expect("just loaded").engine;
@@ -499,6 +505,7 @@ impl Spoken {
         text: &str,
     ) -> Result<(Vec<f32>, usize, Vec<char>), String> {
         let voice = settings.kokoro.voice.clone();
+        let model = crate::kokoro_models::get(&settings.kokoro.quant)?;
         // An espeak-backed voice has no front end in this repo to fall back on: its phonemes
         // exist only via espeak-ng, which is GPL-3.0 and therefore never bundled. If the
         // install has gone missing, say so plainly rather than synthesising from an English
@@ -519,8 +526,11 @@ impl Spoken {
         *self.keep_warm.lock().unwrap() = settings.kokoro.keep_warm;
 
         let mut guard = self.kokoro.lock().unwrap();
-        let stale = guard.as_ref().is_none_or(|loaded| loaded.voice != voice);
+        let stale = guard.as_ref().is_none_or(|loaded| loaded.voice != voice
+            || loaded.model != model.id || loaded.speed != settings.kokoro.speed);
         if stale {
+            // Release the previous graph before loading another, keeping peak memory down.
+            *guard = None;
             let voice_file = dir.join("voices").join(format!("{voice}.bin"));
             if !voice_file.is_file() {
                 return Err(format!(
@@ -528,12 +538,12 @@ impl Spoken {
                 ));
             }
             let engine = Kokoro::load(
-                &dir.join(engine_paths::KOKORO_MODEL_FILE),
+                &dir.join(model.file),
                 &dir.join(engine_paths::KOKORO_TOKENIZER_FILE),
                 &voice_file,
                 settings.kokoro.speed,
             )?;
-            *guard = Some(Loaded { engine, voice });
+            *guard = Some(Loaded { engine, voice, model: model.id.to_string(), speed: settings.kokoro.speed });
         }
         let loaded = guard.as_mut().expect("just loaded");
         let (samples, dropped) = loaded.engine.synthesize(&phonemes)?;

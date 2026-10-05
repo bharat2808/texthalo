@@ -192,3 +192,33 @@ fn a_selection_becomes_audible_speech() {
     println!("\nwav       {}", out.display());
     println!("check it: whisper-cli -m ~/.cache/whisper/ggml-base.en.bin -otxt {out:?}");
 }
+
+#[test]
+#[ignore = "downloads all Kokoro variants into a dedicated test install"]
+fn selected_model_sizes_download_and_render_with_one_cached_voice() {
+    let support = support_dir();
+    let root = engine_paths::kokoro_dir().expect("models directory");
+    let spoken = Spoken::new();
+    let mut settings = kokoro_settings("af_heart");
+    settings.kokoro.keep_warm = true;
+    let text = "Choose the voice model that works best on your computer.";
+    let mut previous_audio = None;
+    for quant in ["fp32", "fp16", "q8f16", "quantized", "fp32"] {
+        kiegen_lib::download::install_kokoro_variant_into(&root, quant, &mut |_, _, _| {})
+            .unwrap_or_else(|error| panic!("install {quant}: {error}"));
+        assert!(engine_paths::kokoro_installed_variant(quant));
+        settings.kokoro.quant = quant.into();
+        let path = support.join("cache").join(format!("model-{quant}.wav"));
+        let report = spoken.render(&settings, text, &path)
+            .unwrap_or_else(|error| panic!("render {quant}: {error}"));
+        let (_, samples) = read_wav(&path);
+        assert!(report.seconds > 1.0, "{quant} must produce speech-length audio");
+        assert!(samples.iter().any(|sample| sample.abs() > 0.02), "{quant} must be audible");
+        let audio = std::fs::read(&path).unwrap();
+        if let Some(previous) = previous_audio {
+            assert_ne!(audio, previous, "{quant} must not reuse the previous graph's cached output");
+        }
+        previous_audio = Some(audio);
+        println!("{quant}: {}", report.summary());
+    }
+}

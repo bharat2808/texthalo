@@ -105,6 +105,8 @@ impl Default for KokoroSettings {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ChatterboxSettings {
+    /// Language model precision: q4f16 (default), q4, fp16, or fp32.
+    pub quant: String,
     /// A language code from Chatterbox Multilingual's own table — `en`, `ja`, `zh`… The
     /// model is a zero-shot voice *cloner*, so the speaker comes from `ref_audio` rather
     /// than from a speaker name, and the one thing the user picks here is which of its 23
@@ -129,10 +131,11 @@ impl Default for ChatterboxSettings {
             // English, because that is what a fresh install can be read in and who the
             // default voice clip speaks.
             voice: "en".to_string(),
+            quant: "q4f16".into(),
             exaggeration: 0.1,
             cfg_weight: 0.5,
             ref_audio: None,
-            keep_warm: false,
+            keep_warm: true,
         }
     }
 }
@@ -369,8 +372,20 @@ mod tests {
         assert_eq!(settings.chatterbox.exaggeration, 0.7);
         // Untouched neighbours keep their measured-good values.
         assert_eq!(settings.chatterbox.cfg_weight, 0.5);
+        assert_eq!(settings.chatterbox.quant, "q4f16");
         assert_eq!(settings.chatterbox.voice, "en");
         assert_eq!(settings.kokoro.voice, "af_heart");
+    }
+
+    #[test]
+    fn chatterbox_model_selection_round_trips() {
+        for model in crate::chatterbox_models::MODELS {
+            let mut settings = Settings::default();
+            settings.chatterbox.quant = model.id.into();
+            let saved = serde_json::to_string(&settings).unwrap();
+            let restored: Settings = serde_json::from_str(&saved).unwrap();
+            assert_eq!(restored.chatterbox.quant, model.id);
+        }
     }
 
     #[test]
@@ -402,6 +417,7 @@ mod tests {
         // the library's own signature sets and therefore not a field to guess at.
         assert_eq!(settings.chatterbox.exaggeration, 0.1);
         assert_eq!(settings.chatterbox.cfg_weight, 0.5);
+        assert_eq!(settings.chatterbox.quant, "q4f16");
     }
 
     #[test]

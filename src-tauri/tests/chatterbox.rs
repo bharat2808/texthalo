@@ -388,3 +388,26 @@ fn an_unnormalised_language_refuses_without_touching_the_weights() {
         );
     }
 }
+
+#[test]
+#[ignore = "downloads Chatterbox language-model variants; requires shared models in KIEGEN_MODELS_DIR"]
+fn selected_language_models_download_and_render() {
+    let support = PathBuf::from(std::env::var("KIEGEN_MODELS_DIR").expect("dedicated test support directory"));
+    let root = kiegen_lib::engine_paths::chatterbox_dir().unwrap();
+    let spoken = Spoken::new();
+    let mut settings = Settings { engine: Engine::Chatterbox, ..Default::default() };
+    settings.chatterbox.keep_warm = true;
+    for quant in ["q4f16", "q4", "fp16", "fp32", "q4f16"] {
+        kiegen_lib::download::install_chatterbox_variant_into(&root, quant, &mut |_, _, _| {})
+            .unwrap_or_else(|error| panic!("install {quant}: {error}"));
+        assert!(kiegen_lib::engine_paths::chatterbox_installed_variant(quant));
+        settings.chatterbox.quant = quant.into();
+        let path = support.join("cache").join(format!("chatterbox-{quant}.wav"));
+        let report = spoken.render(&settings, "Hello there.", &path)
+            .unwrap_or_else(|error| panic!("render {quant}: {error}"));
+        let (_, samples) = read_wav(&path);
+        assert!(report.seconds > 0.2);
+        assert!(samples.iter().any(|sample| sample.abs() > 0.02));
+        println!("{quant}: {}", report.summary());
+    }
+}

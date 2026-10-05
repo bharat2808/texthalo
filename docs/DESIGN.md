@@ -497,3 +497,40 @@ Explicitly *not* in v0: history, streaming word-highlight, per-app shortcuts, th
 2. ~~English-only for v1, or the full 9 languages?~~ **Decided: English only for v1.** Mandarin/Japanese remain reachable later; the other five (Spanish, French, Hindi, Italian, Portuguese) use an optional separately installed espeak-ng runtime. **Partly superseded:** a second engine — Chatterbox Multilingual — now offers 23 languages, none of them through espeak, so the "which languages" question is answered twice over: Kokoro's 9 codes, and Chatterbox's 23 for everything Kokoro cannot reach without GPL code (§5).
 3. Does the audio **play** and/or get **written to a file** by default? "Speak" vs "Speak to file" as separate chords is the plan.
 4. Should the user be able to configure **per-app** shortcuts/voices, or is one global chord enough for v1?
+
+### Choosing a local Kokoro model
+
+Voices → Advanced voice settings has a model-size dropdown: FP32 (326 MB), FP16
+(163 MB), Q8F16 (86 MB), and INT8 (92 MB). FP32 remains the default. Each option
+reports whether it is installed; selecting a missing variant enables a download for
+that variant. Tokenizer, dictionaries, and voice tables are shared across variants.
+Existing FP32 installs are detected without another download. A partial graph does
+not count as installed. New graphs are verified against pinned SHA-256 digests.
+
+Playback uses the selected graph. Changing models releases the previous cached
+session before loading its replacement. Q8F16 and INT8 are compact choices for
+computers with limited memory, with potentially slower speech generation. FP16
+reduces download size but does not necessarily reduce RAM usage (see the benchmark
+above). Keeping a voice in memory uses more memory but makes playback start faster.
+
+The optional real-runtime check downloads variants into a dedicated test install
+and switches them through the same speech renderer used by the app:
+
+```sh
+KIEGEN_MODELS_DIR=/path/to/scratch-support cargo test --manifest-path src-tauri/Cargo.toml \
+  --test speak selected_model_sizes_download_and_render_with_one_cached_voice -- --ignored --nocapture
+```
+
+Chatterbox uses the same Advanced dropdown for its language model: Q4F16 (default),
+Q4, FP16, or FP32. Displayed sizes include all shared speech graphs; the Download
+button reports only missing files. The encoder, decoder, and token embedding stay
+full precision because the pinned export provides no smaller alternatives. Graphs
+and their external weight sidecars are selected and verified as pairs. Existing
+Q4F16 installations remain usable. Changing models evicts the prior session.
+
+To check actual Chatterbox download and speech generation across all choices:
+
+```sh
+KIEGEN_MODELS_DIR=/path/to/scratch-support cargo test --manifest-path src-tauri/Cargo.toml \
+  --test chatterbox selected_language_models_download_and_render -- --ignored --nocapture
+```

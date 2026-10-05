@@ -46,6 +46,7 @@ const HF_BASE: &str = "https://huggingface.co";
 const KOKORO_REPO: &str = "onnx-community/Kokoro-82M-v1.0-ONNX";
 const KOKORO_COMMIT: &str = "1939ad2a8e416c0acfeecc08a694d14ef25f2231";
 
+#[cfg(test)]
 const KOKORO_GRAPH_BYTES: u64 = 325_532_232;
 const KOKORO_TOKENIZER_BYTES: u64 = 3_497;
 
@@ -139,6 +140,11 @@ pub fn kokoro_plan() -> Result<Vec<Entry>, String> {
 /// tables belong in the download, and a test that could only ever observe one of those
 /// states would let a regression in the other one ship.
 pub fn kokoro_plan_with(espeak_ready: bool) -> Result<Vec<Entry>, String> {
+    kokoro_plan_for("fp32", espeak_ready)
+}
+
+pub fn kokoro_plan_for(quant: &str, espeak_ready: bool) -> Result<Vec<Entry>, String> {
+    let model = crate::kokoro_models::get(quant)?;
     let voices: Vec<String> = crate::engines::kokoro_voices(espeak_ready)
         .into_iter()
         .filter(|voice| voice.unavailable.is_none())
@@ -177,10 +183,10 @@ pub fn kokoro_plan_with(espeak_ready: bool) -> Result<Vec<Entry>, String> {
     }
 
     plan.push(Entry {
-        path: "onnx/model.onnx".to_string(),
-        bytes: KOKORO_GRAPH_BYTES,
-        url: format!("{HF_BASE}/{KOKORO_REPO}/resolve/{KOKORO_COMMIT}/onnx/model.onnx"),
-        sha256: None,
+        path: model.file.to_string(),
+        bytes: model.bytes,
+        url: format!("{HF_BASE}/{KOKORO_REPO}/resolve/{KOKORO_COMMIT}/{}", model.file),
+        sha256: Some(model.sha256.to_string()),
     });
 
     Ok(plan)
@@ -198,7 +204,11 @@ pub fn kokoro_bytes() -> u64 {
 /// becomes available, so this also detects language voice tables that were not included in
 /// an earlier install. A missing model directory means the whole plan is still needed.
 pub fn kokoro_missing_bytes() -> u64 {
-    let Ok(plan) = kokoro_plan() else {
+    kokoro_missing_bytes_for("fp32")
+}
+
+pub fn kokoro_missing_bytes_for(quant: &str) -> u64 {
+    let Ok(plan) = kokoro_plan_for(quant, crate::engine_paths::espeak_ng().is_some()) else {
         return 0;
     };
     let dir = crate::engine_paths::kokoro_dir();
@@ -222,17 +232,34 @@ fn missing_bytes_in(plan: &[Entry], dir: Option<&Path>) -> u64 {
 /// required — the only thing that varies is which language code the user picked, and that is
 /// an argument to synthesis rather than a file to fetch.
 pub fn chatterbox_plan() -> Vec<Entry> {
-    CHATTERBOX_FILES
-        .iter()
+    chatterbox_plan_for("q4f16").expect("default Chatterbox model")
+}
+
+pub fn chatterbox_plan_for(quant: &str) -> Result<Vec<Entry>, String> {
+    let model = crate::chatterbox_models::get(quant)?;
+    let mut plan: Vec<Entry> = CHATTERBOX_FILES.iter()
+        .filter(|(path, _)| !path.starts_with("onnx/language_model"))
         .map(|(path, bytes)| Entry {
-            path: (*path).to_string(),
-            bytes: *bytes,
+            path: (*path).into(), bytes: *bytes,
             url: format!("{HF_BASE}/{CHATTERBOX_REPO}/resolve/{CHATTERBOX_COMMIT}/{path}"),
-            // HuggingFace reports a content sha256 in `x-linked-etag` for files this size,
-            // and `fetch` verifies against that when the plan carries none of its own.
             sha256: None,
-        })
-        .collect()
+        }).collect();
+    // Keep the language graph and its sidecar together; shared graphs are reused.
+    for (index, (path, bytes, hash)) in [
+        (model.graph, model.graph_bytes, model.graph_sha256),
+        (model.weights, model.weights_bytes, model.weights_sha256),
+    ].into_iter().enumerate() {
+        plan.insert(5 + index, Entry { path: path.into(), bytes,
+            url: format!("{HF_BASE}/{CHATTERBOX_REPO}/resolve/{CHATTERBOX_COMMIT}/{path}"),
+            sha256: Some(hash.into()) });
+    }
+    Ok(plan)
+}
+
+pub fn chatterbox_missing_bytes_for(quant: &str) -> u64 {
+    let Ok(plan) = chatterbox_plan_for(quant) else { return 0; };
+    let Some(dir) = crate::engine_paths::chatterbox_dir() else { return plan.iter().map(|entry| entry.bytes).sum(); };
+    missing_bytes_in(&plan, Some(&dir))
 }
 
 /// Total bytes `chatterbox_plan` will fetch, derived the same way Kokoro's figure is.
@@ -531,7 +558,15 @@ pub fn install_kokoro_into(
     dir: &Path,
     on_progress: &mut dyn FnMut(&str, u64, u64),
 ) -> Result<(), String> {
-    let plan = kokoro_plan()?;
+    install_kokoro_variant_into(dir, "fp32", on_progress)
+}
+
+pub fn install_kokoro_variant_into(
+    dir: &Path,
+    quant: &str,
+    on_progress: &mut dyn FnMut(&str, u64, u64),
+) -> Result<(), String> {
+    let plan = kokoro_plan_for(quant, crate::engine_paths::espeak_ng().is_some())?;
     install_plan_into(&plan, dir, on_progress)
 }
 
@@ -544,7 +579,13 @@ pub fn install_chatterbox_into(
     dir: &Path,
     on_progress: &mut dyn FnMut(&str, u64, u64),
 ) -> Result<(), String> {
-    let plan = chatterbox_plan();
+    install_chatterbox_variant_into(dir, "q4f16", on_progress)
+}
+
+pub fn install_chatterbox_variant_into(
+    dir: &Path, quant: &str, on_progress: &mut dyn FnMut(&str, u64, u64),
+) -> Result<(), String> {
+    let plan = chatterbox_plan_for(quant)?;
     install_plan_into(&plan, dir, on_progress)
 }
 
@@ -728,7 +769,7 @@ mod tests {
             );
 
             // The dictionaries are part of the install: an engine without them cannot read a
-            // word. They are also the only entries that carry their own hash, because the raw
+            // word. Their hashes are pinned alongside the model graph because the raw
             // host they come from advertises no content digest.
             let hashed: Vec<&str> = plan
                 .iter()
@@ -737,8 +778,8 @@ mod tests {
                 .collect();
             assert_eq!(
                 hashed,
-                vec!["lexicon/us_gold.json", "lexicon/us_silver.json"],
-                "the dictionaries must be in the plan, and they are the entries pinned by hash"
+                vec!["lexicon/us_gold.json", "lexicon/us_silver.json", "onnx/model.onnx"],
+                "the dictionaries and graph must be pinned by hash"
             );
 
             // Cheap-first ordering: the graph is 325 MB of the 340 MB, so nothing else should
@@ -932,4 +973,53 @@ mod tests {
         assert_eq!(chatterbox_bytes(), total);
         assert_eq!(chatterbox_plan().len(), CHATTERBOX_FILES.len());
     }
+    #[test]
+    fn variant_downloads_select_one_graph_and_reuse_shared_files() {
+        let dir = std::env::temp_dir().join(format!("kokoro-variants-{}", uuid::Uuid::new_v4()));
+        let original = kokoro_plan_for("fp32", false).unwrap();
+        for entry in &original {
+            let path = dir.join(&entry.path);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            File::create(path).unwrap().set_len(entry.bytes).unwrap();
+        }
+        for (id, path, bytes) in [
+            ("fp32", "onnx/model.onnx", 325_532_232),
+            ("fp16", "onnx/model_fp16.onnx", 163_234_740),
+            ("q8f16", "onnx/model_q8f16.onnx", 86_033_585),
+            ("quantized", "onnx/model_quantized.onnx", 92_361_116),
+        ] {
+            let plan = kokoro_plan_for(id, false).unwrap();
+            let graphs: Vec<_> = plan.iter().filter(|e| e.path.ends_with(".onnx")).collect();
+            assert_eq!(graphs.len(), 1);
+            assert_eq!(graphs[0].path, path);
+            assert_eq!(graphs[0].bytes, bytes);
+            assert_eq!(graphs[0].sha256.as_ref().unwrap().len(), 64);
+            assert!(graphs[0].url.ends_with(path));
+            assert_eq!(missing_bytes_in(&plan, Some(&dir)), if id == "fp32" { 0 } else { bytes });
+        }
+        assert!(kokoro_plan_for("../../custom", false).is_err());
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn chatterbox_variants_pair_graph_weights_and_reuse_shared_files() {
+        let dir = std::env::temp_dir().join(format!("chatterbox-variants-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for entry in chatterbox_plan() {
+            let path = dir.join(entry.path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::File::create(path).unwrap().set_len(entry.bytes).unwrap();
+        }
+        for model in crate::chatterbox_models::MODELS {
+            let plan = chatterbox_plan_for(model.id).unwrap();
+            let language: Vec<_> = plan.iter().filter(|entry| entry.path.contains("language_model")).collect();
+            assert_eq!(language.len(), 2);
+            assert!(language.iter().any(|entry| entry.path == model.graph && entry.sha256.as_deref() == Some(model.graph_sha256)));
+            assert!(language.iter().any(|entry| entry.path == model.weights && entry.sha256.as_deref() == Some(model.weights_sha256)));
+            assert_eq!(missing_bytes_in(&plan, Some(&dir)), if model.id == "q4f16" { 0 } else { model.graph_bytes + model.weights_bytes });
+        }
+        assert!(chatterbox_plan_for("../model").is_err());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
 }

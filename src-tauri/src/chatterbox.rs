@@ -149,10 +149,15 @@ impl Chatterbox {
     /// `dir` is the engine's own directory (`models/chatterbox`): the graphs are in `onnx/`
     /// and the text front end at the root, matching the download plan exactly.
     pub fn load(dir: &Path, exaggeration: f32) -> Result<Self, String> {
+        Self::load_variant(dir, exaggeration, "q4f16")
+    }
+
+    pub fn load_variant(dir: &Path, exaggeration: f32, quant: &str) -> Result<Self, String> {
+        let model = crate::chatterbox_models::get(quant)?;
         let t = Instant::now();
         let encoder = load_session(&dir.join(crate::engine_paths::CHATTERBOX_ENCODER_FILE))?;
         let embed = load_session(&dir.join(crate::engine_paths::CHATTERBOX_EMBED_FILE))?;
-        let lm = load_session(&dir.join(crate::engine_paths::CHATTERBOX_LM_FILE))?;
+        let lm = load_session(&dir.join(model.graph))?;
         let decoder = load_session(&dir.join(crate::engine_paths::CHATTERBOX_DECODER_FILE))?;
         eprintln!(
             "[TextHalo] chatterbox: 4 graphs in {:.2}s",
@@ -208,8 +213,7 @@ impl Chatterbox {
         }
 
         let kv_f16 = f16_cache(&lm).ok_or_else(|| {
-            "the language model does not declare a float16 KV cache; this build assumes the \
-             q4f16 export"
+            "the language model does not declare a supported KV cache"
                 .to_string()
         })?;
 
