@@ -1,7 +1,7 @@
 {
   "name": "texthalo",
   "private": true,
-  "version": "0.1.13",
+  "version": "0.1.14",
   "license": "SEE LICENSE IN LICENSE-TEXTHALO.md",
   "type": "module",
   "scripts": {
