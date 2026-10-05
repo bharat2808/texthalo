@@ -92,6 +92,19 @@ npm ci
 npm run tauri dev
 ```
 
+If `whisper-rs-sys` fails with `ld: tapi error: malformed file` and `unknown
+architecture` in a Command Line Tools SDK, select the SDK bundled with the active
+toolchain before starting the build:
+
+```bash
+export SDKROOT="$(xcrun --sdk macosx --show-sdk-path)"
+npm run tauri dev
+```
+
+This resolves a mismatch between the selected Xcode compiler/linker and a newer
+SDK installed separately with Command Line Tools. When sourcing `.env.local`, set
+`SDKROOT` after sourcing it, or save the resolved SDK path there.
+
 To build the macOS application:
 
 ```bash
