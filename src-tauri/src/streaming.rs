@@ -103,6 +103,31 @@ fn split_limit(
     out
 }
 
+/// Complete sentences for durable audiobook commits. No phrase/character split:
+/// incomplete text remains held until the next page (or a verified end of book).
+pub(crate) fn book_sentences(text: &str, finished: bool) -> (Vec<String>, String) {
+    let probe = if finished {
+        text.to_owned()
+    } else {
+        format!("{text} sentinel")
+    };
+    let mut used = 0;
+    let mut ready = Vec::new();
+    for sentence in split_limit(&probe, usize::MAX, usize::MAX, true, usize::MAX) {
+        let end = used + sentence.len();
+        if end > text.len() {
+            if end == text.len() + 1 && sentence.ends_with(' ') {
+                ready.push(text[used..].to_owned());
+                used = text.len();
+            }
+            break;
+        }
+        used = end;
+        ready.push(sentence);
+    }
+    (ready, text[used..].to_owned())
+}
+
 #[cfg(test)]
 pub fn run<T: Send, R, P, C>(
     chunks: Vec<String>,

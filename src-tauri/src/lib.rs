@@ -20,6 +20,8 @@ pub mod espeak;
 pub mod g2p;
 mod generation_history;
 mod history;
+mod reader_bridge;
+mod audiobooks;
 mod hosted;
 mod hosted_assistant;
 mod hosted_input;
@@ -1496,6 +1498,11 @@ pub fn run() {
                 playback_overlay: Mutex::new((false, false)),
                 playback_hover: Mutex::new(false),
             });
+            app.manage(reader_bridge::ReaderBridge::start().unwrap_or_else(|error| {
+                eprintln!("[TextHalo] reader relay unavailable: {error}");
+                reader_bridge::ReaderBridge::disabled()
+            }));
+            app.manage(audiobooks::Audiobooks::setup(&handle));
             app.manage(update_safety::UpdateRecovery::default());
 
             if let Err(error) = shortcuts::apply(&handle) {
@@ -1546,6 +1553,13 @@ pub fn run() {
             speak_selection_now,
             speak_text,
             preview_voice,
+            audiobooks::audiobook_state,
+            audiobooks::audiobook_generate,
+            audiobooks::audiobook_play,
+            audiobooks::audiobook_dismiss,
+            audiobooks::audiobook_stop_generation,
+            reader_bridge::reader_bridge_status,
+            reader_bridge::reader_bridge_command,
             get_audio_history,
             delete_audio_history,
             clear_audio_history,

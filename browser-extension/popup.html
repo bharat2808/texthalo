@@ -1,0 +1,46 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>TextHalo Reader</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header>
+      <img src="icons/32.png" width="24" height="24" alt="" /><strong
+        >TextHalo Reader</strong
+      ><span>Browser relay</span>
+    </header>
+    <div class="support">
+      <span>Supported website</span><strong id="supported">Checking…</strong>
+    </div>
+    <section id="book" hidden>
+      <div class="platform">
+        <svg
+          role="img"
+          aria-label="Kindle"
+          width="32"
+          height="32"
+          viewBox="0 0 32 32"
+        >
+          <rect width="32" height="32" rx="8" fill="#f5a623" />
+          <path
+            d="M8 8v16m1-7 11-9m-9 8 11 8"
+            stroke="#222"
+            stroke-width="3"
+            fill="none"
+          /></svg
+        ><strong>Kindle</strong>
+      </div>
+      <h1 id="title"></h1>
+      <p id="position"></p>
+    </section>
+    <p id="status" role="status">Looking for an open book…</p>
+    <button id="connect" hidden>Enable page capture</button>
+    <footer>
+      Create, listen and manage your audiobooks in TextHalo. Page capture is
+      enabled for this tab when you click the extension.
+    </footer>
+    <script src="popup.js"></script>
+  </body>
+</html>

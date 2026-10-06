@@ -1,0 +1,41 @@
+{
+  "manifest_version": 3,
+  "name": "TextHalo Reader",
+  "version": "0.3.0",
+  "description": "Connect Kindle web pages to TextHalo for local reading, page capture and verified navigation.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAz9HNrm4hn8S2I0Y65dU/fQ01ZRW4flmjrhECwXFV1G0FCf0gcdtdW0lcxpZVpowQi+s7xv3coPCLhoPpo7x+3Vp4OK3pZRxNSjH7SfilbOGlqPMh8skyXDmtLEwzdMWr2zKgFTe1P7VmwQNSh5jO67VJyM8hUd1aibTtn+ZYrHmhlCPhxBn87jW/eYhUvropmzt+jCkJBqtHyayTWEoIGkEaMnWneSFnEjBKZb+DAsrr67Te94PpRr0eaHGuRN4o6ThUHeweqs/PjOoCHKo7TYNwb67k3uBEkTMqry1xz2YA/UI67ZHxBK8zI1NnR6YMViTm27bxK/YnGZhPg7VJaQIDAQAB",
+  "permissions": [
+    "activeTab",
+    "nativeMessaging"
+  ],
+  "host_permissions": [
+    "https://read.amazon.ca/*",
+    "https://read.amazon.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "TextHalo Reader"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://read.amazon.ca/*",
+        "https://read.amazon.com/*"
+      ],
+      "js": [
+        "kindle.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "icons": {
+    "16": "icons/16.png",
+    "32": "icons/32.png",
+    "48": "icons/48.png",
+    "128": "icons/128.png"
+  }
+}

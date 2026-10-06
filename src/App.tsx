@@ -7,6 +7,7 @@ import { createPortal } from "react-dom";
 import { serviceReadiness } from "./serviceReadiness";
 import TranscriptionHistory from "./TranscriptionHistory";
 import GenerationHistory from "./GenerationHistory";
+import Audiobooks from "./Audiobooks";
 import AssistantSettings, { PermissionsSettings, TranscriptionSettings, TaskReadiness, useAvailability, defaultAssistantPreferences, type AssistantPreferences } from "./AssistantSettings";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
@@ -179,7 +180,7 @@ type UiState = {
 type Phase = "idle" | "capturing" | "preparing" | "speaking" | "error";
 type Status = { phase: Phase; message?: string | null; chars?: number | null };
 
-type Tab = "home" | "general" | "voice" | "account" | "shortcuts" | "capture" | "history" | "permissions" | "transcription" | "assistant";
+type Tab = "reader" | "home" | "general" | "voice" | "account" | "shortcuts" | "capture" | "history" | "permissions" | "transcription" | "assistant";
 
 /* ── icons (16×16, currentColor) ───────────────────────────────────── */
 
@@ -1472,6 +1473,7 @@ function MainApp() {
     { id: "voice", title: t("Voices"), icon: Icon.speaker() },
     { id: "transcription", title: t("Dictate"), icon: Icon.textCursor() },
     { id: "assistant", title: t("Assistant"), icon: Icon.sparkles() },
+    { id: "reader", title: t("Audiobooks"), icon: Icon.speaker() },
     { id: "history", title: t("History"), icon: Icon.history() },
   ];
 
@@ -1602,6 +1604,7 @@ function MainApp() {
 
       <main className="pane">
         {inSettings ? <nav className="section-nav" aria-label={t("Settings")}>{settingsTabs.map((entry) => <button key={entry.id} className={tab === entry.id ? "active" : ""} aria-current={tab === entry.id ? "page" : undefined} onClick={() => setTab(entry.id)}>{entry.title}</button>)}</nav> : null}
+        {tab === "reader" ? <Audiobooks /> : null}
         {tab === "home" ? <div className="pane-inner home-pane">
           <header><h1 className="pane-title">{t("Home")}</h1><p className="home-intro">{t("Listen. Dictate. Get a little help.")}</p></header>
           <section className="listen-hero" aria-labelledby="listen-title">

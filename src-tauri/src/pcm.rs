@@ -7,9 +7,70 @@ pub const SAMPLE_RATE: usize = 24_000;
 const BUFFER_FRAMES: usize = 512;
 const BUFFER_COUNT: usize = 3;
 
+// Audiobooks use their committed PCM file directly. Mapping avoids copying an
+// entire multi-hour recording into the speech player's retained sample vector.
+struct DiskSamples {
+    address: *mut c_void,
+    bytes: usize,
+    samples: usize,
+}
+impl DiskSamples {
+    fn open(path: &std::path::Path, samples: u64) -> Result<Self, String> {
+        use std::os::fd::AsRawFd;
+        let count = usize::try_from(samples).map_err(|_| "Audiobook exceeds address space")?;
+        let bytes = count
+            .checked_mul(2)
+            .and_then(|n| n.checked_add(44))
+            .ok_or("Audiobook exceeds address space")?;
+        let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+        if file.metadata().map_err(|e| e.to_string())?.len() < bytes as u64 {
+            return Err("Committed audio is unavailable".into());
+        }
+        let address = unsafe {
+            libc::mmap(
+                ptr::null_mut(),
+                bytes,
+                libc::PROT_READ,
+                libc::MAP_SHARED,
+                file.as_raw_fd(),
+                0,
+            )
+        };
+        if address == libc::MAP_FAILED {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+        Ok(Self {
+            address,
+            bytes,
+            samples: count,
+        })
+    }
+    fn copy(&self, start: usize, output: &mut [f32]) {
+        // The service never truncates a committed prefix while its player owns it.
+        // The enclosing SampleBuffer mutex serializes remapping and callbacks.
+        let bytes = unsafe {
+            std::slice::from_raw_parts(
+                (self.address as *const u8).add(44 + start * 2),
+                output.len() * 2,
+            )
+        };
+        for (sample, pcm) in output.iter_mut().zip(bytes.chunks_exact(2)) {
+            *sample = i16::from_le_bytes([pcm[0], pcm[1]]) as f32 / 32768.0;
+        }
+    }
+}
+impl Drop for DiskSamples {
+    fn drop(&mut self) {
+        unsafe {
+            libc::munmap(self.address, self.bytes);
+        }
+    }
+}
+
 #[derive(Default)]
 struct SampleBuffer {
     samples: Vec<f32>,
+    disk: Option<DiskSamples>,
     cursor: usize,
     paused: bool,
     speed: f32,
@@ -23,15 +84,21 @@ struct SampleBuffer {
     played_audio_bytes: u64,
 }
 impl SampleBuffer {
+    fn len(&self) -> usize {
+        self.disk.as_ref().map_or(self.samples.len(), |d| d.samples)
+    }
     fn read(&mut self, output: &mut [f32]) -> usize {
         if self.cancelled {
             self.samples.clear();
+            self.disk = None;
             return 0;
         }
-        let copied = output
-            .len()
-            .min(self.samples.len().saturating_sub(self.cursor));
-        output[..copied].copy_from_slice(&self.samples[self.cursor..self.cursor + copied]);
+        let copied = output.len().min(self.len().saturating_sub(self.cursor));
+        if let Some(disk) = &self.disk {
+            disk.copy(self.cursor, &mut output[..copied]);
+        } else {
+            output[..copied].copy_from_slice(&self.samples[self.cursor..self.cursor + copied]);
+        }
         self.cursor += copied;
         // Hosted acknowledgements use a monotonic high-water mark, including after rewind.
         self.played_audio_bytes = self.played_audio_bytes.max(self.cursor as u64 * 2);
@@ -228,9 +295,24 @@ impl Player {
         }
     }
 
+    pub(crate) fn update_file(
+        &self,
+        path: &std::path::Path,
+        samples: u64,
+        last: bool,
+    ) -> Result<(), String> {
+        let disk = DiskSamples::open(path, samples)?;
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        if !state.cancelled {
+            state.disk = Some(disk);
+            state.finished = last;
+        }
+        Ok(())
+    }
+
     pub fn buffered_seconds(&self) -> f64 {
         let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
-        state.samples.len().saturating_sub(state.cursor) as f64 / SAMPLE_RATE as f64
+        state.len().saturating_sub(state.cursor) as f64 / SAMPLE_RATE as f64
     }
 
     pub fn played_audio_bytes(&self) -> u64 {
@@ -305,13 +387,13 @@ impl Player {
         let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         PlaybackStatus {
             position: state.cursor as f64 / SAMPLE_RATE as f64,
-            buffered: state.samples.len() as f64 / SAMPLE_RATE as f64,
+            buffered: state.len() as f64 / SAMPLE_RATE as f64,
             duration: state
                 .finished
-                .then_some(state.samples.len() as f64 / SAMPLE_RATE as f64),
+                .then_some(state.len() as f64 / SAMPLE_RATE as f64),
             paused: state.paused,
             speed: state.speed,
-            available: !state.cancelled && !state.samples.is_empty(),
+            available: !state.cancelled && state.len() > 0,
         }
     }
 
@@ -364,7 +446,7 @@ impl Player {
         if state.cancelled {
             return Err("This reading has stopped.".into());
         }
-        state.cursor = ((seconds.max(0.0) * SAMPLE_RATE as f64) as usize).min(state.samples.len());
+        state.cursor = ((seconds.max(0.0) * SAMPLE_RATE as f64) as usize).min(state.len());
         state.draining = false;
         let mut enqueued = 0;
         for buffer in self.buffers {
@@ -402,6 +484,7 @@ impl Player {
             let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
             state.cancelled = true;
             state.samples.clear();
+            state.disk = None;
         }
         unsafe {
             AudioQueueStop(self.queue, 1);
@@ -421,6 +504,29 @@ impl Drop for Player {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn disk_playback_exposes_only_the_committed_prefix_and_can_grow() {
+        let path = std::env::temp_dir().join(format!("texthalo-pcm-{}.wav", uuid::Uuid::new_v4()));
+        crate::kokoro::write_wav(&path, &[0.25, 0.5, 0.75], SAMPLE_RATE as u32).unwrap();
+        let mut buffer = SampleBuffer {
+            disk: Some(DiskSamples::open(&path, 2).unwrap()),
+            ..Default::default()
+        };
+        let mut out = [0.0; 3];
+        assert_eq!(buffer.read(&mut out), 3); // The uncommitted suffix remains silence.
+        assert!((out[0] - 0.25).abs() < 0.001);
+        assert!((out[1] - 0.5).abs() < 0.001);
+        assert_eq!(out[2], 0.0);
+        assert_eq!(buffer.cursor, 2);
+        buffer.disk = Some(DiskSamples::open(&path, 3).unwrap());
+        buffer.finished = true;
+        assert_eq!(buffer.read(&mut out), 1);
+        assert!((out[0] - 0.75).abs() < 0.001);
+        assert!(buffer.samples.is_empty());
+        assert!(DiskSamples::open(&path, 4).is_err());
+        drop(buffer);
+        std::fs::remove_file(path).unwrap();
+    }
     #[test]
     fn samples_cross_generation_boundaries_without_gaps() {
         let mut buffer = SampleBuffer::default();

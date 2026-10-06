@@ -1,0 +1,301 @@
+import { useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import {
+  useAudiobooks,
+  audioClock,
+  listenBook,
+  generateBook,
+} from "./useAudiobooks";
+import "./Audiobooks.css";
+export default function Audiobooks() {
+  const { state, error, action } = useAudiobooks();
+  const [selected, setSelected] = useState<string | null>(null),
+    [busy, setBusy] = useState(false);
+  const book = state.books.find((b) => b.id === selected);
+  const playing =
+    state.playback && state.playback.bookId === book?.id
+      ? state.playback.audio
+      : null;
+  const run = (fn: () => Promise<unknown>) => {
+    if (busy) return;
+    setBusy(true);
+    void action(fn).finally(() => setBusy(false));
+  };
+  const open = state.tray;
+  return (
+    <section className="audiobooks">
+      <div className="audiobook-header">
+        <div>
+          <span className="audiobook-eyebrow">YOUR LISTENING LIBRARY</span>
+          <h1>Audiobooks</h1>
+          <p>Your books, ready to pick up where you left off.</p>
+        </div>
+      </div>
+      {error && (
+        <p className="audiobook-error" role="alert">
+          {error}
+        </p>
+      )}
+      {open && (
+        <div className="audiobook-detected">
+          <div className="kindle-mark" aria-label="Kindle">
+            k
+          </div>
+          <div>
+            <span>OPEN IN KINDLE · {open.reader.progress}</span>
+            <strong>{open.reader.title || "Kindle book"}</strong>
+          </div>
+          <button
+            disabled={busy || (!!state.generating && !open.book?.generated)}
+            onClick={() =>
+              run(async () => {
+                if (open.book?.generated) {
+                  await listenBook(open.book.id);
+                } else {
+                  const id = await generateBook(open.book?.id);
+                  setSelected(id);
+                }
+              })
+            }
+          >
+            {open.book?.generated ? "Continue listening" : "Create audiobook"}
+          </button>
+        </div>
+      )}
+      {!book ? (
+        <>
+          {state.books.length === 0 ? (
+            <div className="audiobook-empty">
+              <div className="audiobook-empty-icon" aria-hidden="true">
+                ♫
+              </div>
+              <h2>A new way to enjoy your books</h2>
+              <p>
+                Open a book in Kindle for the web. TextHalo will offer to turn
+                its pages into audio and remember your place.
+              </p>
+              <p className="audiobook-hint">
+                Enable page capture in the TextHalo Reader extension once for
+                the tab, then continue here.
+              </p>
+            </div>
+          ) : (
+            <div className="audiobook-grid">
+              {state.books.map((b) => (
+                <button
+                  className="audiobook-tile"
+                  key={b.id}
+                  onClick={() => setSelected(b.id)}
+                >
+                  <div className="audiobook-cover" aria-hidden="true">
+                    <span>kindle</span>
+                    <strong>{b.title}</strong>
+                    <i>TextHalo Audiobooks</i>
+                  </div>
+                  <h2>{b.title}</h2>
+                  <p>
+                    {state.generating === b.id
+                      ? "Preparing audio…"
+                      : b.complete
+                        ? "Complete audiobook"
+                        : `${audioClock(b.seconds)} ready`}{" "}
+                    · {b.pages} pages
+                  </p>
+                  <progress
+                    aria-label="Listening progress"
+                    max={b.seconds || 1}
+                    value={b.position}
+                  />
+                  <span>
+                    {b.position > 0
+                      ? `Continue at ${audioClock(b.position)}`
+                      : "Ready to listen"}
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
+        </>
+      ) : (
+        <>
+          <button className="audiobook-back" onClick={() => setSelected(null)}>
+            ← All audiobooks
+          </button>
+          <div className="audiobook-detail">
+            <div className="audiobook-cover" aria-hidden="true">
+              <span>kindle</span>
+              <strong>{book.title}</strong>
+              <i>TextHalo Audiobooks</i>
+            </div>
+            <div className="audiobook-info">
+              <span className="audiobook-eyebrow">
+                KINDLE · {book.complete ? "COMPLETE" : "GROWING AUDIOBOOK"}
+              </span>
+              <h2>{book.title}</h2>
+              <p>
+                {audioClock(book.seconds)} of audio ready · {book.pages} pages ·{" "}
+                {book.generated} sentences
+              </p>
+              {book.message && (
+                <p className="audiobook-error" role="status">
+                  {book.message}
+                </p>
+              )}
+              <div className="audiobook-actions">
+                <button
+                  className="primary"
+                  disabled={busy || !book.generated}
+                  onClick={() =>
+                    run(() =>
+                      playing
+                        ? invoke("playback_control", {
+                            command: playing.paused ? "resume" : "pause",
+                          })
+                        : listenBook(book.id),
+                    )
+                  }
+                >
+                  {playing
+                    ? playing.paused
+                      ? "Resume"
+                      : "Pause"
+                    : book.position
+                      ? "Continue listening"
+                      : "Play"}
+                </button>
+                {playing && (
+                  <button onClick={() => run(() => invoke("stop_speaking"))}>
+                    Stop
+                  </button>
+                )}
+                <label>
+                  Speed{" "}
+                  <select
+                    disabled={!playing || busy}
+                    value={playing?.speed ?? book.speed}
+                    onChange={(e) =>
+                      run(() =>
+                        invoke("playback_control", {
+                          command: "speed",
+                          value: Number(e.target.value),
+                        }),
+                      )
+                    }
+                  >
+                    {[0.75, 1, 1.25, 1.5, 1.75, 2].map((s) => (
+                      <option key={s} value={s}>
+                        {s}×
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              <div className="audiobook-timeline">
+                <input
+                  aria-label="Audiobook playback position"
+                  type="range"
+                  min="0"
+                  max={book.seconds || 1}
+                  step="0.1"
+                  value={playing?.position ?? book.position}
+                  disabled={!book.generated || busy}
+                  onChange={(e) =>
+                    run(() =>
+                      playing
+                        ? invoke("playback_control", {
+                            command: "seek",
+                            value: Number(e.target.value),
+                          })
+                        : listenBook(book.id, Number(e.target.value)),
+                    )
+                  }
+                />
+                <div>
+                  <span>{audioClock(playing?.position ?? book.position)}</span>
+                  <span>
+                    {audioClock(book.seconds)}
+                    {book.complete ? "" : " buffered"}
+                  </span>
+                </div>
+              </div>
+              {state.generating === book.id ? (
+                <div className="audiobook-buffer">
+                  <span className="audiobook-pulse" />
+                  Preparing pages ahead of you
+                  <button
+                    onClick={() =>
+                      run(() => invoke("audiobook_stop_generation"))
+                    }
+                  >
+                    Stop preparing
+                  </button>
+                </div>
+              ) : (
+                !book.complete && (
+                  <div className="audiobook-actions">
+                    <button
+                      disabled={
+                        busy || !!state.generating || open?.book?.id !== book.id
+                      }
+                      onClick={() => run(() => generateBook(book.id))}
+                    >
+                      Buffer as I listen
+                    </button>
+                    <button
+                      disabled={
+                        busy ||
+                        !!state.generating ||
+                        open?.book?.id !== book.id ||
+                        !book.fromBeginning
+                      }
+                      title={
+                        book.fromBeginning
+                          ? "Generate every remaining page"
+                          : "A complete audiobook must be imported from the beginning of the book."
+                      }
+                      onClick={() => run(() => generateBook(book.id, true))}
+                    >
+                      Create complete audiobook
+                    </button>
+                  </div>
+                )
+              )}
+              {!book.fromBeginning && (
+                <p className="audiobook-hint">
+                  This recording starts at your imported page. To create a
+                  complete book, import it from the beginning.
+                </p>
+              )}
+            </div>
+          </div>
+          <div className="audiobook-chapters">
+            <h3>Checkpoints</h3>
+            <p>Chapter headings appear as their pages are captured.</p>
+            {book.checkpoints.map((c, i) => (
+              <button
+                key={`${c.sentence}-${i}`}
+                disabled={c.seconds === null || busy}
+                onClick={() => run(() => listenBook(book.id, c.seconds!))}
+              >
+                <span>{c.label}</span>
+                <small>
+                  {c.page} ·{" "}
+                  {c.seconds === null ? "Preparing" : audioClock(c.seconds)}
+                </small>
+                <span aria-hidden="true">▶</span>
+              </button>
+            ))}
+          </div>
+          {book.passage && (
+            <div className="audiobook-passage">
+              <span className="audiobook-eyebrow">
+                CURRENT SENTENCE · {book.passage.page}
+              </span>
+              <p>{book.passage.text}</p>
+            </div>
+          )}
+        </>
+      )}
+    </section>
+  );
+}

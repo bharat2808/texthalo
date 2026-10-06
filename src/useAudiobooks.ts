@@ -1,0 +1,96 @@
+import { useEffect, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
+export type Checkpoint = {
+  label: string;
+  sentence: number;
+  page: string;
+  seconds: number | null;
+};
+export type Audiobook = {
+  id: string;
+  key: string;
+  title: string;
+  platform: string;
+  pages: number;
+  generated: number;
+  seconds: number;
+  position: number;
+  speed: number;
+  complete: boolean;
+  fromBeginning: boolean;
+  message: string | null;
+  checkpoints: Checkpoint[];
+  passage: { text: string; page: string } | null;
+};
+export type Audio = {
+  position: number;
+  buffered: number;
+  duration: number | null;
+  paused: boolean;
+  speed: number;
+  available: boolean;
+};
+export type AudiobookState = {
+  books: Audiobook[];
+  tray: {
+    reader: { title: string; progress: string; bookId: string; url: string };
+    book: Audiobook | null;
+    generating: boolean;
+  } | null;
+  generating: string | null;
+  playback: { bookId: string; audio: Audio } | null;
+};
+const empty: AudiobookState = {
+  books: [],
+  tray: null,
+  generating: null,
+  playback: null,
+};
+export function useAudiobooks() {
+  const [state, setState] = useState(empty),
+    [error, setError] = useState(""),
+    [connectionError, setConnectionError] = useState("");
+  useEffect(() => {
+    let mounted = true,
+      polling = false;
+    const refresh = async () => {
+      if (polling) return;
+      polling = true;
+      try {
+        const next = await invoke<AudiobookState>("audiobook_state");
+        if (mounted) {
+          setState(next);
+          setConnectionError("");
+        }
+      } catch (e) {
+        if (mounted) setConnectionError(String(e));
+      } finally {
+        polling = false;
+      }
+    };
+    void refresh();
+    const timer = setInterval(() => void refresh(), 750);
+    return () => {
+      mounted = false;
+      clearInterval(timer);
+    };
+  }, []);
+  const action = async (fn: () => Promise<unknown>) => {
+    setError("");
+    try {
+      await fn();
+      setState(await invoke<AudiobookState>("audiobook_state"));
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+  return { state, error: error || connectionError, action };
+}
+export const audioClock = (seconds: number) =>
+  `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, "0")}`;
+export function listenBook(id: string, seconds?: number) {
+  return invoke("audiobook_play", { id, seconds: seconds ?? null });
+}
+export function generateBook(id?: string, full = false) {
+  return invoke<string>("audiobook_generate", { id: id ?? null, full });
+}
