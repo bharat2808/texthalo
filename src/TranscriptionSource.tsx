@@ -1,3 +1,4 @@
+import { t, message } from "./i18n";
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
@@ -51,40 +52,40 @@ export default function TranscriptionSource({ value, onChange, availability, war
   useEffect(() => { if (!download) setCanceling(false); }, [download]);
   const percent = download ? Math.min(100, Math.floor(download.received / download.total * 100)) : 0;
   return <>
-    <div className="row-stack" role="group" aria-label="Transcription source">
-      <SelectionRow selected={engine === "apple"} title="macOS speech recognition" subtitle="On this Mac · no download"
-        badge={availability.recognition === 3 ? "Ready" : "Not ready"}
+    <div className="row-stack" role="group" aria-label={t("Transcription source")}>
+      <SelectionRow selected={engine === "apple"} title={t("macOS speech recognition")} subtitle={t("On this Mac · no download")}
+        badge={availability.recognition === 3 ? t("Ready") : t("Not ready")}
         onSelect={() => selectSource("apple")} />
-      <SelectionRow selected={engine === "whisper"} title="Whisper" subtitle="On this Mac · free · multilingual"
-        badge={selected?.installed ? "Ready" : selected ? `Needs ${bytes(selected.bytes)}` : "Checking…"}
+      <SelectionRow selected={engine === "whisper"} title="Whisper" subtitle={t("On this Mac · free · multilingual")}
+        badge={selected?.installed ? t("Ready") : selected ? t("Needs {0}", [bytes(selected.bytes)]) : t("Checking…")}
         onSelect={() => selectSource("whisper")} />
     </div>
     {engine === "whisper" && <>
-      {selected && !selected.installed && <div className="note-line warning">{warningIcon}<span>Download {selected.name} to use Whisper.</span></div>}
+      {selected && !selected.installed && <div className="note-line warning">{warningIcon}<span>{t("Download")} {selected.name}  {t("to use Whisper.")}</span></div>}
       <div className="field">
-        <label className="field-label" htmlFor="whisper-model">Model size</label>
+        <label className="field-label" htmlFor="whisper-model">{t("Model size")}</label>
         <select id="whisper-model" value={value.whisper_model ?? "small"} disabled={!catalog || busy || !!download}
           onChange={event => onChange({ ...value, whisper_model: event.target.value, language: value.language.split(/[-_]/)[0] === "yue" && !event.target.value.startsWith("large-v3") ? "auto" : value.language })}>
-          {!catalog && <option value={value.whisper_model ?? "small"}>Loading models…</option>}
-          {catalog?.models.map(model => <option key={model.id} value={model.id}>{model.name}{model.id === "small" ? " (Recommended)" : ""} · {bytes(model.bytes)}{model.installed ? " · Downloaded" : ""}</option>)}
+          {!catalog && <option value={value.whisper_model ?? "small"}>{t("Loading models…")}</option>}
+          {catalog?.models.map(model => <option key={model.id} value={model.id}>{model.name}{model.id === "small" ? t(" (Recommended)") : ""} · {bytes(model.bytes)}{model.installed ? t(" · Downloaded") : ""}</option>)}
         </select>
-        <p className="card-note">Small balances speed and accuracy. Larger models need more memory and may take longer. Audio stays on this Mac. Also used by Assistant.</p>
+        <p className="card-note">{t("Small balances speed and accuracy. Larger models need more memory and may take longer. Audio stays on this Mac. Also used by Assistant.")}</p>
       </div>
       {(download || selected && !selected.installed) && <div className="field">
-        <span className="field-label">Model download</span>
+        <span className="field-label">{t("Model download")}</span>
         {download ? <>
-          <div className="progress"><div className="progress-bar" style={{ width: `${percent}%` }} role="progressbar" aria-label="Whisper model download" aria-valuenow={percent} aria-valuemin={0} aria-valuemax={100} /></div>
-          <span className="field-hint">{percent}% · {bytes(download.received)} of {bytes(download.total)}{percent === 100 ? " · Verifying…" : ""}</span>
+          <div className="progress"><div className="progress-bar" style={{ width: `${percent}%` }} role="progressbar" aria-label={t("Whisper model download")} aria-valuenow={percent} aria-valuemin={0} aria-valuemax={100} /></div>
+          <span className="field-hint">{percent}% · {bytes(download.received)}  {t("of")} {bytes(download.total)}{percent === 100 ? t(" · Verifying…") : ""}</span>
           <div className="inline"><button className="plain" disabled={canceling} onClick={() => {
             setCanceling(true); void invoke("whisper_cancel_download").catch(cause => { setError(String(cause)); setCanceling(false); });
-          }}>{canceling ? "Canceling…" : "Cancel download"}</button></div>
-        </> : <div className="inline"><button className="plain" disabled={!selected || busy} onClick={() => void command("whisper_download")}>{downloadIcon} {busy ? "Starting…" : `Download ${bytes(selected?.bytes ?? 0)}`}</button></div>}
+          }}>{canceling ? t("Canceling…") : t("Cancel download")}</button></div>
+        </> : <div className="inline"><button className="plain accent-action" disabled={!selected || busy} onClick={() => void command("whisper_download")}>{downloadIcon} {busy ? t("Starting…") : t("Download {0}", [bytes(selected?.bytes ?? 0)])}</button></div>}
       </div>}
-      {selected?.installed && <details className="disclosure"><summary>Advanced model settings</summary>
-        <p className="card-note">Whisper stays ready in memory between requests and unloads after five idle minutes.</p>
-        <div className="inline"><button className="plain" disabled={busy || !!download} onClick={() => void command("whisper_remove")}>Delete {selected.name} download</button></div>
+      {selected?.installed && <details className="disclosure"><summary>{t("Advanced model settings")}</summary>
+        <p className="card-note">{t("Whisper stays ready in memory between requests and unloads after five idle minutes.")}</p>
+        <div className="inline"><button className="plain accent-action" disabled={busy || !!download} onClick={() => void command("whisper_remove")}>{t("Delete")} {selected.name}  {t("download")}</button></div>
       </details>}
     </>}
-    {error || catalog?.error ? <div className="note-line error" role="alert">{warningIcon}<span>{error || catalog?.error}</span></div> : null}
+    {error || catalog?.error ? <div className="note-line error" role="alert">{warningIcon}<span>{message(error || catalog?.error || "")}</span></div> : null}
   </>;
 }

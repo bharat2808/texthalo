@@ -1,0 +1,2 @@
+"NSMicrophoneUsageDescription" = "TextHalo enregistre pendant que vous maintenez Dicter ou Assistant, puis traite votre voix sur ce Mac.";
+"NSSpeechRecognitionUsageDescription" = "TextHalo transcrit la dictée et les demandes de l’Assistant avec la reconnaissance vocale sur l’appareil.";

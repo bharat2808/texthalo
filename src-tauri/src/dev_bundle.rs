@@ -56,6 +56,21 @@ pub fn launch() -> Result<bool, Box<dyn std::error::Error>> {
         contents.join("Info.plist"),
         include_str!("../DevInfo.plist"),
     )?;
+    for (language, strings) in [
+        ("en", include_str!("../locales/en.lproj/InfoPlist.strings")),
+        (
+            "fr-CA",
+            include_str!("../locales/fr-CA.lproj/InfoPlist.strings"),
+        ),
+        (
+            "es-419",
+            include_str!("../locales/es-419.lproj/InfoPlist.strings"),
+        ),
+    ] {
+        let directory = contents.join("Resources").join(format!("{language}.lproj"));
+        fs::create_dir_all(&directory)?;
+        fs::write(directory.join("InfoPlist.strings"), strings)?;
+    }
     let legacy_executable = macos.join("kiegen");
     if legacy_executable.exists() {
         fs::remove_file(legacy_executable)?;

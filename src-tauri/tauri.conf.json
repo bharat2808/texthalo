@@ -37,7 +37,12 @@
       "signingIdentity": "Developer ID Application: Bharat Bharat (BQVR37A9HG)",
       "hardenedRuntime": true,
       "entitlements": "entitlements.plist",
-      "minimumSystemVersion": "14.0"
+      "minimumSystemVersion": "14.0",
+      "files": {
+        "Resources/en.lproj/InfoPlist.strings": "locales/en.lproj/InfoPlist.strings",
+        "Resources/fr-CA.lproj/InfoPlist.strings": "locales/fr-CA.lproj/InfoPlist.strings",
+        "Resources/es-419.lproj/InfoPlist.strings": "locales/es-419.lproj/InfoPlist.strings"
+      }
     },
     "category": "Productivity",
     "shortDescription": "Speak any selected text, from anywhere",

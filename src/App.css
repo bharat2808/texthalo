@@ -435,8 +435,8 @@ body:has(.update-overlay) {
 .clone-status { flex: 0 0 auto; color: var(--label-secondary); font-size: 10px; }
 .clone-status-trained { color: #39a879; }
 .clone-status-failed { color: var(--danger); }
-.clone-delete { border: 0; background: transparent; color: var(--label-secondary); font: inherit; font-size: 10px; cursor: default; }
-.clone-delete:hover { color: var(--danger); }
+.clone-delete { border: 1px solid var(--accent); border-radius: var(--radius-control); padding: 4px 10px; background: color-mix(in srgb, var(--accent) 10%, transparent); color: var(--accent); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
+.clone-delete:hover { background: color-mix(in srgb, var(--accent) 20%, transparent); }
 .clone-empty { display: flex; align-items: center; gap: 11px; margin: 0 18px 14px; padding: 12px; border: 1px dashed var(--separator); border-radius: 10px; }
 .clone-empty-mark { width: 32px; height: 32px; border-radius: 9px; }
 .clone-empty strong { font-size: 11px; font-weight: 600; }
@@ -649,6 +649,26 @@ button.plain:active:not(:disabled) {
 
 button.plain:disabled {
   opacity: 0.5;
+}
+
+button.plain.accent-action {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+button.plain.accent-action:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 88%, black);
+}
+
+button.plain.accent-action:active:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 76%, black);
+}
+
+button.plain.accent-action:disabled {
+  cursor: default;
 }
 
 button.text {

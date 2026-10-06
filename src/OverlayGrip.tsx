@@ -1,3 +1,4 @@
+import { t } from "./i18n";
 import { type ReactNode } from "react";
 import { getCurrentWindow, PhysicalPosition } from "@tauri-apps/api/window";
 
@@ -5,7 +6,7 @@ export default function OverlayGrip({ children, onError }: { children?: ReactNod
   const report = (cause: unknown) => onError?.(String(cause));
   return <div className="overlay-grip">
     <div className="overlay-grip-indicator" aria-hidden="true">{children}</div>
-    <button className="overlay-move" aria-label="Move widget" title="Drag to move · Arrow keys to adjust"
+    <button className="overlay-move" aria-label={t("Move widget")} title={t("Drag to move · Arrow keys to adjust")}
       onMouseDown={event => {
         if (event.button !== 0) return;
         event.preventDefault();

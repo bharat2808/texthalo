@@ -3,4 +3,6 @@
 <plist version="1.0"><dict>
 <key>NSMicrophoneUsageDescription</key><string>TextHalo records while you hold Transcribe or Assistant, then processes your speech on this Mac.</string>
 <key>NSSpeechRecognitionUsageDescription</key><string>TextHalo transcribes dictation and assistant requests using on-device speech recognition.</string>
+<key>CFBundleDevelopmentRegion</key><string>en</string>
+<key>CFBundleLocalizations</key><array><string>en</string><string>fr-CA</string><string>es-419</string></array>
 </dict></plist>

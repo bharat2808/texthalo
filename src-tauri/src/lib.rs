@@ -27,6 +27,7 @@ mod instance;
 pub mod kokoro;
 pub mod kokoro_models;
 pub mod lexicon;
+mod localization;
 pub mod model_storage;
 pub mod numbers;
 mod overlay;
@@ -719,6 +720,11 @@ fn show_setup_wizard(app: &AppHandle) {
 // ─────────────────────────────── commands ───────────────────────────────
 
 #[tauri::command]
+fn localization_state(app: AppHandle) -> localization::LocalizationState {
+    localization::state(app.state::<AppState>().settings.lock().unwrap().ui_language)
+}
+
+#[tauri::command]
 fn get_state(app: AppHandle) -> UiState {
     ui_state(&app, Vec::new())
 }
@@ -752,17 +758,35 @@ fn save_settings(app: AppHandle, settings: Settings) -> Result<UiState, String> 
         }
     }
     config::save(&app, &settings)?;
-    let changed_engine = {
+    let (changed_engine, changed_language) = {
         let state = app.state::<AppState>();
         let mut current = state.settings.lock().unwrap();
         let changed = current.engine != settings.engine;
+        let changed_language = current.ui_language != settings.ui_language;
         *current = settings.clone();
-        changed
+        (changed, changed_language)
     };
     if changed_engine {
         stop_speaking(app.clone());
     }
     assistant::cancel(&app);
+    if changed_language {
+        let localization = localization_state(app.clone());
+        app.emit("texthalo:language", localization)
+            .map_err(|e| e.to_string())?;
+        let version = app
+            .state::<AppState>()
+            .update_available_version
+            .lock()
+            .unwrap()
+            .clone();
+        if let Some(tray) = app.tray_by_id("kiegen") {
+            tray.set_menu(Some(
+                build_tray_menu(&app, version.as_deref()).map_err(|e| e.to_string())?,
+            ))
+            .map_err(|e| e.to_string())?;
+        }
+    }
     let refused = shortcuts::apply(&app)?;
     Ok(ui_state(&app, refused))
 }
@@ -1200,18 +1224,20 @@ fn build_tray_menu(
     app: &AppHandle,
     update_version: Option<&str>,
 ) -> tauri::Result<Menu<tauri::Wry>> {
-    let speak = MenuItem::with_id(app, "speak", "Speak selection", true, None::<&str>)?;
-    let stop = MenuItem::with_id(app, "stop", "Stop", true, None::<&str>)?;
-    let settings = MenuItem::with_id(app, "settings", "Settings…", true, None::<&str>)?;
-    let setup = MenuItem::with_id(app, "setup", "Setup Wizard…", true, None::<&str>)?;
+    let language = localization_state(app.clone()).language;
+    let text = |source: &str| localization::translate(source, language, &[]);
+    let speak = MenuItem::with_id(app, "speak", text("Speak selection"), true, None::<&str>)?;
+    let stop = MenuItem::with_id(app, "stop", text("Stop"), true, None::<&str>)?;
+    let settings = MenuItem::with_id(app, "settings", text("Settings…"), true, None::<&str>)?;
+    let setup = MenuItem::with_id(app, "setup", text("Setup Wizard…"), true, None::<&str>)?;
     let check_updates = MenuItem::with_id(
         app,
         "check_updates",
-        "Check for Updates…",
+        text("Check for Updates…"),
         true,
         None::<&str>,
     )?;
-    let quit = MenuItem::with_id(app, "quit", "Quit TextHalo", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", text("Quit TextHalo"), true, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
     let update_separator = PredefinedMenuItem::separator(app)?;
     let quit_separator = PredefinedMenuItem::separator(app)?;
@@ -1220,7 +1246,7 @@ fn build_tray_menu(
             MenuItem::with_id(
                 app,
                 "update_available",
-                format!("Update available — {version}"),
+                localization::translate("Update available — {0}", language, &[version]),
                 true,
                 None::<&str>,
             )
@@ -1400,7 +1426,14 @@ pub fn run() {
 
             let handle = app.handle().clone();
             hosted::initialize_secure_storage(&handle);
+            let fresh_install = !config::settings_path(&handle).exists();
             let settings = config::load(&handle);
+            if fresh_install && !cfg!(debug_assertions) && settings.launch_at_login {
+                use tauri_plugin_autostart::ManagerExt;
+                if let Err(error) = handle.autolaunch().enable() {
+                    eprintln!("[TextHalo] enable launch at login: {error}");
+                }
+            }
             let first_run = !settings.onboarding_completed;
             let voices = speech::list_voices();
 
@@ -1452,6 +1485,7 @@ pub fn run() {
             whisper_models::whisper_cancel_download,
             whisper_models::whisper_remove,
             get_state,
+            localization_state,
             get_speech_status,
             get_update_overlay_status,
             publish_update_status,
