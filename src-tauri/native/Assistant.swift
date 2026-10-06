@@ -61,6 +61,7 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
 @MainActor final class Target {
     let application: NSRunningApplication?
     let element: AXUIElement?
+    let isSecureField: Bool
     let original: TargetSnapshot?
     let selection: String
     let sourceContext: AssistantSource
@@ -95,6 +96,7 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
         application = NSWorkspace.shared.frontmostApplication
         let current = AXIsProcessTrusted() ? focusedElement(prepareAccessibility: true) : nil
         let secure = current.flatMap { attribute($0, kAXSubroleAttribute as CFString) as? String } == "AXSecureTextField"
+        isSecureField = secure
         element = secure ? nil : current
         original = element.flatMap(snapshot)
         var anchor: CGRect?
@@ -151,7 +153,10 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
             "textCount": textCount, "failure": insertionFailure ?? ""]
         guard var line = try? JSONSerialization.data(withJSONObject: record, options: [.sortedKeys]) else { return }
         line.append(10)
-        let file = URL(fileURLWithPath: directory).appendingPathComponent("insertion-trace.log")
+        let root = URL(fileURLWithPath: directory)
+        try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true,
+                                                attributes: [.posixPermissions: 0o700])
+        let file = root.appendingPathComponent("insertion-trace.log")
         var data = (try? Data(contentsOf: file)) ?? Data()
         if data.count > 65536 { data = Data() }
         data.append(line)
@@ -195,64 +200,22 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
         }
         guard let application, !application.isTerminated else { return refused("source-app-unavailable") }
         guard NSWorkspace.shared.frontmostApplication == application else { return refused("source-app-not-frontmost") }
-        guard let element else { return refused("no-original-focused-element") }
-        guard let focused = focusedElement(), CFEqual(element, focused) else { return refused("focused-element-changed") }
-        guard let original else { return refused("original-text-or-caret-unavailable") }
-        guard let current = snapshot(element) else { return refused("current-text-or-caret-unavailable") }
-        guard original.permitsInsertion(current: current, sameElement: true, editable: true) else { return refused("text-or-caret-changed-or-invalid") }
-        guard let edit = TextEditReceipt(original: original, replacement: text) else { return refused("invalid-edit-range") }
-        if supportsStreamingInsertion && editable && AXUIElementSetAttributeValue(element, kAXSelectedTextAttribute as CFString, text as CFString) == .success {
-            if let after = snapshot(element), edit.acceptsCommit(after) {
-                receipt = edit; committed = after
-                return true
-            }
-        }
-        // Web and Electron editors often expose the caret but not a writable
-        // AXSelectedText. Paste only into the same, unchanged editable field.
-        let role = attribute(element, kAXRoleAttribute as CFString) as? String
-        guard original.permitsPaste(current: current, sameElement: true, role: role) else { return refused("unsupported-paste-role: \(role ?? "unknown")") }
-        let modifiers: CGEventFlags = [.maskCommand, .maskControl, .maskAlternate, .maskShift]
-        for _ in 0..<40 {
-            if CGEventSource.flagsState(.combinedSessionState).intersection(modifiers).isEmpty { break }
-            do { try await Task.sleep(for: .milliseconds(25)) } catch { return false }
-        }
-        guard !Task.isCancelled,
-              CGEventSource.flagsState(.combinedSessionState).intersection(modifiers).isEmpty,
-              NSWorkspace.shared.frontmostApplication == application,
-              let focused = focusedElement(), CFEqual(element, focused), snapshot(element) == original,
-              let source = CGEventSource(stateID: .hidSystemState),
-              let down = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: true),
-              let up = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: false) else { return refused("paste-preflight-changed-or-unavailable") }
-        let pasteboard = NSPasteboard.general
-        let saved = restoreClipboard ? (pasteboard.pasteboardItems ?? []).map { item in
-            item.types.compactMap { type in item.data(forType: type).map { (type, $0) } }
-        } : []
-        pasteboard.clearContents()
-        let wroteText = pasteboard.setString(text, forType: .string)
-        let changeCount = pasteboard.changeCount
-        defer {
-            if restoreClipboard {
-                // Let the receiving app consume the paste, and never overwrite a
-                // newer clipboard change made by the user or another app.
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
-                    guard pasteboard.changeCount == changeCount else { return }
-                    pasteboard.clearContents()
-                    let items = saved.map { entries in
-                        let item = NSPasteboardItem()
-                        for (type, data) in entries { item.setData(data, forType: type) }
-                        return item
-                    }
-                    if !items.isEmpty { pasteboard.writeObjects(items) }
-                }
-            }
-        }
-        guard wroteText else { return refused("clipboard-write-failed") }
-        let dispatch = PasteDispatch(wroteText: wroteText, targetValid: true, keyEventsReady: true)
-        guard dispatch.isDeliverable else { return false }
-        down.flags = .maskCommand; up.flags = .maskCommand
-        down.post(tap: .cgSessionEventTap); up.post(tap: .cgSessionEventTap)
-        // Content-editable apps may accept paste without exposing their new
-        // value through Accessibility. Dispatch is the reliable boundary.
+        guard !isSecureField else { return refused("secure-text-field") }
+        // Freeflow hands delivery to the app's normal paste handler. AXValue and
+        // AXSelectedTextRange are optional context, not requirements for web editors.
+        let modifiers: CGEventFlags = [.maskCommand, .maskControl, .maskAlternate, .maskShift, .maskSecondaryFn]
+        let delivered = await FocusedPaste().paste(text, restoreClipboard: restoreClipboard,
+            sourceIsActive: {
+                guard AXIsProcessTrusted(), !application.isTerminated,
+                      NSWorkspace.shared.frontmostApplication == application else { return false }
+                let field = focusedElement()
+                return field.flatMap { attribute($0, kAXSubroleAttribute as CFString) as? String } != "AXSecureTextField"
+            }, shortcutPressed: {
+                !CGEventSource.flagsState(.combinedSessionState).intersection(modifiers).isEmpty
+            })
+        guard delivered else { return refused("paste-canceled-or-source-changed") }
+        // A dispatched paste is not a verified AX edit; only streaming edits offer Undo.
+        receipt = nil; committed = nil
         return true
     }
     var canUndo: Bool { receipt != nil && committed != nil }
@@ -629,8 +592,8 @@ func snapshot(_ element: AXUIElement) -> TargetSnapshot? {
             self.audit?.input(["insertionFailure": source?.insertionFailure ?? (source == nil ? "no-target" : ""),
                                "targetRole": source?.sourceContext.focusedRole ?? "",
                                "targetHadSnapshot": source?.original != nil])
-            if inserted { self.event("result", source?.original?.length == 0 ? "Text inserted" : "Text replaced", action: "applied") }
-            else { self.event("result", "Could not verify the original insertion target. Your answer is available to copy.", text: text) }
+            if inserted { self.event("result", "Text inserted", action: "applied") }
+            else { self.event("result", "Could not paste into the active app. Your answer is available to copy.", text: text) }
         }
     }
     func sourceReference() -> String {

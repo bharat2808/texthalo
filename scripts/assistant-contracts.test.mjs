@@ -122,7 +122,7 @@ import Foundation
   }
 }`);
     const binary = join(directory, "events");
-    const sources = ["Contracts", "HoldShortcuts", "SpeechSupport", "ScreenCapture", "ScreenText", "GenerationHistory", "AssistantGeneration"].map(name => `src-tauri/native/${name}.swift`);
+    const sources = ["Contracts", "FocusedPaste", "HoldShortcuts", "SpeechSupport", "ScreenCapture", "ScreenText", "GenerationHistory", "AssistantGeneration"].map(name => `src-tauri/native/${name}.swift`);
     const compiled = spawnSync("xcrun", ["swiftc", "-parse-as-library", "-target", "arm64-apple-macos14.0", ...sources, source, main, "-o", binary], {encoding:"utf8", timeout:60000});
     assert.equal(compiled.status, 0, compiled.stderr);
     const result = spawnSync(binary, [], {encoding:"utf8", timeout:10000});
@@ -140,7 +140,7 @@ test("cloud native fulfillment rejects late and malformed frames and bypasses lo
     const source = join(directory, "Assistant.swift");
     writeFileSync(source, readFileSync("src-tauri/native/Assistant.swift", "utf8").split("@main struct Main {")[0]);
     const binary = join(directory, "cloud");
-    const sources = ["Contracts", "HoldShortcuts", "SpeechSupport", "ScreenCapture", "ScreenText", "GenerationHistory", "AssistantGeneration"].map(name => `src-tauri/native/${name}.swift`);
+    const sources = ["Contracts", "FocusedPaste", "HoldShortcuts", "SpeechSupport", "ScreenCapture", "ScreenText", "GenerationHistory", "AssistantGeneration"].map(name => `src-tauri/native/${name}.swift`);
     const compiled = spawnSync("xcrun", ["swiftc", "-parse-as-library", "-target", "arm64-apple-macos14.0", ...sources, source, "src-tauri/native/HostedAssistantTests.swift", "-o", binary], {encoding:"utf8", timeout:60000});
     assert.equal(compiled.status, 0, compiled.stderr);
     const result = spawnSync(binary, [], {encoding:"utf8", timeout:10000});
@@ -158,5 +158,17 @@ test("cloud native fulfillment rejects late and malformed frames and bypasses lo
     assert.equal(events.filter(event => event.phase === "error").length, 3);
     assert.equal(typeof input.auditId, "string");
     assert.ok(!events.some(event => event.text === "Wrong" || event.text === "Late"));
+  } finally { rmSync(directory, {recursive:true,force:true}); }
+});
+
+
+test("focused paste delivers without AX snapshots and preserves clipboard ownership", {skip:process.platform !== "darwin"}, () => {
+  const directory = mkdtempSync(join(tmpdir(), "texthalo-focused-paste-"));
+  try {
+    const binary = join(directory, "focused-paste");
+    const compiled = spawnSync("xcrun", ["swiftc", "-parse-as-library", "src-tauri/native/FocusedPaste.swift", "src-tauri/native/FocusedPasteTests.swift", "-o", binary], {encoding:"utf8",timeout:60000});
+    assert.equal(compiled.status, 0, compiled.stderr);
+    const result = spawnSync(binary, [], {encoding:"utf8",timeout:10000});
+    assert.equal(result.status, 0, result.stdout + result.stderr);
   } finally { rmSync(directory, {recursive:true,force:true}); }
 });
