@@ -106,11 +106,6 @@ pub struct PcmRecorder {
     samples_written: u64,
 }
 
-pub fn reserve_audio_path(dir: &Path, extension: &str) -> Result<PathBuf, String> {
-    std::fs::create_dir_all(dir).map_err(|e| format!("create audio history: {e}"))?;
-    Ok(dir.join(format!("{}.{}", new_id(), extension)))
-}
-
 impl PcmRecorder {
     pub fn new(dir: &Path) -> Result<Self, String> {
         std::fs::create_dir_all(dir).map_err(|e| format!("create audio history: {e}"))?;

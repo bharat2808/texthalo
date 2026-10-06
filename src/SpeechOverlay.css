@@ -60,3 +60,21 @@ html:has(.overlay-root), body:has(.overlay-root), #root:has(.overlay-root) { mar
 .speech-overlay .preview-expand:hover { background:#ffffff14; color:var(--overlay-label); }
 .speech-overlay .preview-expand:disabled { opacity:.4; cursor:wait; }
 @media (prefers-reduced-motion: reduce) { .live-text-viewport { scroll-behavior:auto; } }
+
+/* Playback controls occupy a second row; the status and Stop stay in place. */
+.playback-overlay { flex-direction:column; align-items:stretch; gap:0; padding:0; }
+.playback-heading { display:flex; align-items:center; gap:12px; height:42px; min-height:42px; padding:0 12px; }
+.playback-overlay.controls-expanded { height:112px; }
+.playback-controls { padding:4px 12px 8px; border-top:1px solid var(--overlay-separator); }
+.playback-actions { display:flex; align-items:center; justify-content:center; gap:18px; }
+.speech-overlay .playback-button { position:relative; width:30px; height:30px; border-radius:6px; background:transparent; color:var(--overlay-label); font-size:22px; }
+.speech-overlay .playback-button:hover { background:#ffffff18; }
+.playback-button small { position:absolute; font-size:9px; top:11px; left:9px; }
+.speech-overlay .playback-toggle { background:#ffffff12; }
+.playback-speed { background:#ffffff12; color:var(--overlay-label); border:1px solid var(--overlay-separator); border-radius:6px; padding:4px; font:inherit; }
+.playback-speed:focus-visible, .playback-progress input:focus-visible { outline:2px solid var(--overlay-accent); outline-offset:2px; }
+.playback-progress { display:flex; align-items:center; gap:8px; height:22px; color:var(--overlay-secondary); font-size:10px; font-variant-numeric:tabular-nums; }
+.playback-progress input { flex:1; min-width:0; accent-color:var(--overlay-accent); height:14px; cursor:pointer; }
+.playback-overlay button:disabled, .playback-overlay select:disabled { opacity:.35; cursor:default; }
+.paused .activity i, .idle .activity i { animation:none; height:7px; opacity:.5; }
+.playback-error { display:block; max-width:100%; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; color:#ff9690; font-size:10px; }

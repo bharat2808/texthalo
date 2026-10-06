@@ -81,6 +81,7 @@ pub struct AppState {
     pub bindings: Mutex<Vec<shortcuts::Binding>>,
     update_available_version: Mutex<Option<String>>,
     update_overlay_status: Mutex<UpdateOverlayStatus>,
+    playback_overlay: Mutex<(bool, bool)>,
 }
 
 #[derive(Deserialize, Serialize, Clone, Default)]
@@ -310,6 +311,7 @@ fn begin_speech(app: &AppHandle, phase: Phase) -> u64 {
     let state = app.state::<AppState>();
     let mut job = state.job.lock().unwrap();
     state.spoken.stop();
+    *state.playback_overlay.lock().unwrap() = (false, false);
     let id = job.begin(phase);
     let _ = app.emit("kiegen:status", &job.status);
     id
@@ -436,81 +438,6 @@ fn run_speech_input_inner(
         });
         return;
     }
-    if settings.engine == config::Engine::Apple {
-        let text = match streaming::run_input(
-            input,
-            180,
-            240,
-            |_| Ok(()),
-            |_, _| Ok(()),
-            || !state.job.lock().unwrap().is_current(id),
-        ) {
-            Ok(text) => text,
-            Err(error) => {
-                job_status(app, id, Phase::Error, Some(error), Some(chars));
-                return;
-            }
-        };
-        let chars = text.chars().count();
-        let archive_path = archive
-            .then(|| history_dir(app).ok())
-            .flatten()
-            .and_then(|dir| history::reserve_audio_path(&dir, "aiff").ok());
-        let result = {
-            let job = state.job.lock().unwrap();
-            if !job.is_current(id) {
-                return;
-            }
-            state
-                .spoken
-                .speak(&settings, &text, archive_path.as_deref())
-        };
-        match result {
-            Ok(report) => {
-                job_status(
-                    app,
-                    id,
-                    Phase::Speaking,
-                    Some(report.summary()),
-                    Some(chars),
-                );
-                while state.spoken.is_speaking() && state.job.lock().unwrap().is_current(id) {
-                    std::thread::sleep(std::time::Duration::from_millis(50));
-                }
-                if state.job.lock().unwrap().is_current(id) {
-                    if let Some(path) = state.spoken.finish_apple_archive() {
-                        if let Ok(dir) = history_dir(app) {
-                            if let Err(error) = history::save_entry(
-                                &dir,
-                                &path,
-                                "Apple",
-                                settings.voice.as_deref().unwrap_or("System default"),
-                                &text,
-                                None,
-                                &source,
-                            ) {
-                                eprintln!("[TextHalo] could not save Apple audio history: {error}");
-                                let _ = std::fs::remove_file(path);
-                            }
-                        }
-                    }
-                    job_status(
-                        app,
-                        id,
-                        Phase::Idle,
-                        Some(if truncated {
-                            format!("truncated to {} characters", settings.max_chars)
-                        } else {
-                            report.summary()
-                        }),
-                        Some(chars),
-                    );
-                }
-            }
-            Err(error) => job_status(app, id, Phase::Error, Some(error), Some(chars)),
-        }
-        return;
-    }
     let history_root = archive.then(|| history_dir(app).ok()).flatten();
     let mut recorder = history_root
         .as_deref()
@@ -565,7 +492,14 @@ fn run_speech_input_inner(
                                 format!("{speaker} · {}", settings.chatterbox.voice),
                             )
                         }
-                        config::Engine::Apple | config::Engine::Fish => unreachable!(),
+                        config::Engine::Apple => (
+                            "Apple",
+                            settings
+                                .voice
+                                .clone()
+                                .unwrap_or_else(|| "System default".into()),
+                        ),
+                        config::Engine::Fish => unreachable!(),
                     };
                     if let Err(error) = history::save_entry(
                         dir,
@@ -877,13 +811,52 @@ fn clear_audio_history(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 fn play_audio_history(app: AppHandle, id: String) -> Result<(), String> {
     let path = history::audio_path(&history_dir(&app)?, &id)?;
-    std::process::Command::new("/usr/bin/afplay")
-        .arg(path)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .map(|_| ())
-        .map_err(|e| format!("could not play saved audio: {e}"))
+    let job_id = begin_speech(&app, Phase::Preparing);
+    std::thread::spawn(move || {
+        let samples = spoken::Spoken::load_audio(&path);
+        let state = app.state::<AppState>();
+        let mut job = state.job.lock().unwrap();
+        if !job.is_current(job_id) {
+            return;
+        }
+        let result = samples.and_then(|samples| state.spoken.play_samples(samples));
+        match result {
+            Ok(()) => job.set(Phase::Speaking, None, None),
+            Err(error) => job.set(Phase::Error, Some(error), None),
+        }
+        let _ = app.emit("kiegen:status", &job.status);
+    });
+    Ok(())
+}
+
+#[tauri::command]
+fn get_playback_status(app: AppHandle) -> pcm::PlaybackStatus {
+    app.state::<AppState>().spoken.playback()
+}
+
+#[tauri::command]
+fn playback_control(app: AppHandle, command: String, value: Option<f64>) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let mut job = state.job.lock().unwrap();
+    if !matches!(
+        job.status.phase,
+        Phase::Speaking | Phase::Preparing | Phase::Idle
+    ) {
+        return Err("Speech is not ready for playback controls.".into());
+    }
+    state.spoken.playback_control(&command, value)?;
+    if matches!(job.status.phase, Phase::Idle)
+        && matches!(command.as_str(), "replay" | "resume" | "seek")
+    {
+        job.set(Phase::Speaking, None, None);
+        let _ = app.emit("kiegen:status", &job.status);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn set_playback_overlay(app: AppHandle, expanded: bool, interacting: bool) {
+    *app.state::<AppState>().playback_overlay.lock().unwrap() = (expanded, interacting);
 }
 
 #[tauri::command]
@@ -1514,6 +1487,7 @@ pub fn run() {
                 bindings: Mutex::new(Vec::new()),
                 update_available_version: Mutex::new(None),
                 update_overlay_status: Mutex::new(UpdateOverlayStatus::default()),
+                playback_overlay: Mutex::new((false, false)),
             });
             app.manage(update_safety::UpdateRecovery::default());
 
@@ -1554,6 +1528,9 @@ pub fn run() {
             get_state,
             localization_state,
             get_speech_status,
+            get_playback_status,
+            playback_control,
+            set_playback_overlay,
             get_update_overlay_status,
             publish_update_status,
             close_update_overlay,

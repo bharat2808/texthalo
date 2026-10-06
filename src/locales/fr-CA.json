@@ -759,5 +759,15 @@
   "Retry voice setup": "Réessayer la configuration des voix",
   "Japanese and Mandarin Chinese": "Japonais et chinois mandarin",
   "Pronunciation support is built in. Download the voice files to start listening.": "La prise en charge de la prononciation est intégrée. Téléchargez les fichiers des voix pour commencer à écouter.",
-  "English, Japanese and Mandarin": "Anglais, japonais et mandarin"
+  "English, Japanese and Mandarin": "Anglais, japonais et mandarin",
+  "Paused": "En pause",
+  "Finished": "Terminé",
+  "Replay": "Rejouer",
+  "Back 10 seconds": "Reculer de 10 secondes",
+  "Forward 10 seconds": "Avancer de 10 secondes",
+  "Resume": "Reprendre",
+  "Pause": "Pause",
+  "Playback speed": "Vitesse de lecture",
+  "Playback position": "Position de lecture",
+  "Seek within generated audio": "Naviguer dans l’audio généré"
 }

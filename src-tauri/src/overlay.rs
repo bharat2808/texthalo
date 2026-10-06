@@ -10,7 +10,7 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
         WebviewUrl::App("index.html?overlay".into()),
     )
     .title("TextHalo speech")
-    .inner_size(270.0, 44.0)
+    .inner_size(350.0, 44.0)
     .decorations(false)
     .transparent(true)
     .shadow(false)
@@ -109,8 +109,15 @@ fn tick(app: &AppHandle) {
         let _ = app.emit("kiegen:status", &job.status);
     }
     let error = matches!(job.status.phase, Phase::Error);
-    let visible = !matches!(job.status.phase, Phase::Idle);
+    let (expanded, interacting) = *state.playback_overlay.lock().unwrap();
+    let playback = state.spoken.playback();
+    let completed = matches!(job.status.phase, Phase::Idle) && playback.available;
+    let visible = !matches!(job.status.phase, Phase::Idle)
+        || keep_completed_visible(completed, interacting, job.changed.elapsed());
     drop(job);
+    if completed && !visible {
+        state.spoken.stop();
+    }
     let owned = crate::assistant::sync_speech(app);
     let assistant_error = crate::assistant::assistant_error_overlay_height(app);
     let visible = (visible && !owned) || assistant_error.is_some();
@@ -122,8 +129,12 @@ fn tick(app: &AppHandle) {
             let _ = window.set_focusable(height > 190.0);
             position_sized(&window, 430.0, height);
         } else {
-            let _ = window.set_focusable(false);
-            position(&window, error);
+            let _ = window.set_focusable(expanded || playback.paused || completed);
+            if !error && (expanded || playback.paused) {
+                position_sized(&window, 350.0, 112.0);
+            } else {
+                position(&window, error);
+            }
         }
         let _ = window.show();
     } else if !visible && window.is_visible().unwrap_or(false) {
@@ -132,7 +143,7 @@ fn tick(app: &AppHandle) {
 }
 
 pub(crate) fn position(window: &tauri::WebviewWindow, error: bool) {
-    let width = if error { 430.0 } else { 270.0 };
+    let width = if error { 430.0 } else { 350.0 };
     let height = if error { 190.0 } else { 44.0 };
     position_sized(window, width, height);
 }
@@ -180,5 +191,25 @@ pub(crate) fn position_sized(window: &tauri::WebviewWindow, width: f64, height: 
             };
             native.setFrame_display(NSRect::new(origin, NSSize::new(width, height)), true);
         }
+    }
+}
+
+fn keep_completed_visible(completed: bool, interacting: bool, elapsed: Duration) -> bool {
+    completed && (interacting || elapsed < Duration::from_secs(5))
+}
+
+#[cfg(test)]
+mod playback_tests {
+    use super::*;
+    #[test]
+    fn completion_waits_five_seconds_and_never_hides_during_interaction() {
+        assert!(keep_completed_visible(
+            true,
+            false,
+            Duration::from_millis(4999)
+        ));
+        assert!(!keep_completed_visible(true, false, Duration::from_secs(5)));
+        assert!(keep_completed_visible(true, true, Duration::from_secs(60)));
+        assert!(!keep_completed_visible(false, true, Duration::ZERO));
     }
 }

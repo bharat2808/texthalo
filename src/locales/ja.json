@@ -759,5 +759,15 @@
   "Retry voice setup": "音声の設定を再試行",
   "Japanese and Mandarin Chinese": "日本語と中国語（標準語）",
   "Pronunciation support is built in. Download the voice files to start listening.": "発音処理は内蔵されています。音声ファイルをダウンロードすると読み上げを使えます。",
-  "English, Japanese and Mandarin": "英語・日本語・中国語"
+  "English, Japanese and Mandarin": "英語・日本語・中国語",
+  "Paused": "一時停止中",
+  "Finished": "完了",
+  "Replay": "もう一度再生",
+  "Back 10 seconds": "10秒戻る",
+  "Forward 10 seconds": "10秒進む",
+  "Resume": "再開",
+  "Pause": "一時停止",
+  "Playback speed": "再生速度",
+  "Playback position": "再生位置",
+  "Seek within generated audio": "生成済みの音声内を移動"
 }

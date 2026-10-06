@@ -570,8 +570,14 @@ async fn download_voice_preview(
     if !state.job.lock().unwrap().is_current(job_id) {
         return Ok(());
     }
-    state.spoken.play(&path)?;
-    crate::job_status(app, job_id, crate::Phase::Speaking, None, None);
+    let samples = crate::spoken::Spoken::load_audio(&path)?;
+    let mut job = state.job.lock().unwrap();
+    if !job.is_current(job_id) {
+        return Ok(());
+    }
+    state.spoken.play_samples(samples)?;
+    job.set(crate::Phase::Speaking, None, None);
+    let _ = app.emit("kiegen:status", &job.status);
     Ok(())
 }
 #[tauri::command]

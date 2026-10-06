@@ -1,5 +1,4 @@
 //! Continuous 24 kHz mono PCM playback for the local speech engines.
-use std::collections::VecDeque;
 use std::ffi::c_void;
 use std::ptr;
 use std::sync::Mutex;
@@ -10,11 +9,16 @@ const BUFFER_COUNT: usize = 3;
 
 #[derive(Default)]
 struct SampleBuffer {
-    samples: VecDeque<f32>,
+    samples: Vec<f32>,
+    cursor: usize,
+    paused: bool,
+    speed: f32,
     finished: bool,
     cancelled: bool,
     underrun_frames: usize,
     draining: bool,
+    resetting: bool,
+    empty_queue: bool,
     error: i32,
     played_audio_bytes: u64,
 }
@@ -24,11 +28,13 @@ impl SampleBuffer {
             self.samples.clear();
             return 0;
         }
-        let copied = output.len().min(self.samples.len());
-        for sample in &mut output[..copied] {
-            *sample = self.samples.pop_front().expect("length checked");
-        }
-        self.played_audio_bytes = self.played_audio_bytes.saturating_add((copied as u64) * 2);
+        let copied = output
+            .len()
+            .min(self.samples.len().saturating_sub(self.cursor));
+        output[..copied].copy_from_slice(&self.samples[self.cursor..self.cursor + copied]);
+        self.cursor += copied;
+        // Hosted acknowledgements use a monotonic high-water mark, including after rewind.
+        self.played_audio_bytes = self.played_audio_bytes.max(self.cursor as u64 * 2);
         if self.finished {
             return copied;
         }
@@ -82,6 +88,10 @@ extern "C" {
     ) -> i32;
     fn AudioQueueStart(queue: Queue, time: *const c_void) -> i32;
     fn AudioQueueStop(queue: Queue, immediate: u8) -> i32;
+    fn AudioQueuePause(queue: Queue) -> i32;
+    fn AudioQueueReset(queue: Queue) -> i32;
+    fn AudioQueueSetProperty(queue: Queue, property: u32, data: *const c_void, size: u32) -> i32;
+    fn AudioQueueSetParameter(queue: Queue, parameter: u32, value: f32) -> i32;
     fn AudioQueueDispose(queue: Queue, immediate: u8) -> i32;
     fn AudioQueueGetProperty(queue: Queue, property: u32, data: *mut c_void, size: *mut u32)
         -> i32;
@@ -91,25 +101,39 @@ unsafe extern "C" fn refill(user: *mut c_void, queue: Queue, buffer: *mut AudioB
     // The boxed mutex outlives the queue; synchronous Dispose joins its callbacks.
     let shared = &*(user as *const Mutex<SampleBuffer>);
     let mut state = shared.lock().unwrap_or_else(|e| e.into_inner());
-    if state.cancelled || state.draining {
+    if state.cancelled || state.draining || state.resetting {
         return;
     }
     let output = std::slice::from_raw_parts_mut((*buffer).data as *mut f32, BUFFER_FRAMES);
     let frames = state.read(output);
     let result = if frames == 0 {
         state.draining = true;
-        drop(state);
         // Async stop drains already submitted audio. A refill callback does NOT mean
         // the last samples are audible yet; the owner waits for IsRunning to become 0.
-        AudioQueueStop(queue, 0)
+        let result = AudioQueueStop(queue, 0);
+        drop(state);
+        result
     } else {
         (*buffer).size = (frames * 4) as u32;
+        // Keep the state lock until enqueue returns so seek cannot reset mid-enqueue.
+        let result = AudioQueueEnqueueBuffer(queue, buffer, 0, ptr::null());
         drop(state);
-        AudioQueueEnqueueBuffer(queue, buffer, 0, ptr::null())
+        result
     };
     if result != 0 {
+        // Reset may return buffers through this callback without playing them.
         shared.lock().unwrap_or_else(|e| e.into_inner()).error = result;
     }
+}
+
+#[derive(serde::Serialize, Clone, Default)]
+pub struct PlaybackStatus {
+    pub position: f64,
+    pub buffered: f64,
+    pub duration: Option<f64>,
+    pub paused: bool,
+    pub speed: f32,
+    pub available: bool,
 }
 
 /// One native queue for an entire reading. Producer writes and callback reads only PCM;
@@ -135,7 +159,10 @@ fn check(status: i32) -> Result<(), String> {
 
 impl Player {
     pub fn new() -> Result<Self, String> {
-        let state = Box::new(Mutex::new(SampleBuffer::default()));
+        let state = Box::new(Mutex::new(SampleBuffer {
+            speed: 1.0,
+            ..Default::default()
+        }));
         let format = StreamFormat {
             sample_rate: SAMPLE_RATE as f64,
             format: u32::from_be_bytes(*b"lpcm"),
@@ -165,6 +192,22 @@ impl Player {
             buffers: [ptr::null_mut(); BUFFER_COUNT],
             control: Mutex::new(false),
         };
+        unsafe {
+            let enabled = 1u32;
+            check(AudioQueueSetProperty(
+                queue,
+                u32::from_be_bytes(*b"q_tp"),
+                &enabled as *const _ as *const c_void,
+                4,
+            ))?;
+            let algorithm = u32::from_be_bytes(*b"spec");
+            check(AudioQueueSetProperty(
+                queue,
+                u32::from_be_bytes(*b"qtpa"),
+                &algorithm as *const _ as *const c_void,
+                4,
+            ))?;
+        }
         for buffer in &mut player.buffers {
             unsafe {
                 check(AudioQueueAllocateBuffer(
@@ -186,12 +229,8 @@ impl Player {
     }
 
     pub fn buffered_seconds(&self) -> f64 {
-        self.state
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .samples
-            .len() as f64
-            / SAMPLE_RATE as f64
+        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.samples.len().saturating_sub(state.cursor) as f64 / SAMPLE_RATE as f64
     }
 
     pub fn played_audio_bytes(&self) -> u64 {
@@ -245,7 +284,7 @@ impl Player {
         if !*started || state.cancelled {
             return Ok(false);
         }
-        if !state.draining {
+        if state.paused || !state.draining {
             return Ok(true);
         }
         drop(state);
@@ -260,6 +299,101 @@ impl Player {
             ))?;
         }
         Ok(running != 0)
+    }
+
+    pub fn snapshot(&self) -> PlaybackStatus {
+        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        PlaybackStatus {
+            position: state.cursor as f64 / SAMPLE_RATE as f64,
+            buffered: state.samples.len() as f64 / SAMPLE_RATE as f64,
+            duration: state
+                .finished
+                .then_some(state.samples.len() as f64 / SAMPLE_RATE as f64),
+            paused: state.paused,
+            speed: state.speed,
+            available: !state.cancelled && !state.samples.is_empty(),
+        }
+    }
+
+    pub fn pause(&self, paused: bool) -> Result<(), String> {
+        let _control = self.control.lock().unwrap_or_else(|e| e.into_inner());
+        let empty = self
+            .state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .empty_queue;
+        unsafe {
+            if paused {
+                check(AudioQueuePause(self.queue))?;
+            } else if !empty {
+                check(AudioQueueStart(self.queue, ptr::null()))?;
+            }
+        }
+        self.state.lock().unwrap_or_else(|e| e.into_inner()).paused = paused;
+        Ok(())
+    }
+
+    pub fn set_speed(&self, speed: f32) -> Result<(), String> {
+        if !speed.is_finite() || !(0.5..=2.0).contains(&speed) {
+            return Err("Playback speed must be between 0.5× and 2×.".into());
+        }
+        let _control = self.control.lock().unwrap_or_else(|e| e.into_inner());
+        unsafe {
+            check(AudioQueueSetParameter(self.queue, 2, speed))?;
+        }
+        self.state.lock().unwrap_or_else(|e| e.into_inner()).speed = speed;
+        Ok(())
+    }
+
+    pub fn seek(&self, seconds: f64) -> Result<(), String> {
+        if !seconds.is_finite() {
+            return Err("Invalid playback position.".into());
+        }
+        let mut started = self.control.lock().unwrap_or_else(|e| e.into_inner());
+        // Reset returns outstanding buffers through refill; suppress those callbacks.
+        self.state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .resetting = true;
+        let reset = unsafe {
+            check(AudioQueuePause(self.queue)).and_then(|_| check(AudioQueueReset(self.queue)))
+        };
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.resetting = false;
+        reset?;
+        if state.cancelled {
+            return Err("This reading has stopped.".into());
+        }
+        state.cursor = ((seconds.max(0.0) * SAMPLE_RATE as f64) as usize).min(state.samples.len());
+        state.draining = false;
+        let mut enqueued = 0;
+        for buffer in self.buffers {
+            unsafe {
+                let output =
+                    std::slice::from_raw_parts_mut((*buffer).data as *mut f32, BUFFER_FRAMES);
+                let frames = state.read(output);
+                if frames == 0 {
+                    break;
+                }
+                (*buffer).size = (frames * 4) as u32;
+                check(AudioQueueEnqueueBuffer(self.queue, buffer, 0, ptr::null()))?;
+                enqueued += 1;
+            }
+        }
+        state.empty_queue = enqueued == 0;
+        if enqueued == 0 {
+            state.draining = true;
+            unsafe {
+                check(AudioQueueStop(self.queue, 1))?;
+            }
+        }
+        if !state.paused && !state.draining {
+            unsafe {
+                check(AudioQueueStart(self.queue, ptr::null()))?;
+            }
+        }
+        *started = true;
+        Ok(())
     }
 
     pub fn stop(&self) {
@@ -302,7 +436,7 @@ mod tests {
     #[test]
     fn starvation_keeps_output_alive_and_counts_only_missing_samples() {
         let mut buffer = SampleBuffer::default();
-        buffer.samples.push_back(0.5);
+        buffer.samples.push(0.5);
         let mut out = [9.; 4];
         assert_eq!(buffer.read(&mut out), 4);
         assert_eq!(out, [0.5, 0., 0., 0.]);
@@ -319,5 +453,60 @@ mod tests {
         buffer.cancelled = true;
         assert_eq!(buffer.read(&mut [0.; 4]), 0);
         assert!(buffer.samples.is_empty());
+    }
+    #[test]
+    fn rewind_preserves_samples_and_acknowledgement_high_water_mark() {
+        let mut buffer = SampleBuffer {
+            samples: vec![0.1, 0.2, 0.3, 0.4],
+            finished: true,
+            ..Default::default()
+        };
+        let mut out = [0.0; 2];
+        assert_eq!(buffer.read(&mut out), 2);
+        assert_eq!(buffer.played_audio_bytes, 4);
+        buffer.cursor = 0;
+        assert_eq!(buffer.read(&mut out), 2);
+        assert_eq!(out, [0.1, 0.2]);
+        assert_eq!(buffer.played_audio_bytes, 4);
+        assert_eq!(buffer.read(&mut out), 2);
+        assert_eq!(buffer.played_audio_bytes, 8);
+    }
+
+    #[test]
+    #[ignore = "requires a macOS audio output device"]
+    fn native_controls_pause_seek_speed_drain_and_replay() {
+        let player = Player::new().unwrap();
+        player.push(vec![0.0; SAMPLE_RATE / 2], true);
+        player.start().unwrap();
+        player.pause(true).unwrap();
+        assert!(player.is_playing().unwrap());
+        assert!(player.snapshot().paused);
+        player.set_speed(1.5).unwrap();
+        assert_eq!(player.snapshot().speed, 1.5);
+        assert!(player.set_speed(f32::NAN).is_err());
+        assert!(player.seek(f64::INFINITY).is_err());
+        player.seek(0.1).unwrap();
+        assert!(player.snapshot().paused);
+        player.pause(false).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while player.is_playing().unwrap() {
+            assert!(std::time::Instant::now() < deadline, "queue did not drain");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(player.snapshot().available);
+        player.seek(0.0).unwrap();
+        assert!(player.is_playing().unwrap());
+        // Seeking past the end clamps and must not start an empty queue forever.
+        player.pause(true).unwrap();
+        player.seek(100.0).unwrap();
+        player.pause(false).unwrap();
+        assert!(!player.is_playing().unwrap());
+        player.seek(0.0).unwrap();
+        for position in [0.2, 0.1, 0.3, 0.0, 0.25] {
+            player.seek(position).unwrap();
+        }
+        assert!(player.is_playing().unwrap());
+        player.stop();
+        assert!(!player.snapshot().available);
     }
 }

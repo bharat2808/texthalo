@@ -300,6 +300,59 @@ impl Speaker {
         Ok(())
     }
 
+    pub fn render_pcm(
+        &self,
+        text: &str,
+        voice: Option<&str>,
+        rate: u32,
+    ) -> Result<Vec<f32>, String> {
+        let path =
+            std::env::temp_dir().join(format!("texthalo-speech-{}.wav", uuid::Uuid::new_v4()));
+        let result = (|| {
+            let mut command = Command::new(SAY);
+            if let Some(voice) = voice {
+                command.arg("-v").arg(voice);
+            }
+            let mut child = command
+                .arg("-r")
+                .arg(rate.clamp(80, 500).to_string())
+                .arg("-o")
+                .arg(&path)
+                .arg("--file-format=WAVE")
+                .arg("--data-format=LEI16@24000")
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .map_err(|e| format!("Could not render Apple speech: {e}"))?;
+            if let Some(mut input) = child.stdin.take() {
+                if let Err(error) = input.write_all(text.as_bytes()) {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(error.to_string());
+                }
+            }
+            *self.child.lock().unwrap() = Some(child);
+            loop {
+                {
+                    let mut current = self.child.lock().unwrap();
+                    let child = current.as_mut().ok_or("Speech stopped")?;
+                    if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
+                        current.take();
+                        if !status.success() {
+                            return Err("Apple speech rendering failed.".into());
+                        }
+                        break;
+                    }
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            crate::chatterbox::read_reference_mono_24k(&path)
+        })();
+        let _ = std::fs::remove_file(path);
+        result
+    }
+
     /// Kill the current utterance (if any). Safe to call when idle.
     pub fn stop(&self) {
         let mut guard = self.child.lock().unwrap();

@@ -759,5 +759,15 @@
   "Retry voice setup": "重試語音設定",
   "Japanese and Mandarin Chinese": "日語和華語",
   "Pronunciation support is built in. Download the voice files to start listening.": "已內建發音支援。下載語音檔案即可開始朗讀。",
-  "English, Japanese and Mandarin": "英語、日語和華語"
+  "English, Japanese and Mandarin": "英語、日語和華語",
+  "Paused": "已暫停",
+  "Finished": "已結束",
+  "Replay": "重新播放",
+  "Back 10 seconds": "後退10秒",
+  "Forward 10 seconds": "前進10秒",
+  "Resume": "繼續播放",
+  "Pause": "暫停",
+  "Playback speed": "播放速度",
+  "Playback position": "播放位置",
+  "Seek within generated audio": "在已產生的音訊中跳轉"
 }

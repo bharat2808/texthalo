@@ -16,7 +16,7 @@
 //! reports an error instead of changing the chosen voice.
 
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command};
 use std::sync::{Arc, Mutex};
 
 use crate::chatterbox::{self, Chatterbox};
@@ -26,10 +26,6 @@ use crate::g2p::G2p;
 use crate::kokoro::{self, Kokoro};
 use crate::speech::Speaker;
 use crate::voices;
-
-/// macOS ships this. Playing a file needs no crate, and it is already how the app treats
-/// `/usr/bin/say` — a system binary on a pipe rather than a library in the process.
-const AFPLAY: &str = "/usr/bin/afplay";
 
 /// What was said, so the caller can report something truthful about it.
 #[derive(Debug, Clone)]
@@ -218,6 +214,13 @@ impl Spoken {
         let normalized = crate::speech_input::normalize(text);
         let text = normalized.as_str();
         let (samples, phoneme_count, dropped, rate) = match settings.engine {
+            Engine::Apple => (
+                self.speech
+                    .render_pcm(text, settings.voice.as_deref(), settings.rate)?,
+                0,
+                Vec::new(),
+                crate::pcm::SAMPLE_RATE as u32,
+            ),
             Engine::Kokoro => {
                 let dir =
                     engine_paths::kokoro_dir().ok_or("cannot locate the app support directory")?;
@@ -250,12 +253,6 @@ impl Spoken {
             }
             Engine::Fish => {
                 return Err("Fish Audio voices are rendered by the hosted service.".into())
-            }
-            other => {
-                return Err(format!(
-                    "rendering a file needs a local engine; {} writes audio itself",
-                    engine_label(other)
-                ))
             }
         };
 
@@ -308,7 +305,7 @@ impl Spoken {
         use std::time::{Duration, Instant};
         let began = std::time::Instant::now();
         let (first_chars, next_chars) = match settings.engine {
-            Engine::Kokoro => (180, 240),
+            Engine::Apple | Engine::Kokoro => (180, 240),
             Engine::Chatterbox => (100, 160),
             _ => return Err("PCM playback needs a local speech engine".into()),
         };
@@ -419,8 +416,10 @@ impl Spoken {
             Ok(text)
         });
         let underrun = player.underrun_seconds();
-        player.stop();
-        self.detach_pcm(&player);
+        if cancelled() || result.is_err() {
+            player.stop();
+            self.detach_pcm(&player);
+        }
         self.release_idle_models();
         let latency = started.unwrap_or(0.0);
         eprintln!("{:?} PCM: chunks={received} start={latency:.3}s audio={:.3}s underrun={underrun:.3}s startup_target={startup_target:.3}s peak_buffer={peak_buffer:.3}s", settings.engine, total.seconds);
@@ -584,16 +583,40 @@ impl Spoken {
         Ok(dir.join("cache").join("spoken.wav"))
     }
 
-    pub(crate) fn play(&self, wav: &Path) -> Result<(), String> {
+    pub(crate) fn load_audio(path: &Path) -> Result<Vec<f32>, String> {
+        if path.extension().is_some_and(|ext| ext == "wav") {
+            return crate::chatterbox::read_reference_mono_24k(path);
+        }
+        // afconvert is bundled with macOS and decodes saved AIFF and hosted previews.
+        let wav =
+            std::env::temp_dir().join(format!("texthalo-playback-{}.wav", uuid::Uuid::new_v4()));
+        let result = (|| {
+            let output = Command::new("/usr/bin/afconvert")
+                .arg(path)
+                .arg(&wav)
+                .args(["-f", "WAVE", "-d", "LEI16@24000"])
+                .output()
+                .map_err(|e| format!("Could not decode saved audio: {e}"))?;
+            if !output.status.success() {
+                return Err("Could not decode saved audio.".into());
+            }
+            crate::chatterbox::read_reference_mono_24k(&wav)
+        })();
+        let _ = std::fs::remove_file(wav);
+        result
+    }
+
+    pub(crate) fn play_samples(&self, samples: Vec<f32>) -> Result<(), String> {
         self.stop();
-        let child = Command::new(AFPLAY)
-            .arg(wav)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .map_err(|e| format!("spawn {AFPLAY}: {e}"))?;
-        *self.player.lock().unwrap() = Some(child);
+        let player = Arc::new(crate::pcm::Player::new()?);
+        player.push(samples, true);
+        player.start()?;
+        self.activate_pcm(player);
         Ok(())
+    }
+
+    pub(crate) fn play(&self, wav: &Path) -> Result<(), String> {
+        self.play_samples(Self::load_audio(wav)?)
     }
 
     /// Called while the speech-job lock proves this is still the active request.
@@ -608,10 +631,37 @@ impl Spoken {
         }
     }
 
+    pub fn playback(&self) -> crate::pcm::PlaybackStatus {
+        self.pcm
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|p| p.snapshot())
+            .unwrap_or_default()
+    }
+
+    pub fn playback_control(&self, command: &str, value: Option<f64>) -> Result<(), String> {
+        let current = self.pcm.lock().unwrap();
+        let player = current
+            .as_ref()
+            .ok_or("No audio is available to control.")?;
+        match command {
+            "pause" => player.pause(true),
+            "resume" => player.pause(false),
+            "seek" => player.seek(value.ok_or("Missing position")?),
+            "speed" => player.set_speed(value.ok_or("Missing speed")? as f32),
+            "replay" => {
+                player.seek(0.0)?;
+                player.pause(false)
+            }
+            _ => Err("Unknown playback command.".into()),
+        }
+    }
+
     /// Silence whatever is playing. Safe to call when idle.
     pub fn stop(&self) {
         self.speech.stop();
-        if let Some(player) = self.pcm.lock().unwrap().as_ref() {
+        if let Some(player) = self.pcm.lock().unwrap().take() {
             player.stop();
         }
         let mut guard = self.player.lock().unwrap();
@@ -699,15 +749,6 @@ impl Spoken {
             },
             None => false,
         }
-    }
-}
-
-fn engine_label(engine: Engine) -> &'static str {
-    match engine {
-        Engine::Apple => "the Apple system voices",
-        Engine::Kokoro => "Kokoro",
-        Engine::Chatterbox => "Chatterbox",
-        Engine::Fish => "Fish Audio",
     }
 }
 
@@ -818,20 +859,22 @@ mod tests {
     }
 
     #[test]
-    fn rendering_a_file_refuses_for_a_non_local_engine() {
-        let settings = Settings {
-            engine: Engine::Apple,
-            ..Default::default()
-        };
+    fn apple_render_produces_playable_pcm_and_fish_requires_hosted_synthesis() {
+        let path =
+            std::env::temp_dir().join(format!("texthalo-render-test-{}.wav", uuid::Uuid::new_v4()));
         let spoken = Spoken::new();
-        let error = spoken
-            .render(
-                &settings,
-                "hello",
-                Path::new("/tmp/kiegen-never-written.wav"),
-            )
-            .expect_err("`say` writes no file, so this must not claim to have written one");
-        assert!(error.contains("local engine"), "got: {error}");
+        let mut settings = Settings::default();
+        let report = spoken.render(&settings, "hello", &path).unwrap();
+        let reader = hound::WavReader::open(&path).unwrap();
+        assert_eq!(reader.spec().sample_rate, 24_000);
+        assert!(reader.duration() > 0);
+        assert!(report.seconds > 0.0);
+        settings.engine = Engine::Fish;
+        assert!(spoken
+            .render(&settings, "hello", &path)
+            .unwrap_err()
+            .contains("hosted"));
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]
