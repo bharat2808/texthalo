@@ -7,7 +7,7 @@
 <key>CFBundleDisplayName</key><string>TextHalo</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleVersion</key><string>1</string>
-<key>CFBundleShortVersionString</key><string>0.1.14</string>
+<key>CFBundleShortVersionString</key><string>0.1.16</string>
 <key>CFBundleIconFile</key><string>icon.icns</string>
 <key>LSMinimumSystemVersion</key><string>14.0</string>
 <key>NSMicrophoneUsageDescription</key><string>TextHalo records while you hold Transcribe or Assistant, then processes your speech on this Mac.</string>
