@@ -1,0 +1,24 @@
+TextHalo Japanese and Mandarin Kokoro pronunciation support
+
+Misaki phone mappings and kana conversion adapted into Rust; modified to use
+native dictionaries. Upstream revision: fba1236595f2d2bf21d414ba6e57d25256afada3
+https://github.com/hexgrad/misaki
+License: Apache-2.0 (see misaki-Apache-2.0.txt).
+Cutlet is adapted from polm/cutlet, MIT (see cutlet-MIT.txt).
+Mandarin transcription is adapted from stefantaubert/pinyin-to-ipa, MIT
+(see pinyin-to-ipa-MIT.txt).
+
+Japanese readings and normalization: JPreprocess 0.15.0, BSD-3-Clause
+(see jpreprocess-BSD-3-Clause.txt).
+Japanese dictionary tokenizer: Lindera 3.0.7, MIT (see lindera-MIT.txt).
+
+Embedded Japanese dictionary: jpreprocess/naist-jdic v0.1.3,
+including NAIST, UniDic Consortium, Open JTalk and JPreprocess notices
+(see naist-jdic-BSD.txt).
+
+Mandarin character and phrase readings: pinyin_pro 3.29.4, MIT
+(see pinyin-pro-MIT.txt).
+Mandarin word segmentation and embedded dictionary: jieba-rs 0.10.3 and
+fxsjy/jieba, MIT (see jieba-rs-MIT.txt and jieba-MIT.txt).
+
+These third-party licenses remain independent of TextHalo's own terms.

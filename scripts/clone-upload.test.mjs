@@ -3,13 +3,15 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import ts from "typescript";
 import vm from "node:vm";
+import { loadTestModule } from "./load-test-module.mjs";
+const { t, sourceMessage } = await loadTestModule(new URL("../src/i18n.tsx", import.meta.url));
 
 // Exercise the real UI handler with the native/network boundary replaced.
 const source = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
 const handler = source.slice(source.indexOf("  const uploadClone ="), source.indexOf("  const deleteHostedClone ="));
 async function run(invoke) {
   const state = { clonePath: "/recording.wav", cloneName: "My voice", cloneConsent: true, hostedClones: [], accountBusy: false, cloneUploadError: "", cloneUploadSuccess: "" };
-  const context = { ...state, invoke, Error };
+  const context = { ...state, invoke, Error, t, sourceMessage };
   for (const key of [...Object.keys(state), "accountError"]) {
     context[`set${key[0].toUpperCase()}${key.slice(1)}`] = value => { state[key] = typeof value === "function" ? value(state[key]) : value; };
   }

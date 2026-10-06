@@ -1,0 +1,2 @@
+"NSMicrophoneUsageDescription" = "TextHaloは「文字起こし」または「アシスタント」のショートカットを押している間に録音し、このMac上で音声を処理します。";
+"NSSpeechRecognitionUsageDescription" = "TextHaloはデバイス上の音声認識を使って、音声入力とアシスタントへのリクエストを文字に変換します。";

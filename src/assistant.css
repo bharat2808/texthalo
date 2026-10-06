@@ -16,6 +16,8 @@
 .assistant-error { color:#ff9c91; margin-left:39px; }
 .assistant-result { white-space:pre-wrap; overflow-wrap:anywhere; max-height:210px; overflow:auto; margin-left:39px; padding:8px 0; border-top:1px solid var(--overlay-separator); user-select:text; }
 .assistant-actions { display:flex; flex-wrap:wrap; gap:8px; margin:12px 0 0 39px; }
+.assistant-actions button { background:var(--overlay-accent); border-color:var(--overlay-accent); color:white; font-weight:600; }
+.assistant-actions button:hover:not(:disabled) { filter:brightness(1.1); }
 .assistant-settings textarea { display:block; width:100%; box-sizing:border-box; margin:6px 0 10px; padding:10px; border:1px solid var(--border, #7775); border-radius:8px; background:transparent; color:inherit; font:inherit; resize:vertical; }
 .assistant-settings select { max-width:100%; padding:8px; }
 .transcript-text { white-space:pre-wrap; overflow-wrap:anywhere; max-height:180px; overflow:auto; user-select:text; }

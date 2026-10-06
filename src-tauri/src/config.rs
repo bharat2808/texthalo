@@ -175,6 +175,8 @@ pub struct Settings {
     pub onboarding_completed: bool,
     /// Whether TextHalo should register as a macOS login item.
     pub launch_at_login: bool,
+    /// Interface language; independent of speech and dictation preferences.
+    pub ui_language: crate::localization::LanguagePreference,
     pub shortcuts: Shortcuts,
     pub assistant: AssistantSettings,
     /// Which engine speaks. Apple unless the user opts into a local model.
@@ -218,7 +220,8 @@ impl Default for Settings {
         Self {
             accessibility_prompted: false,
             onboarding_completed: false,
-            launch_at_login: false,
+            launch_at_login: true,
+            ui_language: crate::localization::LanguagePreference::System,
             shortcuts: Shortcuts::default(),
             assistant: AssistantSettings::default(),
             engine: Engine::default(),
@@ -285,6 +288,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn interface_language_migrates_and_round_trips_independently() {
+        use crate::localization::LanguagePreference;
+        let old = parse_settings(r#"{"rate":175,"assistant":{"language":"es-MX"}}"#).unwrap();
+        assert_eq!(old.ui_language, LanguagePreference::System);
+        assert_eq!(old.assistant.language, "es-MX");
+        let mut settings = old;
+        settings.ui_language = LanguagePreference::French;
+        let saved = serde_json::to_string(&settings).unwrap();
+        let loaded = parse_settings(&saved).unwrap();
+        assert_eq!(loaded.ui_language, LanguagePreference::French);
+        assert_eq!(loaded.assistant.language, "es-MX");
+        let unknown = parse_settings(r#"{"ui_language":"obsolete","rate":175}"#).unwrap();
+        assert_eq!(unknown.ui_language, LanguagePreference::System);
+        assert_eq!(unknown.rate, 175);
+    }
+
+    #[test]
     fn transcription_defaults_and_migration() {
         assert_eq!(
             Settings::default().assistant.transcription_engine,
@@ -320,6 +340,7 @@ mod tests {
             "copy_only"
         );
         assert!(!settings.onboarding_completed);
+        assert!(settings.launch_at_login);
     }
 
     /// Config files written before the engine choice existed must keep working: they have

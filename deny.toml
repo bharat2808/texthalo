@@ -1,6 +1,6 @@
 # cargo-deny configuration — the CI-enforced half of the licence decision.
 #
-# TextHalo uses its own source-available license. Third-party licenses remain unchanged.
+# TextHalo uses its own proprietary terms. Third-party licenses remain unchanged.
 # This file makes "no GPL in the runtime graph"
 # a failing check rather than a promise. Run locally with:
 #     cargo install cargo-deny && cargo deny check
@@ -17,6 +17,7 @@ yanked = "warn"
 # replacement available through the current dependency tree. Revisit when tokenizers/Tauri
 # remove them; the Rustls vulnerability remains unignored and is fixed in Cargo.lock.
 ignore = [
+    { id = "RUSTSEC-2025-0141", reason = "bincode 2.0.1 is unmaintained with no patched version; required by pinned JPreprocess/Lindera to decode bundled dictionaries, not user-provided serialized data. Track an upstream serializer replacement." },
     { id = "RUSTSEC-2024-0436", reason = "paste is transitively required by tokenizers; no safe compatible replacement is available" },
     { id = "RUSTSEC-2025-0081", reason = "unic-char-property is pulled by Tauri urlpattern; no compatible upstream replacement is available" },
     { id = "RUSTSEC-2025-0075", reason = "unic-char-range is pulled by Tauri urlpattern; no compatible upstream replacement is available" },

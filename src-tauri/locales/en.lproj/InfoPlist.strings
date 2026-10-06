@@ -1,0 +1,2 @@
+"NSMicrophoneUsageDescription" = "TextHalo records while you hold Transcribe or Assistant, then processes your speech on this Mac.";
+"NSSpeechRecognitionUsageDescription" = "TextHalo transcribes dictation and assistant requests using on-device speech recognition.";

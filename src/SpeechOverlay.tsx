@@ -1,3 +1,4 @@
+import { t, useLanguage } from "./i18n";
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -9,6 +10,7 @@ type Status = { phase: "idle" | "capturing" | "preparing" | "speaking" | "error"
 type AssistantStatus = { id?: number; mode?: string; phase?: string; provider?: string; message?: string; text?: string; canUndo?: boolean };
 
 export default function SpeechOverlay() {
+  useLanguage();
   const [actionError, setActionError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<Status>({ phase: "idle" });
@@ -55,12 +57,12 @@ export default function SpeechOverlay() {
   useEffect(() => { setActionError(null); }, [assistantErrorStatus?.id, assistantErrorStatus?.message]);
   if (status.phase === "error" || assistantErrorStatus) {
     const assistantError = assistantErrorStatus !== null;
-    const message = assistantErrorStatus?.message || status.message || "Something went wrong while preparing speech. Try again or review Voice settings.";
+    const message = assistantErrorStatus?.message || status.message || t("Something went wrong while preparing speech. Try again or review Voice settings.");
     const signIn = /sign[ -]in/i.test(message);
     const billing = /credits|creator plan|subscription|entitlement/i.test(message);
     const local = !assistantError && (signIn || billing || /hosted|fish|switch to the apple/i.test(message));
     const action = assistantError ? signIn ? "account" : billing ? "billing" : "assistant" : signIn ? "account" : billing ? "billing" : "voice";
-    const actionLabel = signIn ? (/expired|renewal|again/i.test(message) ? "Sign in again" : "Sign in") : billing ? "Open Billing" : assistantError ? "Assistant settings" : "Voice settings";
+    const actionLabel = signIn ? (/expired|renewal|again/i.test(message) ? t("Sign in again") : t("Sign in")) : billing ? t("Open Billing") : assistantError ? t("Assistant settings") : t("Voice settings");
     return <SpeechErrorPanel assistant={assistantError} message={message} actionError={actionError} busy={busy} actionLabel={actionLabel}
       dismiss={() => assistantError ? void assistantControl("cancel") : void invoke("stop_speaking")}
       recover={() => void recover(action, assistantErrorStatus?.id)}
@@ -69,17 +71,17 @@ export default function SpeechOverlay() {
         copy: () => void assistantControl("copy"), undo: () => void assistantControl("undo") } : undefined} />;
   }
   if (status.phase === "idle") return <div className="overlay-root" />;
-  const label = status.phase === "capturing" ? "Reading selection…"
-    : status.phase === "preparing" ? "Preparing speech…"
-    : "Speaking";
+  const label = status.phase === "capturing" ? t("Reading selection…")
+    : status.phase === "preparing" ? t("Preparing speech…")
+    : t("Speaking");
   return (
     <div className={`overlay-root speech-overlay ${status.phase}`}>
       <OverlayGrip onError={setActionError}><div className="activity" aria-hidden="true">
         {[0, 1, 2, 3, 4].map((i) => <i key={i} style={{ animationDelay: `${i * -0.13}s` }} />)}
       </div></OverlayGrip>
       <span className="speech-label" role="status" title={status.message ?? label}>{label}</span>
-      <button aria-label="Stop speech"
-        title="Stop speech (⌘⇧X)"
+      <button aria-label={t("Stop speech")}
+        title={t("Stop speech (⌘⇧X)")}
         onClick={() => void invoke("stop_speaking")}>
         <span />
       </button>

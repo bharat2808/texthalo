@@ -1,3 +1,4 @@
+import { t, message, useLanguage } from "./i18n";
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -10,6 +11,7 @@ import "./SpeechOverlay.css";
 
 type Status = { id?: number; phase?: string; mode?: string; action?: string; message?: string; text?: string; canUndo?: boolean; provider?: string; usage?: AssistantUsage; previewExpanded?: boolean; previewHeight?: number };
 export default function AssistantPanel() {
+  useLanguage();
   const [status, setStatus] = useState<Status>({});
   const current = useRef(status);
   const resizeRevision = useRef(0);
@@ -57,38 +59,38 @@ export default function AssistantPanel() {
   const completed = ["applied", "copied", "undone"].includes(status.action ?? "");
   const livePreview = busy && !!status.text;
   const visibleText = status.text;
-  const providerLabel = status.provider === "cloud" ? "TextHalo Cloud" : "On this Mac";
+  const providerLabel = status.provider === "cloud" ? "TextHalo Cloud" : t("On this Mac");
   const usageLabel = status.provider === "cloud" ? assistantUsageLabel(status.usage) : "";
   // Shared SpeechOverlay owns Assistant errors, including preserved text and Copy/Undo.
   if (status.phase === "error" && status.mode === "assistant") return null;
   if (busy || completed) {
-    const label = status.phase === "recording" ? "Listening…"
-      : status.phase === "capturing_screen" ? "Reading screen…"
-      : status.message === "Thinking on this Mac…" ? "Generating…"
-      : status.message || "Processing…";
+    const label = status.phase === "recording" ? t("Listening…")
+      : status.phase === "capturing_screen" ? t("Reading screen…")
+      : status.message === "Thinking on this Mac…" ? t("Generating…")
+      : message(status.message || "Processing…");
     return <main style={livePreview && status.previewExpanded ? {height: status.previewHeight ?? 76} : undefined} className={`overlay-root speech-overlay ${livePreview ? status.previewExpanded ? "with-transcript expanded-transcript" : "with-transcript" : ""} ${busy ? status.phase === "recording" ? "recording" : status.phase === "speaking" ? "speaking" : "preparing" : "completed"}`}>
       <div className="speech-status">
       <OverlayGrip onError={setError}>{busy ? <div className="activity" aria-hidden="true">{[0,1,2,3,4].map(index => <i key={index} style={{animationDelay:`${index * -0.13}s`}} />)}</div> : <span aria-hidden="true">✓</span>}</OverlayGrip>
-      <span className="speech-label" role={error ? "alert" : "status"} title={error || `${providerLabel}${usageLabel ? ` · ${usageLabel}` : ""}`}>{error || label}{status.provider === "cloud" && <small className="assistant-provider-label">{status.usage?.outputLimited ? "Cloud · shorter answer limit" : "Cloud"}</small>}</span>
-      {applied && status.canUndo ? <button className="overlay-undo" disabled={pending} onClick={() => void action("undo")}>Undo</button>
-        : <button aria-label={busy ? "Cancel" : "Dismiss"} title={busy ? "Cancel (Esc)" : "Dismiss"} onClick={() => void action("cancel")}><span /></button>}
+      <span className="speech-label" role={error ? "alert" : "status"} title={error || `${providerLabel}${usageLabel ? ` · ${usageLabel}` : ""}`}>{message(error || label)}{status.provider === "cloud" && <small className="assistant-provider-label">{status.usage?.outputLimited ? t("Cloud · shorter answer limit") : t("Cloud")}</small>}</span>
+      {applied && status.canUndo ? <button className="overlay-undo" disabled={pending} onClick={() => void action("undo")}>{t("Undo")}</button>
+        : <button aria-label={busy ? t("Cancel") : t("Dismiss")} title={busy ? t("Cancel (Esc)") : t("Dismiss")} onClick={() => void action("cancel")}><span /></button>}
       </div>
       {livePreview && <LiveTextPreview key={status.id} text={status.text!} expanded={!!status.previewExpanded}
-        label={status.phase === "recording" ? "Live transcript" : "Generated text"} pending={pending}
+        label={status.phase === "recording" ? t("Live transcript") : t("Generated text")} pending={pending}
         toggle={() => void action(status.previewExpanded ? "collapse_preview" : "expand_preview")}
         resize={height => void resizePreview(height)} />}
     </main>;
   }
   return <main className="assistant-panel">
-    <header><OverlayGrip onError={setError} /><span className="assistant-eyebrow">TEXTHALO</span><button aria-label={busy ? "Cancel" : "Dismiss"} onClick={() => void action("cancel")}>×</button></header>
+    <header><OverlayGrip onError={setError} /><span className="assistant-eyebrow">{t("TEXTHALO")}</span><button aria-label={busy ? t("Cancel") : t("Dismiss")} onClick={() => void action("cancel")}>×</button></header>
     <div className="assistant-status-row"><span className={busy ? "assistant-indicator active" : "assistant-indicator"} aria-hidden="true" />
-      <p role="status">{status.message || "Ready"}</p>
-      {!busy && status.canUndo && <button disabled={pending} onClick={() => void action("undo")}>Undo</button>}
+      <p role="status">{message(status.message || "Ready")}</p>
+      {!busy && status.canUndo && <button disabled={pending} onClick={() => void action("undo")}>{t("Undo")}</button>}
     </div>
     {status.provider && <p className="assistant-help">{providerLabel}{usageLabel ? ` · ${usageLabel}` : ""}</p>}
-    {error && <p role="alert" className="assistant-error">{error}</p>}
-    {!applied && status.text && <><div className={`assistant-result${busy ? " assistant-live" : ""}`} aria-label={status.phase === "recording" ? "Live transcript" : "Generated text"} tabIndex={busy ? undefined : 0}>{visibleText}</div>
-      {!busy && <div className="assistant-actions"><button disabled={pending} onClick={() => void action("copy")}>Copy</button></div>}</>}
-    {busy && <span className="assistant-help">Esc to cancel</span>}
+    {error && <p role="alert" className="assistant-error">{message(error)}</p>}
+    {!applied && status.text && <><div className={`assistant-result${busy ? " assistant-live" : ""}`} aria-label={status.phase === "recording" ? t("Live transcript") : t("Generated text")} tabIndex={busy ? undefined : 0}>{visibleText}</div>
+      {!busy && <div className="assistant-actions"><button disabled={pending} onClick={() => void action("copy")}>{t("Copy")}</button></div>}</>}
+    {busy && <span className="assistant-help">{t("Esc to cancel")}</span>}
   </main>;
 }

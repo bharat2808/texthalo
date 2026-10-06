@@ -1,3 +1,4 @@
+import { t, message } from "./i18n";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import appLogo from "../src-tauri/icons/icon.png";
 import KokoroModelPicker, { type KokoroModelOption } from "./KokoroModelPicker";
@@ -104,103 +105,103 @@ export default function SetupWizard({ settings, voices, engines, trusted, extern
 
   return <main className="setup-wizard">
     <header className="setup-wizard-header">
-      <img className="setup-wizard-mark" src={appLogo} alt="" /><span>Welcome to TextHalo</span>
-      <button className="plain" disabled={busy} onClick={() => void finish()}>Skip setup</button>
+      <img className="setup-wizard-mark" src={appLogo} alt="" /><span>{t("Welcome to TextHalo")}</span>
+      <button className="plain" disabled={busy} onClick={() => void finish()}>{t("Skip setup")}</button>
     </header>
-    <div className="setup-wizard-progress" aria-label={`Step ${step + 1} of ${STEPS.length}`}>
-      {STEPS.map((label, index) => <div key={label} className={index <= step ? "complete" : ""} aria-current={index === step ? "step" : undefined}><span>{index + 1}</span>{label}</div>)}
+    <div className="setup-wizard-progress" aria-label={t("Step {0} of {1}", [step + 1, STEPS.length])}>
+      {STEPS.map((label, index) => <div key={label} className={index <= step ? "complete" : ""} aria-current={index === step ? "step" : undefined}><span>{index + 1}</span>{t(label)}</div>)}
     </div>
     <section ref={content} className="setup-wizard-content" aria-live="polite">
       {step === 0 ? <>
-        <h1>Choose a voice</h1>
-        <label className="setup-field"><span>Voice source</span>
-          <select aria-label="Voice source" value={settings.engine} disabled={busy || downloadBusy}
+        <h1>{t("Choose a voice")}</h1>
+        <label className="setup-field"><span>{t("Voice source")}</span>
+          <select aria-label={t("Voice source")} value={settings.engine} disabled={busy || downloadBusy}
             onChange={event => void update({ engine: event.target.value as WizardSettings["engine"] })}>
-            <optgroup label="Local">
-              {engines.filter(engine => engine.id !== "fish").map(engine => <option key={engine.id} value={engine.id}>{engine.label}</option>)}
+            <optgroup label={t("Local")}>
+              {engines.filter(engine => engine.id !== "fish").map(engine => <option key={engine.id} value={engine.id}>{message(engine.label)}</option>)}
             </optgroup>
-            <optgroup label="Cloud">
-              {engines.filter(engine => engine.id === "fish").map(engine => <option key={engine.id} value={engine.id}>{engine.label}</option>)}
+            <optgroup label={t("Cloud")}>
+              {engines.filter(engine => engine.id === "fish").map(engine => <option key={engine.id} value={engine.id}>{message(engine.label)}</option>)}
             </optgroup>
           </select>
         </label>
-        <p className="setup-hint">{settings.engine === "fish" ? "Text is sent to the cloud to generate audio. Requires sign-in and credits." : settings.engine === "apple" ? "Audio stays on your Mac. No download needed." : needsDownload ? "Audio is generated on your Mac. Model download required." : "Audio is generated on your Mac. Model ready."}</p>
-        {settings.engine === "apple" ? <label className="setup-field"><span>Voice</span>
+        <p className="setup-hint">{settings.engine === "fish" ? t("Text is sent to the cloud to generate audio. Requires sign-in and credits.") : settings.engine === "apple" ? t("Audio stays on your Mac. No download needed.") : needsDownload ? t("Audio is generated on your Mac. Model download required.") : t("Audio is generated on your Mac. Model ready.")}</p>
+        {settings.engine === "apple" ? <label className="setup-field"><span>{t("Voice")}</span>
           <select value={settings.voice ?? ""} disabled={busy} onChange={event => void update({ voice: event.target.value || null })}>
-            <option value="">System default</option>
+            <option value="">{t("System default")}</option>
             {voices.filter(voice => !voice.novelty).map(voice => <option key={voice.name} value={voice.name}>{voice.name} · {voice.locale.replace("_", "-")}</option>)}
           </select>
         </label> : null}
         {local ? <>
-          <label className="setup-field"><span>{settings.engine === "chatterbox" ? "Language" : "Voice"}</span>
+          <label className="setup-field"><span>{settings.engine === "chatterbox" ? t("Language") : t("Voice")}</span>
             <select value={selectedVoice} disabled={busy || downloadBusy} onChange={event => void update(settings.engine === "kokoro"
               ? { kokoro: { ...settings.kokoro, voice: event.target.value } }
               : { chatterbox: { ...settings.chatterbox, voice: event.target.value } })}>
-              {active?.voices.map(voice => <option key={voice.id} value={voice.id} disabled={Boolean(voice.unavailable)}>{voice.label}{voice.unavailable ? ` · ${voice.unavailable}` : ""}</option>)}
+              {active?.voices.map(voice => <option key={voice.id} value={voice.id} disabled={Boolean(voice.unavailable)}>{settings.engine === "chatterbox" ? t(voice.label) : voice.label}{voice.unavailable ? ` · ${message(voice.unavailable)}` : ""}</option>)}
             </select>
           </label>
-          {settings.engine === "chatterbox" ? <label className="setup-field"><span>Reference voice</span>
+          {settings.engine === "chatterbox" ? <label className="setup-field"><span>{t("Reference voice")}</span>
             <select value={settings.chatterbox.ref_audio ?? ""} disabled={busy || downloadBusy} onChange={event => void update({ chatterbox: { ...settings.chatterbox, ref_audio: event.target.value || null } })}>
-              <option value="">Built-in voice</option>
+              <option value="">{t("Built-in voice")}</option>
               {active?.ref_voices.filter(voice => !voice.builtin).map(voice => <option key={voice.id} value={voice.id}>{voice.label}</option>)}
             </select>
           </label> : null}
-          {needsDownload ? <p>Weights missing — download from below.</p> : null}
+          {needsDownload ? <p>{t("Weights missing — download from below.")}</p> : null}
           <details className="disclosure setup-advanced" open={advancedOpen} onToggle={event => setAdvancedOpen(event.currentTarget.open)}>
-            <summary>Advanced</summary>
+            <summary>{t("Advanced")}</summary>
             <KokoroModelPicker engine={settings.engine === "kokoro" ? "Kokoro" : "Chatterbox"} models={active?.models ?? []}
               selected={modelId} disabled={busy || downloadBusy} needsDownload={needsDownload}
-              downloadLabel={progress?.phase === "downloading" ? "Downloading…" : "Download selected model"}
+              downloadLabel={progress?.phase === "downloading" ? t("Downloading…") : t("Download selected model")}
               onDownload={() => void download()} onSelect={quant => void update(settings.engine === "kokoro"
                 ? { kokoro: { ...settings.kokoro, quant } } : { chatterbox: { ...settings.chatterbox, quant } })} />
-            <p>Uses more memory for faster playback.</p>
+            <p>{t("Uses more memory for faster playback.")}</p>
             <label className="toggle-row"><input type="checkbox" disabled={busy} checked={settings.engine === "kokoro" ? settings.kokoro.keep_warm : settings.chatterbox.keep_warm}
-              onChange={event => void update(settings.engine === "kokoro" ? { kokoro: { ...settings.kokoro, keep_warm: event.target.checked } } : { chatterbox: { ...settings.chatterbox, keep_warm: event.target.checked } })} /><span>Keep {settings.engine === "kokoro" ? "Kokoro" : "Chatterbox"} ready in memory</span></label>
+              onChange={event => void update(settings.engine === "kokoro" ? { kokoro: { ...settings.kokoro, keep_warm: event.target.checked } } : { chatterbox: { ...settings.chatterbox, keep_warm: event.target.checked } })} /><span>{t("Keep {0} ready in memory", [settings.engine === "kokoro" ? "Kokoro" : "Chatterbox"])}</span></label>
           </details>
           {progress?.phase === "downloading" ? <div className="setup-download-status">
-            <div className="progress"><div className="progress-bar" style={{ width: `${percent}%` }} role="progressbar" aria-label="Voice model download" aria-valuenow={percent} aria-valuemin={0} aria-valuemax={100} /></div>
-            <span>{percent}% · {bytes(progress.done)} of {bytes(progress.total)}</span>
+            <div className="progress"><div className="progress-bar" style={{ width: `${percent}%` }} role="progressbar" aria-label={t("Voice model download")} aria-valuenow={percent} aria-valuemin={0} aria-valuemax={100} /></div>
+            <span>{percent}% · {bytes(progress.done)}  {t("of")} {bytes(progress.total)}</span>
           </div> : null}
-          {progress?.phase === "error" ? <p role="alert">{progress.message}</p> : null}
-          {unavailableVoice ? <p role="status">{unavailableVoice}</p> : null}
+          {progress?.phase === "error" ? <p role="alert">{message(progress.message ?? "")}</p> : null}
+          {unavailableVoice ? <p role="status">{message(unavailableVoice)}</p> : null}
         </> : null}
         {settings.engine === "fish" ? <>
-          <button className="plain" disabled={busy || downloadBusy} onClick={() => void finish("voice")}>Set up cloud voices</button>
+          <button className="plain accent-action" disabled={busy || downloadBusy} onClick={() => void finish("voice")}>{t("Set up cloud voices")}</button>
         </> : null}
         <div className="inline">
-          <button className="primary-button" disabled={busy || !active?.can_speak || Boolean(unavailableVoice)} onClick={() => void preview()}>{previewing ? "Starting…" : "Preview voice"}</button>
-          {speaking ? <button className="plain" onClick={onStopPreview}>Stop preview</button> : null}
-          {settings.engine !== "apple" && !active?.can_speak ? <button className="plain" disabled={busy || downloadBusy} onClick={() => void update({ engine: "apple" })}>Use Mac voice for now</button> : null}
+          <button className="primary-button" disabled={busy || !active?.can_speak || Boolean(unavailableVoice)} onClick={() => void preview()}>{previewing ? t("Starting…") : t("Preview voice")}</button>
+          {speaking ? <button className="plain" onClick={onStopPreview}>{t("Stop preview")}</button> : null}
+          {settings.engine !== "apple" && !active?.can_speak ? <button className="plain accent-action" disabled={busy || downloadBusy} onClick={() => void update({ engine: "apple" })}>{t("Use Mac voice for now")}</button> : null}
         </div>
       </> : null}
       {step === 1 ? <>
-        <h1>Allow text access</h1>
-        <p>Enable Accessibility to read selected text from other apps.</p>
-        {trusted ? <div className="setup-permission-state granted">Accessibility enabled.</div> : <>
-          <button className="primary-button" disabled={busy} onClick={settings.accessibility_prompted ? onOpenAccessibilitySettings : onRequestAccessibility}>Enable Accessibility</button>
-          <p>In System Settings, turn on TextHalo under Privacy &amp; Security → Accessibility.</p>
+        <h1>{t("Allow text access")}</h1>
+        <p>{t("Enable Accessibility to read selected text from other apps.")}</p>
+        {trusted ? <div className="setup-permission-state granted">{t("Accessibility enabled.")}</div> : <>
+          <button className="primary-button" disabled={busy} onClick={settings.accessibility_prompted ? onOpenAccessibilitySettings : onRequestAccessibility}>{t("Enable Accessibility")}</button>
+          <p>{t("In System Settings, turn on TextHalo under Privacy & Security → Accessibility.")}</p>
         </>}
       </> : null}
       {step === 2 ? <>
-        <h1>Reading shortcuts</h1>
+        <h1>{t("Reading shortcuts")}</h1>
         <div className="setup-shortcuts">
           {SHORTCUTS.map(shortcut => <section className="setup-shortcut-card" key={shortcut.role}>
-            <div><strong>{shortcut.title}</strong><p>{shortcut.description}</p></div>
+            <div><strong>{t(shortcut.title)}</strong><p>{t(shortcut.description)}</p></div>
             <div>{renderShortcut(shortcut.role)}</div>
           </section>)}
         </div>
-        {!trusted ? <div className="setup-permission-state">Enable Accessibility before reading selected text.<button className="text" disabled={busy} onClick={() => setStep(1)}>Enable access</button></div> : null}
-        <div className="setup-later"><span>Set up Dictation or Assistant from Settings.</span><button className="text" disabled={busy} onClick={() => void finish("general")}>Open Settings</button></div>
-        <label className="toggle-row setup-launch-toggle"><input type="checkbox" checked={settings.launch_at_login} disabled={busy} onChange={event => void update({ launch_at_login: event.target.checked })} /><span>Open TextHalo when I log in</span></label>
+        {!trusted ? <div className="setup-permission-state">{t("Enable Accessibility before reading selected text.")}<button className="text" disabled={busy} onClick={() => setStep(1)}>{t("Enable access")}</button></div> : null}
+        <div className="setup-later"><span>{t("Set up Dictation or Assistant from Settings.")}</span><button className="text" disabled={busy} onClick={() => void finish("general")}>{t("Open Settings")}</button></div>
+        <label className="toggle-row setup-launch-toggle"><input type="checkbox" checked={settings.launch_at_login} disabled={busy} onChange={event => void update({ launch_at_login: event.target.checked })} /><span>{t("Open TextHalo when I log in")}</span></label>
       </> : null}
-      {error || externalError ? <p role="alert">{error || externalError}</p> : null}
+      {error || externalError ? <p role="alert">{message(error || externalError || "")}</p> : null}
     </section>
     <footer className="setup-wizard-footer">
-      {step > 0 ? <button className="plain" disabled={busy} onClick={() => { setError(""); setStep(current => current - 1); }}>Back</button> : <span />}
+      {step > 0 ? <button className="plain" disabled={busy} onClick={() => { setError(""); setStep(current => current - 1); }}>{t("Back")}</button> : <span />}
       <div className="inline">
-        <button className="text" disabled={busy} onClick={() => step === STEPS.length - 1 ? void finish() : next()}>Skip for now</button>
-        {step < STEPS.length - 1 ? <button className="primary-button" disabled={busy} onClick={next}>Continue</button>
-          : <button className="primary-button" disabled={busy} onClick={() => void finish()}>{finishing ? "Saving…" : "Finish setup"}</button>}
+        <button className="text" disabled={busy} onClick={() => step === STEPS.length - 1 ? void finish() : next()}>{t("Skip for now")}</button>
+        {step < STEPS.length - 1 ? <button className="primary-button" disabled={busy} onClick={next}>{t("Continue")}</button>
+          : <button className="primary-button" disabled={busy} onClick={() => void finish()}>{finishing ? t("Saving…") : t("Finish setup")}</button>}
       </div>
     </footer>
   </main>;

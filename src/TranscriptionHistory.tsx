@@ -1,3 +1,4 @@
+import { currentLanguage, message, t } from "./i18n";
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -20,16 +21,16 @@ export default function TranscriptionHistory() {
     return ()=>{void off.then(fn=>fn());};
   },[]);
   return <div>
-    <p className="card-note">Your latest 50 transcripts, saved on this Mac. Audio and screen context are not saved.</p>
-    {error && <p role="alert">{error}</p>}
-    {!loaded && !error && <p>Loading transcripts…</p>}
-    {loaded && entries.length === 0 && <p className="card-note">No transcripts yet. Use Dictate to start.</p>}
+    <p className="card-note">{t("Your latest 50 transcripts, saved on this Mac. Audio and screen context are not saved.")}</p>
+    {error && <p role="alert">{message(error)}</p>}
+    {!loaded && !error && <p>{t("Loading transcripts…")}</p>}
+    {loaded && entries.length === 0 && <p className="card-note">{t("No transcripts yet. Use Dictate to start.")}</p>}
     {entries.map(entry=><article className="permission-row" key={entry.id}>
-      <div className="card-note">{new Date(entry.createdAt).toLocaleString()}{entry.source ? ` · ${entry.source}` : ""}</div>
+      <div className="card-note">{new Date(entry.createdAt).toLocaleString(currentLanguage())}{entry.source ? ` · ${entry.source}` : ""}</div>
       <p className="transcript-text">{entry.text}</p>
-      <div className="inline"><button className="plain" onClick={()=>{void navigator.clipboard.writeText(entry.text).then(()=>setCopied(entry.id)).catch(cause=>setError(String(cause)));}}>{copied===entry.id?"Copied":"Copy transcript"}</button>
-        <button className="plain" aria-label="Delete transcript" onClick={()=>void refresh("delete",entry.id)}>Delete</button></div>
+      <div className="inline"><button className="plain accent-action" onClick={()=>{void navigator.clipboard.writeText(entry.text).then(()=>setCopied(entry.id)).catch(cause=>setError(String(cause)));}}>{copied===entry.id?t("Copied"):t("Copy transcript")}</button>
+        <button className="plain" aria-label={t("Delete transcript")} onClick={()=>void refresh("delete",entry.id)}>{t("Delete")}</button></div>
     </article>)}
-    {entries.length>0 && <div className="inline"><button className="plain" onClick={()=>void refresh("clear")}>Clear transcripts</button></div>}
+    {entries.length>0 && <div className="inline"><button className="plain" onClick={()=>void refresh("clear")}>{t("Clear transcripts")}</button></div>}
   </div>;
 }

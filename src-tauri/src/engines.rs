@@ -31,6 +31,10 @@ pub struct EngineVoice {
     /// Display name with the engine's own prefixes stripped.
     pub label: String,
     pub language: String,
+    /// Requires the optional pronunciation runtime and a language voice table.
+    pub requires_espeak: bool,
+    /// Uses the built-in Japanese or Mandarin pronunciation dictionary.
+    pub requires_cjk: bool,
     /// `Some(why)` = shown, but not selectable, and the UI says why.
     pub unavailable: Option<String>,
     /// Voice metadata the engine happens to know (Kokoro encodes gender in the id).
@@ -173,8 +177,6 @@ struct Family {
     /// installed", which is why there is no separate boolean. The strings are Kokoro's own
     /// `LANG_CODES` values, passed straight through to espeak.
     espeak: Option<&'static str>,
-    /// Set when no front end exists at all, so no user action could enable the voice.
-    blocked: Option<&'static str>,
 }
 
 const KOKORO_FAMILIES: &[Family] = &[
@@ -182,55 +184,46 @@ const KOKORO_FAMILIES: &[Family] = &[
         letter: "a",
         language: "American English",
         espeak: None,
-        blocked: None,
     },
     Family {
         letter: "b",
         language: "British English",
         espeak: None,
-        blocked: None,
     },
     Family {
         letter: "e",
         language: "Spanish",
         espeak: Some("es"),
-        blocked: None,
     },
     Family {
         letter: "f",
         language: "French",
         espeak: Some("fr-fr"),
-        blocked: None,
     },
     Family {
         letter: "h",
         language: "Hindi",
         espeak: Some("hi"),
-        blocked: None,
     },
     Family {
         letter: "i",
         language: "Italian",
         espeak: Some("it"),
-        blocked: None,
     },
     Family {
         letter: "p",
         language: "Portuguese (Brazil)",
         espeak: Some("pt-br"),
-        blocked: None,
     },
     Family {
         letter: "j",
         language: "Japanese",
         espeak: None,
-        blocked: Some("Needs a Japanese front end"),
     },
     Family {
         letter: "z",
         language: "Mandarin Chinese",
         espeak: None,
-        blocked: Some("Needs a Chinese front end"),
     },
 ];
 
@@ -279,11 +272,13 @@ pub fn kokoro_voices(espeak_ready: bool) -> Vec<EngineVoice> {
                 id: (*id).to_string(),
                 label: kokoro_label(id),
                 language: family.language.to_string(),
+                requires_espeak: family.espeak.is_some(),
+                requires_cjk: crate::cjk::supports(id),
                 // An espeak-backed family is unusable until the user installs espeak-ng —
-                // a condition they can fix, unlike `blocked`, which no install resolves.
+                // a condition the combined setup action can fix.
                 unavailable: match (family.espeak, espeak_ready) {
                     (Some(_), false) => Some("Needs espeak-ng (GPL-3.0)".to_string()),
-                    _ => family.blocked.map(str::to_string),
+                    _ => None,
                 },
                 note: kokoro_gender(id).map(str::to_string),
             })
@@ -369,6 +364,8 @@ pub fn chatterbox_voices() -> Vec<EngineVoice> {
             id: (*code).to_string(),
             label: (*name).to_string(),
             language: (*name).to_string(),
+            requires_espeak: false,
+            requires_cjk: false,
             unavailable: chatterbox_language_blocked(code).map(str::to_string),
             // `zh` works, but through the reference's own no-segmenter path. Saying so is the
             // difference between a degradation the user can see and one they cannot.
@@ -419,9 +416,27 @@ pub fn catalog(settings: &Settings) -> Vec<EngineInfo> {
     catalog_with(settings, crate::voices::list())
 }
 
+fn kokoro_voices_with_files(espeak_ready: bool, dir: Option<&std::path::Path>) -> Vec<EngineVoice> {
+    let mut kokoro = kokoro_voices(espeak_ready);
+    for voice in &mut kokoro {
+        if voice.unavailable.is_none()
+            && !dir.is_some_and(|dir| {
+                std::fs::metadata(dir.join(format!("voices/{}.bin", voice.id)))
+                    .is_ok_and(|metadata| metadata.len() == crate::download::VOICE_BYTES)
+            })
+        {
+            voice.unavailable = Some("Voice files need downloading".into());
+        }
+    }
+    kokoro
+}
+
 /// Same catalogue, with the user's clips injected.
 pub fn catalog_with(settings: &Settings, clips: Vec<crate::voices::VoiceClip>) -> Vec<EngineInfo> {
-    let kokoro = kokoro_voices(crate::engine_paths::espeak_ng().is_some());
+    let kokoro = kokoro_voices_with_files(
+        crate::engine_paths::espeak_ng().is_some(),
+        crate::engine_paths::kokoro_dir().as_deref(),
+    );
     let chatterbox = chatterbox_voices();
     let ref_voices = chatterbox_ref_voices(&clips);
     let fish_configured = crate::hosted::service_configured();
@@ -454,7 +469,7 @@ pub fn catalog_with(settings: &Settings, clips: Vec<crate::voices::VoiceClip>) -
         EngineInfo {
             id: Engine::Kokoro,
             label: "Kokoro 82M",
-            summary: "Local 82M model, 28 English voices",
+            summary: "English, Japanese and Mandarin",
             // The front end exists and is measured against the reference (g2p.rs), so this
             // is no longer about missing code — it is about missing files. Once the graph,
             // the tokenizer, the dictionaries and a voice table are on disk, this engine can
@@ -570,6 +585,48 @@ pub fn catalog_with(settings: &Settings, clips: Vec<crate::voices::VoiceClip>) -
 mod tests {
     use super::*;
 
+    #[test]
+    fn existing_espeak_with_missing_voice_tables_still_needs_language_setup() {
+        let dir = std::env::temp_dir().join(format!(
+            "texthalo-kokoro-language-catalog-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let before = kokoro_voices_with_files(false, Some(&dir));
+        assert_eq!(
+            before
+                .iter()
+                .filter(|voice| voice.requires_espeak && voice.unavailable.is_some())
+                .count(),
+            13
+        );
+        let after_runtime = kokoro_voices_with_files(true, Some(&dir));
+        let missing: Vec<_> = after_runtime
+            .iter()
+            .filter(|voice| voice.requires_espeak && voice.unavailable.is_some())
+            .collect();
+        assert_eq!(missing.len(), 13);
+        assert!(missing
+            .iter()
+            .all(|voice| voice.unavailable.as_deref() == Some("Voice files need downloading")));
+        std::fs::create_dir_all(dir.join("voices")).unwrap();
+        for voice in missing {
+            std::fs::File::create(dir.join(format!("voices/{}.bin", voice.id)))
+                .unwrap()
+                .set_len(crate::download::VOICE_BYTES)
+                .unwrap();
+        }
+        let complete = kokoro_voices_with_files(true, Some(&dir));
+        assert!(complete
+            .iter()
+            .filter(|voice| voice.requires_espeak)
+            .all(|voice| voice.unavailable.is_none()));
+        assert!(complete
+            .iter()
+            .filter(|voice| voice.requires_cjk)
+            .all(|voice| voice.unavailable.as_deref() == Some("Voice files need downloading")));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     /// Kokoro v1.0 ships 54 voices. If this changes, a real voice was added or one was
     /// dropped, and the count in the UI copy is wrong.
     #[test]
@@ -599,8 +656,7 @@ mod tests {
     }
 
     /// The other half of the same rule: once espeak-ng *is* present, those voices have to
-    /// become usable, and the ones with no front end at all must stay unusable. A catalogue
-    /// that only ever greys things out would hide a working install.
+    /// become usable. Native Japanese and Mandarin stay independent of that runtime.
     #[test]
     fn installing_espeak_ng_makes_exactly_the_espeak_voices_usable() {
         let voices = kokoro_voices(true);
@@ -612,13 +668,12 @@ mod tests {
                 voice.unavailable
             );
         }
-        // Japanese and Mandarin have no front end at all, so a working espeak-ng must not
-        // pretend to fix them.
+        // Japanese and Mandarin use built-in pronunciation dictionaries.
         for id in ["jf_alpha", "zf_xiaobei"] {
             let voice = voices.iter().find(|v| v.id == id).expect("voice listed");
             assert!(
-                voice.unavailable.is_some(),
-                "{id} has no front end and must stay unavailable"
+                voice.unavailable.is_none(),
+                "{id} uses its native front end"
             );
         }
     }
@@ -636,7 +691,7 @@ mod tests {
         ] {
             assert_eq!(espeak_language_for(id), Some(expected), "{id}");
         }
-        // English uses the front end in this repo, and Japanese/Mandarin have none.
+        // English, Japanese and Mandarin use native front ends.
         assert_eq!(espeak_language_for("af_heart"), None);
         assert_eq!(espeak_language_for("jf_alpha"), None);
     }

@@ -1,3 +1,6 @@
+import { languageNames, languages as interfaceLanguages } from "./localization";
+import KokoroLanguageSetup, { KokoroCjkSetup, type KokoroLanguageInstallEvent } from "./KokoroLanguageSetup";
+import { sourceMessage, t, message, useLanguage, currentLanguage } from "./i18n";
 import TranscriptionSource from "./TranscriptionSource";
 import Row from "./SelectionRow";
 import { createPortal } from "react-dom";
@@ -25,7 +28,7 @@ type ShortcutRole = "speak" | "stop" | "transcribe" | "assistant";
 const shortcutLabels: Record<ShortcutRole, string> = { speak: "Listen", stop: "Stop", transcribe: "Dictate", assistant: "Assistant" };
 const holdKeys: Record<string, string> = { "Hold:Fn": "Hold Fn", "Hold:LeftOption": "Hold Left Option", "Hold:RightOption": "Hold Right Option", "Hold:Escape": "Hold Escape" };
 const holdKeySymbols: Record<string, string> = { "Hold:Fn": "fn", "Hold:LeftOption": "⌥", "Hold:RightOption": "⌥", "Hold:Escape": "⎋" };
-const shortcutLabel = (key: string) => holdKeys[key] ?? key;
+const shortcutLabel = (key: string) => holdKeys[key] ? t(holdKeys[key]) : key;
 
 type CaptureMode = "ax_then_copy" | "ax_only" | "copy_only";
 
@@ -39,6 +42,8 @@ type EngineVoice = {
   id: string;
   label: string;
   language: string;
+  requires_espeak?: boolean;
+  requires_cjk?: boolean;
   /** Non-null when the engine cannot use this voice at all — shown, not selectable. */
   unavailable: string | null;
   note: string | null;
@@ -107,12 +112,12 @@ const subscriptionIsActive = (subscription: HostedAccount["subscription"]): bool
 );
 
 function formatPlanPrice(price: SetupPlansResponse["plans"][number]["price"]): string {
-  if (!price) return "Pricing unavailable";
-  const formatter = new Intl.NumberFormat(undefined, { style: "currency", currency: price.currency });
+  if (!price) return t("Pricing unavailable");
+  const formatter = new Intl.NumberFormat(currentLanguage(), { style: "currency", currency: price.currency });
   const amount = formatter.format(price.unitAmount / (10 ** (formatter.resolvedOptions().maximumFractionDigits ?? 2)));
   if (!price.interval) return amount;
   const count = price.intervalCount ?? 1;
-  return `${amount} / ${count > 1 ? `${count} ` : ""}${price.interval}${count > 1 ? "s" : ""}`;
+  return `${amount} / ${count > 1 ? `${count} ` : ""}${t(`${price.interval}${count > 1 ? "s" : ""}`)}`;
 }
 
 const websiteUrl = (import.meta.env.VITE_TEXTHALO_WEBSITE_URL || "https://texthalo.app").replace(/\/$/, "");
@@ -145,6 +150,7 @@ type Settings = {
   accessibility_prompted: boolean;
   onboarding_completed: boolean;
   launch_at_login: boolean;
+  ui_language?: import("./localization").LanguagePreference;
   shortcuts: { speak: string; stop: string; transcribe: string; assistant: string };
   assistant: AssistantPreferences;
   engine: EngineId;
@@ -202,23 +208,23 @@ let updateStatusQueue = Promise.resolve();
 function publishUpdateStatus(status: Omit<UpdateOverlayStatus, "visible">) {
   updateStatusQueue = updateStatusQueue.then(() => invoke<void>("publish_update_status", {
     status: { ...status, visible: false },
-  })).catch((error) => console.error("Could not publish update status", error));
+  })).catch((error) => console.error(t("Could not publish update status"), error));
   return updateStatusQueue;
 }
 
 function updateErrorMessage(error: unknown): string {
   const detail = String(error);
   if (/platform.*(not found|were found)/i.test(detail)) {
-    return "This release has no compatible update for this build of TextHalo. Please wait for a release supporting your Mac architecture.";
+    return sourceMessage("This release has no compatible update for this build of TextHalo. Please wait for a release supporting your Mac architecture.");
   }
   if (/os error (1|13)\b|permission denied|authentication failed|Failed to move the new app/i.test(detail)) {
-    return `macOS could not replace TextHalo. Quit the app and use Finder to install the new version; ask your administrator if prompted. Details: ${detail}`;
+    return sourceMessage("macOS could not replace TextHalo. Quit the app and use Finder to install the new version; ask your administrator if prompted. Details: {0}", [detail]);
   }
   if (/os error (18|30)\b|cross-device|read-only/i.test(detail)) {
-    return `Copy TextHalo into Applications on your startup disk, eject the installer, and reopen it before updating. Details: ${detail}`;
+    return sourceMessage("Copy TextHalo into Applications on your startup disk, eject the installer, and reopen it before updating. Details: {0}", [detail]);
   }
   if (/os error 28\b|no space left/i.test(detail)) {
-    return "There is not enough free disk space to install the update. Free some space and try again.";
+    return sourceMessage("There is not enough free disk space to install the update. Free some space and try again.");
   }
   return detail;
 }
@@ -249,7 +255,7 @@ function UpdateResultOverlay() {
       if (!disposed && !receivedEvent) setStatus(initial);
     })().catch((cause) => {
       if (!disposed) setStatus((current) => ({ ...current, visible: true,
-        message: `Could not load update status: ${String(cause)}`, error: true }));
+        message: sourceMessage("Could not load update status: {0}", [String(cause)]), error: true }));
     });
     return () => { disposed = true; off?.(); };
   }, []);
@@ -261,15 +267,15 @@ function UpdateResultOverlay() {
   const checking = status.message === "Checking for updates…";
   return (
     <main className="update-overlay" role="dialog" aria-labelledby="update-title" aria-live="polite">
-      <button className="update-overlay-close" onClick={close} aria-label="Close">×</button>
+      <button className="update-overlay-close" onClick={close} aria-label={t("Close")}>×</button>
       <img className="update-overlay-mark" src={appLogo} alt="" />
       <h1 id="update-title">
-        {checking ? "Checking for updates…" : status.error ? "Update needs attention" : hasUpdate ? `TextHalo ${status.version} is available` : "You’re up to date"}
+        {checking ? t("Checking for updates…") : status.error ? t("Update needs attention") : hasUpdate ? t("TextHalo {0} is available", [status.version]) : t("You’re up to date")}
       </h1>
       <p className={status.error ? "update-overlay-message error" : "update-overlay-message"}>
-        {status.message ?? (hasUpdate
-          ? status.installing ? "Preparing to install…" : "A newer version is ready to install."
-          : status.error ? "Please try again in a moment." : "You have the latest version of TextHalo.")}
+        {message(status.message ?? (hasUpdate
+          ? status.installing ? t("Preparing to install…") : t("A newer version is ready to install.")
+          : status.error ? t("Please try again in a moment.") : t("You have the latest version of TextHalo.")))}
       </p>
       <div className="update-overlay-actions">
         {hasUpdate ? (
@@ -278,11 +284,11 @@ function UpdateResultOverlay() {
             disabled={!status.installable || status.installing}
             onClick={() => void emit("texthalo:install-update-requested")}
           >
-            {status.installing ? "Installing…" : status.installable ? `Install ${status.version}` : status.error ? "Installation unavailable" : "Preparing…"}
+            {status.installing ? t("Installing…") : status.installable ? t("Install {0}", [status.version]) : status.error ? t("Installation unavailable") : t("Preparing…")}
           </button>
         ) : null}
         <button className="update-overlay-later" onClick={close} disabled={status.installing}>
-          {hasUpdate ? "Later" : "Done"}
+          {hasUpdate ? t("Later") : t("Done")}
         </button>
       </div>
     </main>
@@ -290,6 +296,7 @@ function UpdateResultOverlay() {
 }
 
 export default function App() {
+  useLanguage();
   const isUpdateOverlay = new URLSearchParams(window.location.search).has("update-overlay");
   return isUpdateOverlay ? <UpdateResultOverlay /> : <MainApp />;
 }
@@ -385,80 +392,12 @@ const Icon = {
 
 /* ── language naming ───────────────────────────────────────────────── */
 
-const LANGUAGE_NAMES: Record<string, string> = {
-  en_US: "English (United States)",
-  en_GB: "English (United Kingdom)",
-  en_CA: "English (Canada)",
-  en_AU: "English (Australia)",
-  en_IE: "English (Ireland)",
-  en_IN: "English (India)",
-  en_ZA: "English (South Africa)",
-  fr_FR: "French (France)",
-  fr_CA: "French (Canada)",
-  es_ES: "Spanish (Spain)",
-  es_MX: "Spanish (Mexico)",
-  pt_BR: "Portuguese (Brazil)",
-  pt_PT: "Portuguese (Portugal)",
-  de_DE: "German",
-  it_IT: "Italian",
-  nl_NL: "Dutch",
-  nl_BE: "Dutch (Belgium)",
-  sv_SE: "Swedish",
-  nb_NO: "Norwegian",
-  da_DK: "Danish",
-  fi_FI: "Finnish",
-  pl_PL: "Polish",
-  cs_CZ: "Czech",
-  sk_SK: "Slovak",
-  sl_SI: "Slovenian",
-  hr_HR: "Croatian",
-  hu_HU: "Hungarian",
-  ro_RO: "Romanian",
-  bg_BG: "Bulgarian",
-  el_GR: "Greek",
-  tr_TR: "Turkish",
-  uk_UA: "Ukrainian",
-  ru_RU: "Russian",
-  lt_LT: "Lithuanian",
-  ca_ES: "Catalan",
-  he_IL: "Hebrew",
-  hi_IN: "Hindi",
-  bn_IN: "Bengali",
-  ta_IN: "Tamil",
-  te_IN: "Telugu",
-  kn_IN: "Kannada",
-  th_TH: "Thai",
-  vi_VN: "Vietnamese",
-  id_ID: "Indonesian",
-  ms_MY: "Malay",
-  kk_KZ: "Kazakh",
-  ar_001: "Arabic",
-  ar_SA: "Arabic (Saudi Arabia)",
-  zh_CN: "Chinese (China)",
-  zh_TW: "Chinese (Taiwan)",
-  zh_HK: "Chinese (Hong Kong)",
-  ja_JP: "Japanese",
-  ko_KR: "Korean",
+const languageName = (locale: string) => {
+  try { return new Intl.DisplayNames([currentLanguage()], { type: "language" }).of(locale.replace(/_/g, "-")) ?? locale; }
+  catch { return locale; }
 };
-
-const LANGUAGE_FAMILIES: Record<string, string> = {
-  en: "English",
-  fr: "French",
-  es: "Spanish",
-  pt: "Portuguese",
-  de: "German",
-  it: "Italian",
-  nl: "Dutch",
-  zh: "Chinese",
-  ja: "Japanese",
-  ko: "Korean",
-  ru: "Russian",
-  hi: "Hindi",
-};
-
-const languageName = (locale: string) => LANGUAGE_NAMES[locale] ?? locale.replace("_", " ");
-const languageDisplayNames = new Intl.DisplayNames([navigator.language || "en"], { type: "language" });
-const hostedLanguageName = (code: string) => languageDisplayNames.of(code) ?? code;
+const hostedLanguageName = languageName;
+const familyName = (family: string) => languageName(family);
 
 /** `Eddy (English (US))` → `Eddy`: the locale column already says the language. */
 const voiceLabel = (name: string) => name.split(" (")[0].trim();
@@ -575,6 +514,7 @@ function Note({
 /* ── app ───────────────────────────────────────────────────────────── */
 
 function MainApp() {
+  const uiLanguage = useLanguage();
   const serviceAvailability = useAvailability();
   const [serviceTooltip, setServiceTooltip] = useState<{ id: string; x: number; y: number } | null>(null);
   const [state, setState] = useState<UiState | null>(null);
@@ -583,10 +523,8 @@ function MainApp() {
   const [setupOpen, setSetupOpen] = useState(false);
   const [setupRevision, setSetupRevision] = useState(0);
   const accessibilityPromptStarted = useRef(false);
-  // The last word from an espeak-ng install attempt. Kept until the next attempt rather
-  // than timed out, because the message is the only answer the user gets.
-  const [espeakMessage, setEspeakMessage] = useState<string | null>(null);
-  const [espeakInstalling, setEspeakInstalling] = useState(false);
+  const [languageInstall, setLanguageInstall] = useState<KokoroLanguageInstallEvent | null>(null);
+  const [languageInstalling, setLanguageInstalling] = useState(false);
   const [tab, setTab] = useState<Tab>("home");
   const [status, setStatus] = useState<Status>({ phase: "idle" });
   const [error, setError] = useState<string | null>(null);
@@ -611,7 +549,7 @@ function MainApp() {
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [historyLoading, setHistoryLoading] = useState(false);
   const historyGroups = historyEntries.reduce((groups, entry) => {
-    const app = entry.appName?.trim() || "Unknown app";
+    const app = entry.appName?.trim() || t("Unknown app");
     const title = entry.windowTitle?.trim() || "";
     const titles = groups.get(app) ?? new Map<string, AudioHistoryEntry[]>();
     const entries = titles.get(title) ?? [];
@@ -641,7 +579,7 @@ function MainApp() {
       }
     }
     return [...grouped.entries()].sort(([a], [b]) => hostedLanguageName(a).localeCompare(hostedLanguageName(b)));
-  }, [hostedVoices, hostedLanguage]);
+  }, [hostedVoices, hostedLanguage, uiLanguage]);
   const [hostedQuery, setHostedQuery] = useState("");
   const [hostedLoading, setHostedLoading] = useState(false);
   const hostedLoadRevision = useRef(0);
@@ -782,7 +720,7 @@ function MainApp() {
     if (updateBusy.current || checkBusy.current) return;
     checkBusy.current = true;
     setCheckingUpdate(true);
-    setUpdateMessage("Checking for updates…");
+    setUpdateMessage(sourceMessage("Checking for updates…"));
     setUpdateAvailable(null);
     try {
       const update = await check();
@@ -795,7 +733,7 @@ function MainApp() {
         }
       }
       setUpdateAvailable(issue ? null : update);
-      const message = issue ?? (update ? `Version ${update.version} is available.` : "You're up to date.");
+      const message = issue ?? (update ? sourceMessage("Version {0} is available.", [update.version]) : sourceMessage("You're up to date."));
       setUpdateMessage(message);
       await publishUpdateStatus({ version: update?.version ?? null, installable: Boolean(update) && !issue,
         installing: false, message, error: Boolean(issue) });
@@ -824,7 +762,7 @@ function MainApp() {
       return publishUpdateStatus({ version: updateAvailable.version, installable: !installing && stage !== "relaunch",
         installing, message, error });
     };
-    await report("Checking installation permissions…");
+    await report(sourceMessage("Checking installation permissions…"));
     try {
       await invoke("prepare_update_installation");
       prepared = true;
@@ -832,31 +770,31 @@ function MainApp() {
       await updateAvailable.downloadAndInstall((event) => {
         if (event.event === "Started") {
           updateDownload.current = { downloaded: 0, total: event.data.contentLength ?? 0 };
-          void report("Downloading update…");
+          void report(sourceMessage("Downloading update…"));
         } else if (event.event === "Progress") {
           updateDownload.current.downloaded += event.data.chunkLength;
           const { downloaded, total } = updateDownload.current;
           void report(
             total
-              ? `Downloading update (${formatBytes(downloaded)} of ${formatBytes(total)})…`
-              : `Downloaded ${formatBytes(downloaded)}…`,
+              ? sourceMessage("Downloading update ({0} of {1})…", [formatBytes(downloaded), formatBytes(total)])
+              : sourceMessage("Downloaded {0}…", [formatBytes(downloaded)]),
           );
         } else {
           stage = "install";
-          void report("Installing update…");
+          void report(sourceMessage("Installing update…"));
         }
       });
       prepared = false;
       await invoke("finish_update_installation", { success: true }).catch(console.error);
       stage = "relaunch";
-      await report("Update installed. Restarting TextHalo…");
+      await report(sourceMessage("Update installed. Restarting TextHalo…"));
       await relaunch();
     } catch (e) {
       const recovery = prepared
         ? await invoke<string>("finish_update_installation", { success: false }).catch(String)
         : "";
       void invoke("record_update_failure", { stage, detail: String(e) }).catch(console.error);
-      await report(stage === "relaunch" ? "The update was installed, but TextHalo could not restart. Quit and reopen TextHalo from Applications." : `${updateErrorMessage(e)} ${recovery}`.trim(), true, false);
+      await report(stage === "relaunch" ? sourceMessage("The update was installed, but TextHalo could not restart. Quit and reopen TextHalo from Applications.") : `${updateErrorMessage(e)} ${recovery}`.trim(), true, false);
       if (stage === "relaunch") setUpdateAvailable(null);
     } finally {
       updateBusy.current = false;
@@ -880,13 +818,13 @@ function MainApp() {
       (event) => {
         if (updateBusy.current) return;
         if (event.payload.version) {
-          setUpdateMessage(`Version ${event.payload.version} is available.`);
+          setUpdateMessage(sourceMessage("Version {0} is available.", [event.payload.version]));
           void checkForUpdates(); // Load the installable Update object for the About panel.
         } else {
           setUpdateAvailable(null);
-          setUpdateMessage("You're up to date.");
+          setUpdateMessage(sourceMessage("You're up to date."));
           void publishUpdateStatus({ version: null, installable: false, installing: false,
-            message: "You're up to date.", error: false });
+            message: sourceMessage("You're up to date."), error: false });
         }
       },
     ).then((off) => { unlisten = off; });
@@ -936,13 +874,11 @@ function MainApp() {
       setInstall(event.payload);
       if (event.payload.phase !== "downloading") void refresh();
     });
-    // Installation can use Homebrew or the app-managed runtime. Report each stage and
-    // re-read the catalogue when it finishes so the newly unlocked voices appear.
-    const unespeak = listen<string>("kiegen:espeak", (event) => {
-      setEspeakMessage(event.payload);
-      const installing = event.payload.startsWith("Downloading and verifying");
-      setEspeakInstalling(installing);
-      if (!installing) void refresh();
+    const languageSetup = listen<KokoroLanguageInstallEvent>("kiegen:kokoro-languages", event => {
+      setLanguageInstall(event.payload);
+      const busy = event.payload.phase === "runtime" || event.payload.phase === "voices";
+      setLanguageInstalling(busy);
+      if (!busy) void refresh();
     });
     const recovery = listen<"account" | "voice" | "assistant">("texthalo:speech-recovery", (event) => {
       setTab(event.payload);
@@ -958,7 +894,7 @@ function MainApp() {
     return () => {
       void unlisten.then((off) => off());
       void uninstall.then((off) => off());
-      void unespeak.then((off) => off());
+      void languageSetup.then((off) => off());
       void setupWizard.then((off) => off());
       void recovery.then((off) => off());
       window.clearInterval(poll);
@@ -1172,18 +1108,12 @@ function MainApp() {
     blocked: engineVoices.filter((voice) => voice.unavailable !== null).length,
   };
 
-  // The espeak-backed voices are the only locked ones a user can unlock with one click, so
-  // the pane offers exactly that — and offers nothing when there is nothing to unlock.
-  const espeakVoiceCount = engineVoices.filter((voice) =>
-    voice.unavailable?.includes("espeak-ng"),
-  ).length;
-
   const saveShortcut = useCallback(async (role: ShortcutRole, accelerator: string) => {
     const current = latestState.current;
     if (!current) return;
     const duplicate = accelerator && (Object.keys(current.settings.shortcuts) as ShortcutRole[]).find(other => other !== role && current.settings.shortcuts[other]?.toLowerCase() === accelerator.toLowerCase());
     if (duplicate) {
-      setShortcutFeedback({ role, error: true, message: `Already used by ${shortcutLabels[duplicate]}. Try another shortcut.` });
+      setShortcutFeedback({ role, error: true, message: sourceMessage("Already used by {0}. Try another shortcut.", [shortcutLabels[duplicate]]) });
       return;
     }
     setRecording(null); setShortcutSaving(true);
@@ -1191,7 +1121,7 @@ function MainApp() {
       const saved = await save({ shortcuts: { ...current.settings.shortcuts, [role]: accelerator } });
       const refused = latestState.current?.refused_shortcuts ?? [];
       setShortcutFeedback({ role, error: !saved || refused.length > 0,
-        message: !saved ? "Could not save this shortcut. Try another combination." : refused.length > 0 ? `macOS could not register ${refused.join(", ")}. Choose another shortcut.` : accelerator ? "Shortcut saved" : "Shortcut cleared" });
+        message: !saved ? sourceMessage("Could not save this shortcut. Try another combination.") : refused.length > 0 ? sourceMessage("macOS could not register {0}. Choose another shortcut.", [refused.join(", ")]) : accelerator ? sourceMessage("Shortcut saved") : sourceMessage("Shortcut cleared") });
     } finally { setShortcutSaving(false); }
   }, [save]);
 
@@ -1242,7 +1172,7 @@ function MainApp() {
       if (!accelerator) return;
       const duplicate = (Object.keys(shortcuts) as ShortcutRole[]).find(role => role !== recording && shortcuts[role]?.toLowerCase() === accelerator.toLowerCase());
       if (duplicate) {
-        setShortcutFeedback({ role: recording, error: true, message: `Already used by ${shortcutLabels[duplicate]}. Try another combination.` });
+        setShortcutFeedback({ role: recording, error: true, message: sourceMessage("Already used by {0}. Try another combination.", [shortcutLabels[duplicate]]) });
         return;
       }
       void saveShortcut(recording, accelerator);
@@ -1273,7 +1203,7 @@ function MainApp() {
         <div className="vertical-rule" />
         <div className="pane">
           <div className="pane-inner">
-            <span className="card-note">Loading…</span>
+            <span className="card-note">{t("Loading…")}</span>
           </div>
         </div>
       </div>
@@ -1293,7 +1223,7 @@ function MainApp() {
    */
   const installForEngine = install && install.engine === settings.engine
     && (!install.quant || install.quant === (settings.engine === "kokoro" ? settings.kokoro.quant : settings.chatterbox.quant)) ? install : null;
-  const modelDownloadBusy = modelDeleting || installStarting || install?.phase === "downloading";
+  const modelDownloadBusy = modelDeleting || installStarting || languageInstalling || install?.phase === "downloading";
   const installing = installForEngine?.phase === "downloading";
   const installPercent =
     installForEngine && installForEngine.total > 0
@@ -1312,17 +1242,17 @@ function MainApp() {
 
   const shortcutControl = (role: ShortcutRole) => <div className="shortcut-control">
     <div className="task-shortcut">
-      <kbd aria-live="polite">{recording === role ? "Press a key combination…" : shortcutLabel(settings.shortcuts[role]) || "No shortcut yet"}</kbd>
-      <button className="plain" disabled={shortcutSaving} onClick={() => { setShortcutFeedback(null); setRecording(recording === role ? null : role); }}>{recording === role ? "Cancel" : "Change shortcut"}</button>
-      {(role === "transcribe" || role === "assistant") && settings.shortcuts[role] && recording !== role ? <button className="text" disabled={shortcutSaving} onClick={() => void saveShortcut(role, "")}>Clear shortcut</button> : null}
+      <kbd aria-live="polite">{recording === role ? t("Press a key combination…") : shortcutLabel(settings.shortcuts[role]) || t("No shortcut yet")}</kbd>
+      <button className={recording === role ? "plain" : "plain accent-action"} disabled={shortcutSaving} onClick={() => { setShortcutFeedback(null); setRecording(recording === role ? null : role); }}>{recording === role ? t("Cancel") : settings.shortcuts[role] ? t("Change shortcut") : t("Create shortcut")}</button>
+      {(role === "transcribe" || role === "assistant") && settings.shortcuts[role] && recording !== role ? <button className="text" disabled={shortcutSaving} onClick={() => void saveShortcut(role, "")}>{t("Clear shortcut")}</button> : null}
     </div>
     {recording === role ? <>
-      {(role === "transcribe" || role === "assistant") && <div className="inline" style={{flexWrap:"wrap", marginTop:8}}>{Object.entries(holdKeys).map(([key,label]) => <button className="plain hold-key-button" key={key} disabled={shortcutSaving} onClick={() => void saveShortcut(role,key)}><span className="hold-key-symbol" aria-hidden="true">{holdKeySymbols[key]}</span>{label}</button>)}</div>}
-      <p className="card-note">{role === "transcribe" || role === "assistant" ? "Choose a hold key, hold one for a moment, or press a key combination. Tap Esc to cancel." : "Press your new shortcut. Esc to cancel."}</p>
+      {(role === "transcribe" || role === "assistant") && <div className="inline" style={{flexWrap:"wrap", marginTop:8}}>{Object.entries(holdKeys).map(([key,label]) => <button className="plain hold-key-button" key={key} disabled={shortcutSaving} onClick={() => void saveShortcut(role,key)}><span className="hold-key-symbol" aria-hidden="true">{holdKeySymbols[key]}</span>{t(label)}</button>)}</div>}
+      <p className="card-note">{role === "transcribe" || role === "assistant" ? t("Choose a hold key, hold one for a moment, or press a key combination. Tap Esc to cancel.") : t("Press your new shortcut. Esc to cancel.")}</p>
     </> : null}
-    {settings.shortcuts[role]?.startsWith("Hold:") && <p className="card-note">Hold for 0.35 seconds to speak. Release to finish.{settings.shortcuts[role] === "Hold:Escape" ? " Quick Escape taps take effect on release." : " Other keys or clicks cancel the hold."}{settings.shortcuts[role] === "Hold:Fn" ? " If the Globe key also opens emoji or dictation, change its action in macOS Keyboard settings." : ""}</p>}
+    {settings.shortcuts[role]?.startsWith("Hold:") && <p className="card-note">{t("Hold for 0.35 seconds to speak. Release to finish.")}{settings.shortcuts[role] === "Hold:Escape" ? t(" Quick Escape taps take effect on release.") : t(" Other keys or clicks cancel the hold.")}{settings.shortcuts[role] === "Hold:Fn" ? t(" If the Globe key also opens emoji or dictation, change its action in macOS Keyboard settings.") : ""}</p>}
     {settings.shortcuts[role]?.startsWith("Hold:") && serviceAvailability.availability.holdError && <p role="alert" className="shortcut-error">{serviceAvailability.availability.holdError}</p>}
-    {shortcutFeedback?.role === role ? <p className={shortcutFeedback.error ? "shortcut-error" : "card-note"} role={shortcutFeedback.error ? "alert" : "status"}>{shortcutFeedback.message}</p> : null}
+    {shortcutFeedback?.role === role ? <p className={shortcutFeedback.error ? "shortcut-error" : "card-note"} role={shortcutFeedback.error ? "alert" : "status"}>{message(shortcutFeedback.message)}</p> : null}
   </div>;
 
 
@@ -1340,8 +1270,8 @@ function MainApp() {
       install={installForEngine}
       onDownload={downloadSelectedModel}
       onStopPreview={() => void invoke("stop_speaking").catch(cause => setError(String(cause)))}
-      onSave={async (patch) => { if (!await save(patch)) throw new Error("Could not save your preferences. Please try again."); }}
-      externalError={error}
+      onSave={async (patch) => { if (!await save(patch)) throw new Error(sourceMessage("Could not save your preferences. Please try again.")); }}
+      externalError={error ? message(error) : null}
       onRequestAccessibility={() => { void requestAccessibility(); }}
       onOpenAccessibilitySettings={() => { void invoke("open_accessibility_settings").catch(cause => setError(String(cause))); }}
       onPreviewVoice={async () => {
@@ -1385,8 +1315,8 @@ function MainApp() {
     try {
       const picked = await open({
         multiple: false,
-        title: "Add a reference voice",
-        filters: [{ name: "WAV audio", extensions: ["wav"] }],
+        title: t("Add a reference voice"),
+        filters: [{ name: t("WAV audio"), extensions: ["wav"] }],
       });
       path = typeof picked === "string" ? picked : null;
     } catch (e) {
@@ -1397,7 +1327,7 @@ function MainApp() {
     try {
       await invoke<UiState>("add_chatterbox_voice", { path });
       await refresh();
-      setVoiceMessage("Voice added.");
+      setVoiceMessage(sourceMessage("Voice added."));
     } catch (e) {
       setVoiceMessage(String(e));
       void refresh();
@@ -1409,7 +1339,7 @@ function MainApp() {
     try {
       await invoke<UiState>("delete_chatterbox_voice", { file });
       await refresh();
-      setVoiceMessage("Voice deleted.");
+      setVoiceMessage(sourceMessage("Voice deleted."));
     } catch (e) {
       setVoiceMessage(String(e));
       void refresh();
@@ -1453,7 +1383,7 @@ function MainApp() {
   };
 
   const pickCloneAudio = async () => {
-    const picked = await open({ multiple: false, title: "Choose a voice recording", filters: [{ name: "Audio", extensions: ["wav", "mp3", "m4a", "ogg", "flac"] }] });
+    const picked = await open({ multiple: false, title: t("Choose a voice recording"), filters: [{ name: t("Audio"), extensions: ["wav", "mp3", "m4a", "ogg", "flac"] }] });
     if (typeof picked === "string") setClonePath(picked);
   };
 
@@ -1465,14 +1395,14 @@ function MainApp() {
       const created = await invoke<HostedClone>("desktop_upload_clone", { path: clonePath, name: cloneName.trim(), consent: cloneConsent });
       setClonePath(""); setCloneName(""); setCloneConsent(false);
       setHostedClones((items) => [created, ...items.filter((item) => item.id !== created.id)]);
-      setCloneUploadSuccess(`“${created.name}” was uploaded and saved. ${created.status === "trained" ? "Ready to select in Voice → My hosted clones." : created.status === "failed" ? "Training failed; see its status above." : "Training is pending. It will be available in Voice → My hosted clones when ready."}`);
+      setCloneUploadSuccess(sourceMessage("“{0}” was uploaded and saved. {1}", [created.name, created.status === "trained" ? sourceMessage("Ready to select in Voice → My hosted clones.") : created.status === "failed" ? sourceMessage("Training failed; see its status above.") : sourceMessage("Training is pending. It will be available in Voice → My hosted clones when ready.")]));
     } catch (cause) { setCloneUploadError(cause instanceof Error ? cause.message : String(cause)); }
     finally { setAccountBusy(false); }
   };
 
   const deleteHostedClone = async (voiceId: string) => {
     const clone = hostedClones.find((item) => item.id === voiceId);
-    if (!window.confirm(`Delete “${clone?.name ?? "this voice clone"}” from your Fish Audio account?`)) return;
+    if (!window.confirm(t("Delete “{0}” from your Fish Audio account?", [clone?.name ?? "this voice clone"]))) return;
     setAccountError("");
     try {
       await invoke("desktop_delete_clone", { voiceId });
@@ -1507,17 +1437,17 @@ function MainApp() {
 
   const statusLine =
     status.phase === "error"
-      ? { kind: "error" as const, text: status.message ?? "failed" }
+      ? { kind: "error" as const, text: message(status.message ?? "failed") }
       : status.phase === "capturing"
-        ? { kind: "info" as const, text: "Reading selection…" }
+        ? { kind: "info" as const, text: t("Reading selection…") }
         : status.phase === "preparing"
-          ? { kind: "info" as const, text: "Preparing speech…" }
+          ? { kind: "info" as const, text: t("Preparing speech…") }
           : status.phase === "speaking"
           ? {
               kind: "info" as const,
-              text: status.chars ? `Speaking ${status.chars} characters` : "Speaking…",
+              text: status.chars ? t("Speaking {0} characters", [status.chars]) : t("Speaking…"),
             }
-          : { kind: "secondary" as const, text: "Ready" };
+          : { kind: "secondary" as const, text: t("Ready") };
 
   const enableAccessibility = async () => {
     if (settings.accessibility_prompted) {
@@ -1531,18 +1461,18 @@ function MainApp() {
 
 
   const settingsTabs: { id: Tab; title: string }[] = [
-    { id: "general", title: "General" },
-    { id: "shortcuts", title: "Shortcuts" },
-    { id: "permissions", title: "Permissions" },
-    { id: "capture", title: "Text capture" },
+    { id: "general", title: t("General") },
+    { id: "shortcuts", title: t("Shortcuts") },
+    { id: "permissions", title: t("Permissions") },
+    { id: "capture", title: t("Text capture") },
   ];
   const inSettings = settingsTabs.some((entry) => entry.id === tab);
   const tabs: { id: Tab; title: string; icon: React.ReactNode }[] = [
-    { id: "home", title: "Home", icon: Icon.box() },
-    { id: "voice", title: "Voices", icon: Icon.speaker() },
-    { id: "transcription", title: "Dictate", icon: Icon.textCursor() },
-    { id: "assistant", title: "Assistant", icon: Icon.sparkles() },
-    { id: "history", title: "History", icon: Icon.history() },
+    { id: "home", title: t("Home"), icon: Icon.box() },
+    { id: "voice", title: t("Voices"), icon: Icon.speaker() },
+    { id: "transcription", title: t("Dictate"), icon: Icon.textCursor() },
+    { id: "assistant", title: t("Assistant"), icon: Icon.sparkles() },
+    { id: "history", title: t("History"), icon: Icon.history() },
   ];
 
   const readiness = serviceReadiness({
@@ -1554,15 +1484,15 @@ function MainApp() {
 
   const readinessIcon = (id: string, label: string) => {
     const reasons = readiness[id];
-    const checking = reasons.length > 0 && reasons.every(reason => reason.startsWith("Checking "));
-    const statusLabel = checking ? "Checking…" : reasons.length ? "Not ready" : "Ready";
+    const checking = reasons.length > 0 && reasons.every(reason => reason.startsWith(t("Checking ")));
+    const statusLabel = checking ? t("Checking…") : reasons.length ? t("Not ready") : t("Ready");
     const show = (element: HTMLElement) => {
       const rect = element.getBoundingClientRect();
       setServiceTooltip({id, x: Math.max(12, Math.min(rect.left, window.innerWidth - 300)), y: Math.min(rect.bottom + 6, window.innerHeight - 240)});
     };
     return <button type="button" className={`service-status ${reasons.length ? "not-ready" : "ready"}`}
-      aria-label={`${label}: ${statusLabel}`} title={reasons.join("\n") || "Ready to use"}
-      aria-description={reasons.join(" ") || "Ready to use"}
+      aria-label={`${label}: ${statusLabel}`} title={reasons.join("\n") || t("Ready to use")}
+      aria-description={reasons.join(" ") || t("Ready to use")}
       onMouseEnter={event => show(event.currentTarget)} onFocus={event => show(event.currentTarget)}
       onMouseLeave={() => setServiceTooltip(null)} onBlur={() => setServiceTooltip(null)}
       onKeyDown={event => { if (event.key === "Escape") setServiceTooltip(null); }}
@@ -1581,33 +1511,33 @@ function MainApp() {
     : paidAccountPlans[paidAccountPlans.length - 1] ?? null;
 
   const planOptionsCard = (
-    <Card title={account ? "Plan" : "Plans"} icon={Icon.gauge()}>
-      {accountPlansLoading ? <span className="setup-plan-loading">Loading plan options…</span> : null}
-      {accountPlansError ? <><div className="card-note">Plan details couldn’t be loaded.</div><div className="inline"><button className="plain" onClick={() => void loadAccountPlans()}>Try again</button><button className="plain" onClick={() => void openUrl(`${websiteUrl}/pricing/`)}>Open pricing page ↗</button></div></> : null}
+    <Card title={account ? t("Plan") : t("Plans")} icon={Icon.gauge()}>
+      {accountPlansLoading ? <span className="setup-plan-loading">{t("Loading plan options…")}</span> : null}
+      {accountPlansError ? <><div className="card-note">{t("Plan details couldn’t be loaded.")}</div><div className="inline"><button className="plain accent-action" onClick={() => void loadAccountPlans()}>{t("Try again")}</button><button className="plain accent-action" onClick={() => void openUrl(`${websiteUrl}/pricing/`)}>{t("Open pricing page ↗")}</button></div></> : null}
       {accountPlans && !activeAccountSubscription ? <>
-        {account?.subscription ? <Note kind="secondary" icon={Icon.info()}>Your {currentAccountPlan?.name ?? account.subscription.planId} subscription is {account.subscription.status.replace(/_/g, " ")}. Open billing to resolve it; hosted clone access is paused.</Note> : null}
-        <p className="account-plan-intro">Choose a plan. Local voices are free; hosted speech is optional.</p>
-        <div className="account-plan-grid" aria-label="TextHalo plans">
+        {account?.subscription ? <Note kind="secondary" icon={Icon.info()}>{t("Your")} {currentAccountPlan?.name ?? account.subscription.planId}  {t("subscription is")} {account.subscription.status.replace(/_/g, " ")}{t(". Open billing to resolve it; hosted clone access is paused.")}</Note> : null}
+        <p className="account-plan-intro">{t("Choose a plan. Local voices are free; hosted speech is optional.")}</p>
+        <div className="account-plan-grid" aria-label={t("TextHalo plans")}>
           {accountPlans.map((plan) => <article className={`setup-plan-card${plan.id === "creator" ? " featured" : ""}`} key={plan.id}>
-            <strong>{plan.name}</strong><span className="setup-plan-price">{formatPlanPrice(plan.price)}</span><span>{plan.description}</span>
-            {plan.features.filter((feature) => feature !== "Everything in Free").slice(0, 3).map((feature) => <small key={feature}>{feature}</small>)}
-            {plan.id !== "free" ? <button className="plain account-plan-action" disabled={accountBusy || Boolean(account && !account.billingEnabled)} onClick={() => account ? void openCheckout(plan.id) : void beginDesktopSignIn()}>{account ? `Choose ${plan.name}` : `Sign in for ${plan.name}`}</button> : null}
+            <strong>{message(plan.name)}</strong><span className="setup-plan-price">{formatPlanPrice(plan.price)}</span><span>{message(plan.description)}</span>
+            {plan.features.filter((feature) => feature !== "Everything in Free").slice(0, 3).map((feature) => <small key={feature}>{message(feature)}</small>)}
+            {plan.id !== "free" ? <button className="plain accent-action account-plan-action" disabled={accountBusy || Boolean(account && !account.billingEnabled)} onClick={() => account ? void openCheckout(plan.id) : void beginDesktopSignIn()}>{account ? t("Choose {0}", [plan.name]) : t("Sign in for {0}", [plan.name])}</button> : null}
           </article>)}
         </div>
-        <div className="inline"><button className="plain" onClick={() => void openUrl(`${websiteUrl}/pricing/`)}>Compare plans ↗</button></div>
+        <div className="inline"><button className="plain accent-action" onClick={() => void openUrl(`${websiteUrl}/pricing/`)}>{t("Compare plans ↗")}</button></div>
       </> : null}
       {accountPlans && activeAccountSubscription ? <>
         <div className="account-current-plan">
-          <div className="account-current-plan-copy"><span className="credit-eyebrow">CURRENT PLAN</span><strong>{currentAccountPlan?.name ?? activeAccountSubscription.planId}</strong><span>{activeAccountSubscription.status}{activeAccountSubscription.cancelAtPeriodEnd ? " · cancels at period end" : ""}{activeAccountSubscription.currentPeriodEnd ? ` · renews ${new Date(activeAccountSubscription.currentPeriodEnd).toLocaleDateString()}` : ""}</span></div>
-          {paidAccountPlans.length > 0 && currentAccountPlanIndex === paidAccountPlans.length - 1 ? <span className="account-plan-note">You’re on the highest plan</span> : null}
+          <div className="account-current-plan-copy"><span className="credit-eyebrow">{t("CURRENT PLAN")}</span><strong>{currentAccountPlan?.name ?? activeAccountSubscription.planId}</strong><span>{activeAccountSubscription.status}{activeAccountSubscription.cancelAtPeriodEnd ? t(" · cancels at period end") : ""}{activeAccountSubscription.currentPeriodEnd ? t(" · renews {0}", [new Date(activeAccountSubscription.currentPeriodEnd).toLocaleDateString(currentLanguage())]) : ""}</span></div>
+          {paidAccountPlans.length > 0 && currentAccountPlanIndex === paidAccountPlans.length - 1 ? <span className="account-plan-note">{t("You’re on the highest plan")}</span> : null}
         </div>
         {accountUpgradePlan ? <article className="setup-plan-card featured account-upgrade-card">
-          <div><span className="credit-eyebrow">AVAILABLE UPGRADE</span><strong>{accountUpgradePlan.name}</strong></div>
-          <span className="setup-plan-price">{formatPlanPrice(accountUpgradePlan.price)}</span><span>{accountUpgradePlan.description}</span>
-          {accountUpgradePlan.features.filter((feature) => feature !== "Everything in Free").slice(0, 3).map((feature) => <small key={feature}>{feature}</small>)}
-          <button className="plain account-plan-action" disabled={accountBusy || !account?.billingEnabled} onClick={() => void openCheckout(accountUpgradePlan.id)}>Upgrade to {accountUpgradePlan.name}</button>
+          <div><span className="credit-eyebrow">{t("AVAILABLE UPGRADE")}</span><strong>{accountUpgradePlan.name}</strong></div>
+          <span className="setup-plan-price">{formatPlanPrice(accountUpgradePlan.price)}</span><span>{message(accountUpgradePlan.description)}</span>
+          {accountUpgradePlan.features.filter((feature) => feature !== "Everything in Free").slice(0, 3).map((feature) => <small key={feature}>{message(feature)}</small>)}
+          <button className="plain accent-action account-plan-action" disabled={accountBusy || !account?.billingEnabled} onClick={() => void openCheckout(accountUpgradePlan.id)}>{t("Upgrade to")} {accountUpgradePlan.name}</button>
         </article> : null}
-        <div className="inline"><button className="plain" onClick={() => void openUrl(`${websiteUrl}/account/billing/`)}>Manage billing</button></div>
+        <div className="inline"><button className="plain accent-action" onClick={() => void openUrl(`${websiteUrl}/account/billing/`)}>{t("Manage billing")}</button></div>
       </> : null}
     </Card>
   );
@@ -1618,13 +1548,13 @@ function MainApp() {
       selected={settings.voice === voice.name}
       glyph={settings.voice === voice.name ? Icon.checkCircle() : Icon.circle()}
       title={voiceLabel(voice.name)}
-      subtitle={voice.novelty ? "Not speech — a sound effect" : undefined}
-      badge={settings.voice === voice.name ? "Default" : undefined}
+      subtitle={voice.novelty ? t("Not speech — a sound effect") : undefined}
+      badge={settings.voice === voice.name ? t("Default") : undefined}
       onSelect={() => void save({ voice: voice.name })}
       trailing={
         <button
           className="icon"
-          title={`Preview ${voiceLabel(voice.name)}`}
+          title={t("Preview {0}", [voiceLabel(voice.name)])}
           onClick={(event) => {
             event.stopPropagation();
             preview(voice);
@@ -1639,10 +1569,10 @@ function MainApp() {
   return (
     <div className="settings">
       {serviceTooltip && createPortal(<div className="service-tooltip" role="tooltip" style={{left: serviceTooltip.x, top: serviceTooltip.y}}>
-        {readiness[serviceTooltip.id]?.join("\n") || "Ready to use"}
+        {message(readiness[serviceTooltip.id]?.join("\n") || t("Ready to use"))}
       </div>, document.body)}
-      <nav className="sidebar" aria-label="Main">
-        <div className="sidebar-brand"><img src={appLogo} alt="" /><strong>TextHalo</strong></div>
+      <nav className="sidebar" aria-label={t("Main")}>
+        <div className="sidebar-brand"><img src={appLogo} alt="" /><strong>{t("TextHalo")}</strong></div>
         {tabs.map((entry) => (
           <button
             key={entry.id}
@@ -1655,12 +1585,12 @@ function MainApp() {
           </button>
         ))}
         <div className="sidebar-spacer" />
-        <button className={`sidebar-row${tab === "account" ? " active" : ""}`} aria-current={tab === "account" ? "page" : undefined} onClick={() => setTab("account")}>{Icon.person()} Account</button>
-        <button className={`sidebar-row${inSettings ? " active" : ""}`} aria-current={inSettings ? "page" : undefined} onClick={() => setTab("general")}>{Icon.gear()} Settings</button>
+        <button className={`sidebar-row${tab === "account" ? " active" : ""}`} aria-current={tab === "account" ? "page" : undefined} onClick={() => setTab("account")}>{Icon.person()}  {t("Account")}</button>
+        <button className={`sidebar-row${inSettings ? " active" : ""}`} aria-current={inSettings ? "page" : undefined} onClick={() => setTab("general")}>{Icon.gear()}  {t("Settings")}</button>
         {error ? (
           <Note kind="error" icon={Icon.xCircle()}>
-            <span className="truncate" title={error}>
-              {error}
+            <span className="truncate" title={message(error)}>
+              {message(error)}
             </span>
           </Note>
         ) : null}
@@ -1671,36 +1601,48 @@ function MainApp() {
       <div className="vertical-rule" />
 
       <main className="pane">
-        {inSettings ? <nav className="section-nav" aria-label="Settings">{settingsTabs.map((entry) => <button key={entry.id} className={tab === entry.id ? "active" : ""} aria-current={tab === entry.id ? "page" : undefined} onClick={() => setTab(entry.id)}>{entry.title}</button>)}</nav> : null}
+        {inSettings ? <nav className="section-nav" aria-label={t("Settings")}>{settingsTabs.map((entry) => <button key={entry.id} className={tab === entry.id ? "active" : ""} aria-current={tab === entry.id ? "page" : undefined} onClick={() => setTab(entry.id)}>{entry.title}</button>)}</nav> : null}
         {tab === "home" ? <div className="pane-inner home-pane">
-          <header><h1 className="pane-title">Home</h1><p className="home-intro">Listen. Dictate. Get a little help.</p></header>
+          <header><h1 className="pane-title">{t("Home")}</h1><p className="home-intro">{t("Listen. Dictate. Get a little help.")}</p></header>
           <section className="listen-hero" aria-labelledby="listen-title">
-            <div className="service-heading"><div className="home-eyebrow">LISTEN</div>{readinessIcon("voice", "Voices")}</div>
-            <h2 id="listen-title">Turn text into speech.</h2>
-            <p>Select text in any app, then use your shortcut.</p>
-            <div className="home-voice"><span>{activeEngine?.label ?? "Apple voices"}</span><span>{settings.engine === "fish" ? "Hosted" : "On this Mac"}</span></div>
-            {!state.trusted ? <div className="home-notice"><span>Allow Accessibility to read selected text.</span><button className="plain" onClick={() => void enableAccessibility().catch(cause => setError(String(cause)))}>{settings.accessibility_prompted ? "Open Accessibility Settings" : "Enable access"}</button></div>
-              : activeEngine && !activeEngine.can_speak ? <div className="home-notice"><span>{activeEngine.status}</span><button className="plain" onClick={() => setTab("voice")}>Set up voice</button></div>
-              : !settings.shortcuts.speak || state.refused_shortcuts.includes(settings.shortcuts.speak) ? <div className="home-notice"><span>Choose an available listening shortcut.</span></div>
-              : <p className="ready-label">{state.focused_password_field ? "Leave the password field to start listening." : "Ready when you are"}</p>}
-            {shortcutControl("speak")}
-            <div className="inline"><button className="primary-button" onClick={() => setTab("voice")}>Choose a voice</button><button className="plain" disabled={!activeEngine?.can_speak || state.speaking} onClick={() => preview(settings.engine === "apple" ? settings.voice : activeEngine?.selected_voice ?? null)}>Preview voice</button>{state.speaking ? <button className="plain" onClick={() => void invoke("stop_speaking").catch(cause => setError(String(cause)))}>Stop</button> : null}</div>
+            <div className="service-heading"><div className="home-eyebrow">{t("LISTEN")}</div>{readinessIcon("voice", t("Voices"))}</div>
+            <h2 id="listen-title">{t("Turn text into speech.")}</h2>
+            <p>{t("Select text in any app, then use your shortcut.")}</p>
+            <div className="home-voice"><span>{message(activeEngine?.label ?? "Apple voices")}</span><span>{settings.engine === "fish" ? t("Hosted") : t("On this Mac")}</span></div>
+            {!state.trusted ? <div className="home-notice"><span>{t("Allow Accessibility to read selected text.")}</span><button className="plain accent-action" onClick={() => void enableAccessibility().catch(cause => setError(String(cause)))}>{settings.accessibility_prompted ? t("Open Accessibility Settings") : t("Enable access")}</button></div>
+              : activeEngine && !activeEngine.can_speak ? <div className="home-notice"><span>{message(activeEngine.status)}</span><button className="plain accent-action" onClick={() => setTab("voice")}>{t("Set up voice")}</button></div>
+              : !settings.shortcuts.speak || state.refused_shortcuts.includes(settings.shortcuts.speak) ? <div className="home-notice"><span>{t("Choose an available listening shortcut.")}</span></div>
+              : <p className="ready-label">{state.focused_password_field ? t("Leave the password field to start listening.") : t("Ready when you are")}</p>}
+            <div className="home-voice-actions"><button className="primary-button" onClick={() => setTab("voice")}>{t("Choose a voice")}</button><button className="plain accent-action" disabled={!activeEngine?.can_speak || state.speaking} onClick={() => preview(settings.engine === "apple" ? settings.voice : activeEngine?.selected_voice ?? null)}>{t("Preview voice")}</button>{state.speaking ? <button className="plain accent-action" onClick={() => void invoke("stop_speaking").catch(cause => setError(String(cause)))}>{t("Stop")}</button> : null}</div>
+            <div className="home-shortcut-section">{shortcutControl("speak")}</div>
           </section>
           <div className="home-tasks">
-            <section className="task-card"><div className="service-heading"><h2>Dictate</h2>{readinessIcon("transcription", "Dictate")}</div><p>Speak and put your words into any text field.</p><kbd>{shortcutLabel(settings.shortcuts.transcribe) || "Set up a shortcut"}</kbd><button className="plain" onClick={() => setTab("transcription")}>Set up dictation</button></section>
-            <section className="task-card"><div className="service-heading"><h2>Assistant</h2>{readinessIcon("assistant", "Assistant")}</div><p>Ask to write, edit, or read something aloud.</p><kbd>{shortcutLabel(settings.shortcuts.assistant) || "Set up a shortcut"}</kbd><button className="plain" onClick={() => setTab("assistant")}>Set up Assistant</button></section>
+            <section className="task-card"><div className="service-heading"><h2>{t("Dictate")}</h2>{readinessIcon("transcription", t("Dictate"))}</div><p>{t("Speak and put your words into any text field.")}</p><div className="home-task-footer"><kbd>{shortcutLabel(settings.shortcuts.transcribe) || t("Set up a shortcut")}</kbd><button className="plain accent-action" onClick={() => setTab("transcription")}>{t("Set up dictation")}</button></div></section>
+            <section className="task-card"><div className="service-heading"><h2>{t("Assistant")}</h2>{readinessIcon("assistant", t("Assistant"))}</div><p>{t("Ask to write, edit, or read something aloud.")}</p><div className="home-task-footer"><kbd>{shortcutLabel(settings.shortcuts.assistant) || t("Set up a shortcut")}</kbd><button className="plain accent-action" onClick={() => setTab("assistant")}>{t("Set up Assistant")}</button></div></section>
           </div>
-          <button className="text home-history" onClick={() => setTab("history")}>Open your history</button>
+          <button className="text home-history" onClick={() => setTab("history")}>{t("Open your history")}</button>
         </div> : null}
 
         {tab === "general" ? (
           <div className="pane-inner">
-            <h1 className="pane-title">General</h1>
-            <Card title="Startup" icon={Icon.gear()}>
+            <h1 className="pane-title">{t("General")}</h1>
+            <Card title={t("Interface language")} icon={Icon.gear()}>
+              <label className="field">
+                <span className="field-label">{t("Language")}</span>
+                <select aria-label={t("Interface language")} value={settings.ui_language ?? "system"}
+                  onChange={event => void save({ ui_language: event.target.value as import("./localization").LanguagePreference })}>
+                  <option value="system">{t("Follow Mac language")}</option>
+                  {interfaceLanguages.map(language => <option key={language} value={language}>{languageNames[language]}</option>)}
+                </select>
+              </label>
+              <p className="card-note">{t("Changes the interface language. Voice and dictation languages are set separately.")}</p>
+            </Card>
+
+            <Card title={t("Startup")} icon={Icon.gear()}>
               <label className="startup-option">
                 <span className="startup-option-copy">
-                  <strong>Open TextHalo when you log in</strong>
-                  <span>It starts quietly in the menu bar, ready when you need it.</span>
+                  <strong>{t("Open TextHalo when you log in")}</strong>
+                  <span>{t("It starts quietly in the menu bar, ready when you need it.")}</span>
                 </span>
                 <input
                   type="checkbox"
@@ -1710,30 +1652,30 @@ function MainApp() {
               </label>
             </Card>
 
-            <Card title="Optional features" icon={Icon.gear()}>
-              <p className="card-note">Set up Dictation or Assistant when you want to use them.</p>
+            <Card title={t("Optional features")} icon={Icon.gear()}>
+              <p className="card-note">{t("Set up Dictation or Assistant when you want to use them.")}</p>
               <div className="inline">
-                <button className="plain" onClick={() => setTab("transcription")}>Set up Dictation</button>
-                <button className="plain" onClick={() => setTab("assistant")}>Set up Assistant</button>
+                <button className="plain accent-action" onClick={() => setTab("transcription")}>{t("Set up Dictation")}</button>
+                <button className="plain accent-action" onClick={() => setTab("assistant")}>{t("Set up Assistant")}</button>
               </div>
             </Card>
 
-            <Card title="About" icon={Icon.box()}>
-              <div className="card-note">Version {appVersion ?? "…"}</div>
+            <Card title={t("About")} icon={Icon.box()}>
+              <div className="card-note">{t("Version {0}", [appVersion ?? "…"])}</div>
               <div className="inline">
-                <button className="plain" onClick={() => void checkForUpdates()} disabled={checkingUpdate || installingUpdate}>
-                  {checkingUpdate ? "Checking…" : "Check for Updates"}
+                <button className="plain accent-action" onClick={() => void checkForUpdates()} disabled={checkingUpdate || installingUpdate}>
+                  {checkingUpdate ? t("Checking…") : t("Check for Updates")}
                 </button>
                 {updateAvailable ? (
-                  <button className="plain" onClick={() => void installAvailableUpdate()} disabled={installingUpdate}>
-                    {installingUpdate ? "Installing…" : `Install ${updateAvailable.version}`}
+                  <button className="plain accent-action" onClick={() => void installAvailableUpdate()} disabled={installingUpdate}>
+                    {installingUpdate ? t("Installing…") : t("Install {0}", [updateAvailable.version])}
                   </button>
                 ) : null}
               </div>
-              {updateMessage ? <div className="card-note" role="status">{updateMessage}</div> : null}
-              <details className="disclosure"><summary>Advanced</summary>
+              {updateMessage ? <div className="card-note" role="status">{message(updateMessage)}</div> : null}
+              <details className="disclosure"><summary>{t("Advanced")}</summary>
               <div className="field">
-                <span className="field-label">Settings file</span>
+                <span className="field-label">{t("Settings file")}</span>
                 <div className="mono-block">{state.config_path}</div>
               </div></details>
             </Card>
@@ -1744,27 +1686,26 @@ function MainApp() {
           <div className="pane-inner">
             <div className="history-heading">
               <div>
-                <div className="service-heading"><h1 className="pane-title">Voices</h1>{readinessIcon("voice", "Voices")}</div>
+                <div className="service-heading"><h1 className="pane-title">{t("Voices")}</h1>{readinessIcon("voice", t("Voices"))}</div>
                 <p className="pane-subtitle">
-                  Find a voice you enjoy listening to.
-                </p>
+                  {t("Find a voice you enjoy listening to.")}</p>
               </div>
             </div>
-            <Card title="Voice source" icon={Icon.speaker()}>
+            <Card title={t("Voice source")} icon={Icon.speaker()}>
               <div className="row-stack">
                 {engines.map((engine) => (
                   <Row
                     key={engine.id}
                     selected={settings.engine === engine.id}
                     glyph={settings.engine === engine.id ? Icon.checkCircle() : Icon.circle()}
-                    title={engine.label}
-                    subtitle={engine.id === "fish" ? "Hosted · uses credits" : engine.id === "apple" ? "On this Mac · no download" : "On this Mac · free"}
+                    title={message(engine.label)}
+                    subtitle={engine.id === "fish" ? t("Hosted · uses credits") : engine.id === "apple" ? t("On this Mac · no download") : t("On this Mac · free")}
                     badge={
                       engine.can_speak
-                        ? "Ready"
+                        ? t("Ready")
                         : engine.needs_download
-                          ? `Needs ${formatBytes(engine.download_bytes)}`
-                          : "Not ready"
+                          ? t("Needs {0}", [formatBytes(engine.download_bytes)])
+                          : t("Not ready")
                     }
                     disabled={modelDownloadBusy}
                     onSelect={() => void save({ engine: engine.id })}
@@ -1774,20 +1715,20 @@ function MainApp() {
 
               {activeEngine && !activeEngine.can_speak ? (
                 <Note kind="warning" icon={Icon.warn()}>
-                  {activeEngine.status}
+                  {message(activeEngine.status)}
                 </Note>
               ) : null}
 
               {settings.engine === "fish" && !account ? <>
                 <div className="account-brand">
                   <img className="account-brand-mark" src={appLogo} alt="" />
-                  <div><strong>TextHalo</strong><div className="card-note">Your account for hosted speech</div></div>
+                  <div><strong>{t("TextHalo")}</strong><div className="card-note">{t("Your account for hosted speech")}</div></div>
                   <div className="account-brand-actions">
-                    <button className="plain" disabled={accountBusy} onClick={() => void beginDesktopSignIn()}>{accountBusy ? "Waiting for browser sign-in…" : "Sign in"}</button>
-                    {accountBusy ? <button className="text" onClick={() => void cancelDesktopSignIn()}>Cancel</button> : null}
+                    <button className="plain accent-action" disabled={accountBusy} onClick={() => void beginDesktopSignIn()}>{accountBusy ? t("Waiting for browser sign-in…") : t("Sign in")}</button>
+                    {accountBusy ? <button className="text" onClick={() => void cancelDesktopSignIn()}>{t("Cancel")}</button> : null}
                   </div>
                 </div>
-                {accountError ? <Note kind="error" icon={Icon.xCircle()}>{accountError}</Note> : null}
+                {accountError ? <Note kind="error" icon={Icon.xCircle()}>{message(accountError)}</Note> : null}
               </> : null}
 
 
@@ -1796,13 +1737,13 @@ function MainApp() {
             {settings.engine === "kokoro" || settings.engine === "chatterbox" ? (
               <details className="disclosure" open={advancedVoiceOpen}
                 onToggle={event => setAdvancedVoiceOpen(event.currentTarget.open)}>
-                <summary>Advanced voice settings</summary>
+                <summary>{t("Advanced voice settings")}</summary>
                 <KokoroModelPicker engine={settings.engine === "kokoro" ? "Kokoro" : "Chatterbox"}
                   models={activeEngine?.models ?? []}
                   selected={settings.engine === "kokoro" ? settings.kokoro.quant : settings.chatterbox.quant}
                   disabled={modelDownloadBusy}
                   needsDownload={activeEngine?.needs_download}
-                  downloadLabel={installStarting ? "Starting…" : installing ? "Downloading…" : "Download selected model"}
+                  downloadLabel={installStarting ? t("Starting…") : installing ? t("Downloading…") : activeEngine?.models.find(model => model.id === (settings.engine === "kokoro" ? settings.kokoro.quant : settings.chatterbox.quant))?.installed && activeEngine.needs_download ? t("Download missing files") : t("Download selected model")}
                   onDownload={() => void downloadSelectedModel().catch(cause => setError(String(cause)))}
                   deleting={modelDeleting}
                   deleteDisabled={state.speaking}
@@ -1826,7 +1767,7 @@ function MainApp() {
                   }} />
                 {installing || installForEngine?.phase === "error" ? (
                   <div className="field">
-                    <span className="field-label">Model download</span>
+                    <span className="field-label">{t("Model download")}</span>
                     {installing && installForEngine ? (
                       <>
                         <div className="progress">
@@ -1840,7 +1781,7 @@ function MainApp() {
                           />
                         </div>
                         <span className="field-hint">
-                          {installPercent}% · {formatBytes(installForEngine.done)} of{" "}
+                          {installPercent}% · {formatBytes(installForEngine.done)}  {t("of")}{" "}
                           {formatBytes(installForEngine.total)}
                         </span>
                       </>
@@ -1848,13 +1789,13 @@ function MainApp() {
                     {installForEngine?.phase === "error" ? (
                       <Note kind="error" icon={Icon.xCircle()}>
                         <span className="truncate" title={installForEngine.message ?? ""}>
-                          {installForEngine.message}
+                          {message(installForEngine.message ?? "")}
                         </span>
                       </Note>
                     ) : null}
                   </div>
                 ) : null}
-                <p className="card-note">Keeping a voice in memory uses more memory but makes playback start faster.</p>
+                <p className="card-note">{t("Keeping a voice in memory uses more memory but makes playback start faster.")}</p>
                 {settings.engine === "kokoro" ? (
                   <label className="toggle-row">
                     <input
@@ -1866,7 +1807,7 @@ function MainApp() {
                         })
                       }
                     />
-                    <span>Keep Kokoro ready in memory</span>
+                    <span>{t("Keep Kokoro ready in memory")}</span>
                   </label>
                 ) : null}
                 {settings.engine === "chatterbox" ? (
@@ -1880,7 +1821,7 @@ function MainApp() {
                         })
                       }
                     />
-                    <span>Keep Chatterbox ready in memory</span>
+                    <span>{t("Keep Chatterbox ready in memory")}</span>
                   </label>
                 ) : null}
               </details>
@@ -1888,21 +1829,21 @@ function MainApp() {
 
             {settings.engine === "fish" ? (
               <>
-                <Card title="Fish Audio hosted voices" icon={Icon.speaker()}>
+                <Card title={t("Fish Audio hosted voices")} icon={Icon.speaker()}>
                   <div className="field">
-                    <span className="field-label">Language</span>
+                    <span className="field-label">{t("Language")}</span>
                     <select value={hostedLanguage} onChange={(event) => { const selected = event.target.value; setHostedLanguage(selected); void loadHostedVoices(hostedQuery, selected); }}>
-                      <option value="all">All languages</option>
+                      <option value="all">{t("All languages")}</option>
                       {hostedLanguages.map((item) => <option key={item.code} value={item.code}>{hostedLanguageName(item.code)} — {item.voiceCount}</option>)}
                     </select>
                   </div>
                   <div className="field">
-                    <span className="field-label">Find a voice</span>
+                    <span className="field-label">{t("Find a voice")}</span>
                     <div className="inline">
-                      <input value={hostedQuery} placeholder="Search voices" onChange={(event) => { setHostedQuery(event.target.value); hostedQueryRef.current = event.target.value; }} onKeyDown={(event) => { if (event.key === "Enter") void loadHostedVoices(hostedQuery, hostedLanguage); }} />
-                      <button className="plain" disabled={hostedLoading} onClick={() => void loadHostedVoices(hostedQuery, hostedLanguage)}>{hostedLoading ? "Loading…" : "Search"}</button>
+                      <input value={hostedQuery} placeholder={t("Search voices")} onChange={(event) => { setHostedQuery(event.target.value); hostedQueryRef.current = event.target.value; }} onKeyDown={(event) => { if (event.key === "Enter") void loadHostedVoices(hostedQuery, hostedLanguage); }} />
+                      <button className="plain accent-action" disabled={hostedLoading} onClick={() => void loadHostedVoices(hostedQuery, hostedLanguage)}>{hostedLoading ? t("Loading…") : t("Search")}</button>
                     </div>
-                    <span className="field-hint">Choose a voice, then use your Speak shortcut anywhere.</span>
+                    <span className="field-hint">{t("Choose a voice, then use your Speak shortcut anywhere.")}</span>
                   </div>
                   <div className="voice-list">
                     {hostedVoicesByLanguage.map(([code, voices]) => (
@@ -1911,69 +1852,66 @@ function MainApp() {
                         <div className="row-stack" style={{ marginTop: hostedLanguage === "all" ? 6 : 0 }}>
                           {voices.map((voice) => {
                             const selected = settings.fish.voice_id === voice.id;
-                            return <Row key={`${code}-${voice.id}`} selected={selected} glyph={selected ? Icon.checkCircle() : Icon.circle()} title={voice.name} subtitle={[voice.languageCodes?.join(", "), voice.description].filter(Boolean).join(" · ")} badge={selected ? "Selected" : undefined} onSelect={() => void save({ fish: { ...settings.fish, voice_id: voice.id } })} trailing={voice.previewAvailable ? <button className="icon" title={`Preview ${voice.name}`} onClick={(event) => { event.stopPropagation(); void previewHostedVoice(voice.id, voice.samples?.[0]?.id); }}>{Icon.play()}</button> : undefined} />;
+                            return <Row key={`${code}-${voice.id}`} selected={selected} glyph={selected ? Icon.checkCircle() : Icon.circle()} title={voice.name} subtitle={[voice.languageCodes?.join(", "), voice.description].filter(Boolean).join(" · ")} badge={selected ? t("Selected") : undefined} onSelect={() => void save({ fish: { ...settings.fish, voice_id: voice.id } })} trailing={voice.previewAvailable ? <button className="icon" title={t("Preview {0}", [voice.name])} onClick={(event) => { event.stopPropagation(); void previewHostedVoice(voice.id, voice.samples?.[0]?.id); }}>{Icon.play()}</button> : undefined} />;
                           })}
                         </div>
                       </div>
                     ))}
                   </div>
-                  {hostedClones.length > 0 ? <div className="field"><span className="field-label">My hosted clones</span><div className="row-stack">{hostedClones.map((clone) => { const inactive = (account?.cloneEntitlement?.limit ?? 0) <= 0 || clone.access === "disabled"; const ready = clone.status === "trained" && !inactive; const selected = settings.fish.voice_id === clone.id; const status = inactive ? "Inactive slot" : clone.status === "trained" ? "Ready" : clone.status === "failed" ? "Training failed" : clone.status === "created" ? "Queued" : "Training"; return <Row key={clone.id} selected={selected} disabled={!ready} glyph={selected && ready ? Icon.checkCircle() : Icon.circle()} title={clone.name} subtitle={ready ? "Clone · Ready to use" : inactive ? "Clone · Stored but inactive for your current plan" : `Clone · ${status} · unavailable until training completes`} badge={selected ? "Selected" : status} onSelect={() => void save({ fish: { ...settings.fish, voice_id: clone.id } })} />; })}</div></div> : null}
-                  {hostedVoices.length === 0 && !accountError && !hostedLoading ? <span className="card-note">No voices loaded. Search or refresh to browse.</span> : null}
-                  <label className="toggle-row"><input type="checkbox" checked={settings.fish.enhance_text} onChange={(event) => void save({ fish: { ...settings.fish, enhance_text: event.target.checked } })} /><span>Enhance text with semantic delivery cues</span></label>
+                  {hostedClones.length > 0 ? <div className="field"><span className="field-label">{t("My hosted clones")}</span><div className="row-stack">{hostedClones.map((clone) => { const inactive = (account?.cloneEntitlement?.limit ?? 0) <= 0 || clone.access === "disabled"; const ready = clone.status === "trained" && !inactive; const selected = settings.fish.voice_id === clone.id; const status = inactive ? t("Inactive slot") : clone.status === "trained" ? t("Ready") : clone.status === "failed" ? t("Training failed") : clone.status === "created" ? t("Queued") : t("Training"); return <Row key={clone.id} selected={selected} disabled={!ready} glyph={selected && ready ? Icon.checkCircle() : Icon.circle()} title={clone.name} subtitle={ready ? t("Clone · Ready to use") : inactive ? t("Clone · Stored but inactive for your current plan") : t("Clone · {0} · unavailable until training completes", [status])} badge={selected ? t("Selected") : status} onSelect={() => void save({ fish: { ...settings.fish, voice_id: clone.id } })} />; })}</div></div> : null}
+                  {hostedVoices.length === 0 && !accountError && !hostedLoading ? <span className="card-note">{t("No voices loaded. Search or refresh to browse.")}</span> : null}
+                  <label className="toggle-row"><input type="checkbox" checked={settings.fish.enhance_text} onChange={(event) => void save({ fish: { ...settings.fish, enhance_text: event.target.checked } })} /><span>{t("Enhance text with semantic delivery cues")}</span></label>
                 </Card>
-                <Card title="Custom voice cloning" icon={Icon.speaker()}>
-                  <p className="card-note">Plus includes two saved clones, Creator includes up to five, and a first top-up starts a seven-day trial with two clones.</p>
-                  {!account ? <Note kind="info" icon={Icon.info()}>Sign in to see your clone access and create a custom voice.</Note> : (account.cloneEntitlement?.limit ?? 0) > 0 ? <Note kind="info" icon={Icon.info()}>{account.cloneEntitlement?.source === "topup_trial" && account.cloneEntitlement.expiresAt ? `Your top-up trial includes ${account.cloneEntitlement.limit} voice clones through ${new Date(account.cloneEntitlement.expiresAt).toLocaleDateString()}.` : `Your current plan includes up to ${account.cloneEntitlement?.limit ?? 0} voice clones.`}</Note> : <Note kind="secondary" icon={Icon.info()}>Voice cloning is available with Plus, Creator, or the seven-day trial after your first top-up. Visit Account to review plans.</Note>}
-                  <button className="plain" onClick={() => { if (account && (account.cloneEntitlement?.limit ?? 0) > 0) { const panel = document.getElementById("your-voices") as HTMLDetailsElement | null; if (panel) { panel.open = true; panel.scrollIntoView({ behavior: "smooth", block: "start" }); } } else setTab("account"); }}>{!account ? "Sign in to create a voice" : (account.cloneEntitlement?.limit ?? 0) > 0 ? "Manage voice clones" : "View plans"}</button>
+                <Card title={t("Custom voice cloning")} icon={Icon.speaker()}>
+                  <p className="card-note">{t("Plus includes two saved clones, Creator includes up to five, and a first top-up starts a seven-day trial with two clones.")}</p>
+                  {!account ? <Note kind="info" icon={Icon.info()}>{t("Sign in to see your clone access and create a custom voice.")}</Note> : (account.cloneEntitlement?.limit ?? 0) > 0 ? <Note kind="info" icon={Icon.info()}>{account.cloneEntitlement?.source === "topup_trial" && account.cloneEntitlement.expiresAt ? t("Your top-up trial includes {0} voice clones through {1}.", [account.cloneEntitlement.limit, new Date(account.cloneEntitlement.expiresAt).toLocaleDateString(currentLanguage())]) : t("Your current plan includes up to {0} voice clones.", [account.cloneEntitlement?.limit ?? 0])}</Note> : <Note kind="secondary" icon={Icon.info()}>{t("Voice cloning is available with Plus, Creator, or the seven-day trial after your first top-up. Visit Account to review plans.")}</Note>}
+                  <button className="plain accent-action" onClick={() => { if (account && (account.cloneEntitlement?.limit ?? 0) > 0) { const panel = document.getElementById("your-voices") as HTMLDetailsElement | null; if (panel) { panel.open = true; panel.scrollIntoView({ behavior: "smooth", block: "start" }); } } else setTab("account"); }}>{!account ? t("Sign in to create a voice") : (account.cloneEntitlement?.limit ?? 0) > 0 ? t("Manage voice clones") : t("View plans")}</button>
                 </Card>
-                <Card title="Privacy for hosted speech" icon={Icon.info()}>
-                  <p className="card-note">When you use hosted speech, selected text is sent to TextHalo’s service and the speech provider to generate audio. Optional text enhancement processes the text through an additional service. Local Apple, Kokoro, and Chatterbox engines process speech on your Mac.</p>
-                  <button className="plain" onClick={() => void openUrl(`${websiteUrl}/privacy/`)}>Read the privacy policy ↗</button>
-                  <label className="toggle-row"><input type="checkbox" checked={settings.fish.privacy_accepted} onChange={(event) => void save({ fish: { ...settings.fish, privacy_accepted: event.target.checked } })} /><span>I understand how hosted speech processes selected text.</span></label>
+                <Card title={t("Privacy for hosted speech")} icon={Icon.info()}>
+                  <p className="card-note">{t("When you use hosted speech, selected text is sent to TextHalo’s service and the speech provider to generate audio. Optional text enhancement processes the text through an additional service. Local Apple, Kokoro, and Chatterbox engines process speech on your Mac.")}</p>
+                  <button className="plain" onClick={() => void openUrl(`${websiteUrl}/privacy/`)}>{t("Read the privacy policy ↗")}</button>
+                  <label className="toggle-row"><input type="checkbox" checked={settings.fish.privacy_accepted} onChange={(event) => void save({ fish: { ...settings.fish, privacy_accepted: event.target.checked } })} /><span>{t("I understand how hosted speech processes selected text.")}</span></label>
                 </Card>
               </>
             ) : settings.engine === "apple" ? (
-              <Card title="Spoken voice" icon={Icon.speaker()}>
+              <Card title={t("Spoken voice")} icon={Icon.speaker()}>
               <div className="field">
-                <span className="field-label">Language</span>
+                <span className="field-label">{t("Language")}</span>
                 <select
                   value={activeLanguage ?? "all"}
                   onChange={(event) =>
                     setLanguage(event.target.value === "all" ? null : event.target.value)
                   }
                 >
-                  <option value="all">All languages ({voices.length})</option>
+                  <option value="all">{t("All languages ({0})", [voices.length])}</option>
                   {[...byLanguage.entries()]
                     .sort((a, b) => languageName(a[0]).localeCompare(languageName(b[0])))
                     .map(([locale, list]) => (
                       <option key={locale} value={locale}>
                         {languageName(locale)} — {list.length}
-                        {locale === systemLanguage ? " · your language" : ""}
+                        {locale === systemLanguage ? t(" · your language") : ""}
                       </option>
                     ))}
                 </select>
                 <span className="field-hint">
-                  This Mac is set to {languageName(systemLanguage)}.
+                  {t("This Mac is set to {0}.", [languageName(systemLanguage)])}
                 </span>
               </div>
 
               {exactLocaleMissing && activeLanguage ? (
                 <>
                   <Note kind="warning" icon={Icon.warn()}>
-                    No {languageName(systemLanguage)} voice is installed, so this shows{" "}
-                    {languageName(activeLanguage)} instead.
-                  </Note>
+                    {t("No {0} voice is installed, so this shows {1} instead.", [languageName(systemLanguage), languageName(activeLanguage)])}</Note>
                   {siblingLocales.length > 0 ? (
                     <div className="field">
                       <span className="field-label">
-                        Other {LANGUAGE_FAMILIES[family] ?? family} regions
-                      </span>
+                        {t("Other {0} regions", [familyName(family)])}</span>
                       <div className="chip-row">
                         {siblingLocales.map((locale) => (
                           <button
                             key={locale}
                             className="chip"
-                            title={`${byLanguage.get(locale)?.length ?? 0} voices`}
+                            title={t("{0} voices", [byLanguage.get(locale)?.length ?? 0])}
                             onClick={() => setLanguage(locale)}
                           >
                             {languageName(locale).replace(/^[^(]*\(|\)$/g, "")}
@@ -2007,23 +1945,22 @@ function MainApp() {
                     <Row
                       selected={settings.voice === null}
                       glyph={settings.voice === null ? Icon.checkCircle() : Icon.circle()}
-                      title="System default"
-                      subtitle="Whatever macOS is set to"
-                      badge={settings.voice === null ? "Default" : undefined}
+                      title={t("System default")}
+                      subtitle={t("Whatever macOS is set to")}
+                      badge={settings.voice === null ? t("Default") : undefined}
                       onSelect={() => void save({ voice: null })}
                     />
                     <div className="row-stack" style={{ marginTop: 6 }}>
                       {speechVoices.map(voiceRow)}
                       {showNovelty && noveltyVoices.length > 0 ? (
                         <>
-                          <div className="group-heading">Novelty / sound effects</div>
+                          <div className="group-heading">{t("Novelty / sound effects")}</div>
                           {noveltyVoices.map(voiceRow)}
                         </>
                       ) : null}
                       {speechVoices.length === 0 && !showNovelty ? (
                         <span className="card-note">
-                          No speaking voices in this language — only sound effects.
-                        </span>
+                          {t("No speaking voices in this language — only sound effects.")}</span>
                       ) : null}
                     </div>
                   </>
@@ -2031,71 +1968,64 @@ function MainApp() {
               </div>
 
               <div className="inline">
-                <button className="plain" onClick={() => preview(selectedVoice)}>
-                  {Icon.play()} Preview default
-                </button>
+                <button className="plain accent-action" onClick={() => preview(selectedVoice)}>
+                  {Icon.play()}  {t("Preview default")}</button>
                 {noveltyVoices.length > 0 ? (
                   <button className="text" onClick={() => setShowNovelty(!showNovelty)}>
                     {showNovelty
-                      ? "Hide novelty voices"
-                      : `Show ${noveltyVoices.length} novelty / sound-effect voices`}
+                      ? t("Hide novelty voices")
+                      : t("Show {0} novelty / sound-effect voices", [noveltyVoices.length])}
                   </button>
                 ) : null}
               </div>
               <div className="card-note">
                 {selectedVoice
-                  ? `Default: ${voiceLabel(selectedVoice.name)} (${selectedVoice.locale})`
-                  : "Default: system voice"}
+                  ? t("Default: {0} ({1})", [voiceLabel(selectedVoice.name), selectedVoice.locale])
+                  : t("Default: system voice")}
               </div>
               </Card>
             ) : (
-              <Card title={`Voices — ${activeEngine?.label ?? ""}`} icon={Icon.speaker()}>
+              <Card title={t("Voices — {0}", [activeEngine?.label ?? ""])} icon={Icon.speaker()}>
                 <div className="inline">
                   <button
-                    className="plain"
+                    className="plain accent-action"
                     disabled={!activeEngine?.can_speak || !selectedEngineVoice || selectedEngineVoice.unavailable !== null}
                     onClick={() => preview(selectedEngineVoice?.id ?? null)}
                   >
-                    {Icon.play()} Preview {selectedEngineVoice?.label ?? "selected voice"}
+                    {Icon.play()}  {t("Preview")} {selectedEngineVoice?.label ?? t("selected voice")}
                   </button>
                   <button className="plain" onClick={() => void invoke("stop_speaking")}>
-                    Stop
-                  </button>
+                    {t("Stop")}</button>
                 </div>
-                <div className="card-note">Listen to a sample of the selected voice.</div>
+                <div className="card-note">{t("Listen to a sample of the selected voice.")}</div>
                 <div className="field">
-                  <span className="field-label">Voices</span>
+                  <span className="field-label">{t("Voices")}</span>
                   <span className="field-hint">
-                    {engineVoiceCounts.usable} usable
-                    {engineVoiceCounts.blocked > 0
-                      ? ` · ${engineVoiceCounts.blocked} not selectable`
+                    {engineVoiceCounts.usable}  {t("usable")}{engineVoiceCounts.blocked > 0
+                      ? t(" · {0} not selectable", [engineVoiceCounts.blocked])
                       : ""}
                   </span>
                 </div>
 
-                {espeakVoiceCount > 0 ? (
-                  <div className="field">
-                    <span className="field-label">espeak-ng</span>
-                    <span className="inline">
-                      <button className="plain" disabled={espeakInstalling} onClick={() => void invoke("install_espeak_ng")}>
-                        {Icon.download()} {espeakInstalling ? "Installing…" : `Add ${espeakVoiceCount} voices`}
-                      </button>
-                    </span>
-                  </div>
-                ) : null}
-
-                {espeakMessage ? (
-                  <Note kind="secondary" icon={Icon.info()}>
-                    <span className="truncate" title={espeakMessage}>
-                      {espeakMessage}
-                    </span>
-                  </Note>
-                ) : null}
+                {settings.engine === "kokoro" ? <KokoroCjkSetup voices={engineVoices}
+                  busy={installStarting || installing} disabled={modelDownloadBusy}
+                  error={installForEngine?.phase === "error" ? installForEngine.message ?? null : null}
+                  onDownload={() => { setInstall(null); void downloadSelectedModel().catch(cause => setError(String(cause))); }} /> : null}
+                {settings.engine === "kokoro" ? <KokoroLanguageSetup voices={engineVoices}
+                  event={languageInstall} busy={languageInstalling} disabled={modelDownloadBusy}
+                  onDownload={() => {
+                    setLanguageInstalling(true);
+                    setLanguageInstall({ phase: "runtime", message: sourceMessage("Installing language support…") });
+                    void saveTail.current.then(() => invoke("install_kokoro_languages")).catch(cause => {
+                      setLanguageInstalling(false);
+                      setLanguageInstall({ phase: "error", message: String(cause) });
+                    });
+                  }} /> : null}
 
                 <div className="voice-list">
                   {[...engineVoicesByLanguage.entries()].map(([groupLanguage, list]) => (
                     <div key={groupLanguage}>
-                      <div className="group-heading">{groupLanguage}</div>
+                      <div className="group-heading">{t(groupLanguage)}</div>
                       <div className="row-stack" style={{ marginTop: 6 }}>
                         {list.map((voice) => {
                           const chosen = activeEngine?.selected_voice === voice.id;
@@ -2104,20 +2034,20 @@ function MainApp() {
                               key={voice.id}
                               selected={chosen}
                               glyph={chosen ? Icon.checkCircle() : Icon.circle()}
-                              title={voice.label}
+                              title={settings.engine === "chatterbox" ? t(voice.label) : voice.label}
                               subtitle={
-                                voice.unavailable ??
-                                [voice.id, voice.note].filter(Boolean).join(" · ")
+                                voice.unavailable ? message(voice.unavailable) :
+                                [voice.id, voice.note ? message(voice.note) : null].filter(Boolean).join(" · ")
                               }
                               mono={voice.unavailable === null}
                               disabled={voice.unavailable !== null}
-                              badge={chosen ? "Default" : undefined}
+                              badge={chosen ? t("Default") : undefined}
                               onSelect={() => saveEngineVoice(voice.id)}
                               trailing={
                                 <button
                                   className="icon"
-                                  title={`Preview ${voice.label}`}
-                                  aria-label={`Preview ${voice.label}`}
+                                  title={t("Preview {0}", [voice.label])}
+                                  aria-label={t("Preview {0}", [voice.label])}
                                   disabled={!activeEngine?.can_speak || voice.unavailable !== null}
                                   onClick={(event) => {
                                     event.stopPropagation();
@@ -2137,8 +2067,8 @@ function MainApp() {
 
                 <div className="card-note">
                   {activeEngine?.selected_voice
-                    ? `Default: ${activeEngine.selected_voice}`
-                    : "No voice chosen yet."}
+                    ? t("Default: {0}", [activeEngine.selected_voice])
+                    : t("No voice chosen yet.")}
                 </div>
               </Card>
             )}
@@ -2149,20 +2079,19 @@ function MainApp() {
               rendered for an engine that has any, which today means only Chatterbox.
             */}
             {(activeEngine?.ref_voices.length ?? 0) > 0 ? (
-              <Card title="Reference voice" icon={Icon.speaker()}>
+              <Card title={t("Reference voice")} icon={Icon.speaker()}>
                 <div className="field">
-                  <span className="field-label">Voice to clone</span>
+                  <span className="field-label">{t("Voice to clone")}</span>
                   <span className="inline">
-                    <button className="plain" onClick={() => void addVoice()}>
-                      {Icon.download()} Add voice…
-                    </button>
+                    <button className="plain accent-action" onClick={() => void addVoice()}>
+                      {Icon.download()}  {t("Add voice…")}</button>
                   </span>
                 </div>
 
                 {voiceMessage ? (
                   <Note kind="secondary" icon={Icon.info()}>
-                    <span className="truncate" title={voiceMessage}>
-                      {voiceMessage}
+                    <span className="truncate" title={message(voiceMessage ?? "")}>
+                      {message(voiceMessage ?? "")}
                     </span>
                   </Note>
                 ) : null}
@@ -2177,9 +2106,9 @@ function MainApp() {
                         key={voice.id}
                         selected={chosen}
                         glyph={chosen ? Icon.checkCircle() : Icon.circle()}
-                        title={voice.label}
-                        subtitle={voice.note}
-                        badge={chosen ? "Default" : undefined}
+                        title={voice.builtin ? t(voice.label) : voice.label}
+                        subtitle={message(voice.note)}
+                        badge={chosen ? t("Default") : undefined}
                         onSelect={() =>
                           void save({
                             chatterbox: {
@@ -2192,14 +2121,13 @@ function MainApp() {
                           voice.builtin ? undefined : (
                             <button
                               className="plain"
-                              title={`Delete ${voice.label}`}
+                              title={t("Delete {0}", [voice.label])}
                               onClick={(event) => {
                                 event.stopPropagation();
                                 void deleteVoice(voice.id);
                               }}
                             >
-                              Delete
-                            </button>
+                              {t("Delete")}</button>
                           )
                         }
                       />
@@ -2207,12 +2135,12 @@ function MainApp() {
                   })}
                 </div>
 
-                <div className="card-note">5–15 s of clean speech works best.</div>
+                <div className="card-note">{t("5–15 s of clean speech works best.")}</div>
               </Card>
             ) : null}
 
             {settings.engine === "apple" ? (
-            <Card title="Speed" icon={Icon.gauge()}>
+            <Card title={t("Speed")} icon={Icon.gauge()}>
               <div className="inline">
                 <input
                   type="range"
@@ -2231,17 +2159,17 @@ function MainApp() {
                     }, 350);
                   }}
                 />
-                <span className="mono">{rateDraft ?? settings.rate} wpm</span>
+                <span className="mono">{rateDraft ?? settings.rate}  {t("wpm")}</span>
               </div>
             </Card>
             ) : null}
 
             {settings.engine === "kokoro" ? (
-              <Card title="Speed" icon={Icon.gauge()}>
+              <Card title={t("Speed")} icon={Icon.gauge()}>
 
 
                 <div className="field">
-                  <span className="field-label">Speed</span>
+                  <span className="field-label">{t("Speed")}</span>
                   <div className="inline">
                     <input
                       type="range"
@@ -2264,9 +2192,9 @@ function MainApp() {
             ) : null}
 
             {settings.engine === "chatterbox" ? (
-              <Card title="Language" icon={Icon.gauge()}>
+              <Card title={t("Language")} icon={Icon.gauge()}>
                 <div className="field">
-                  <span className="field-label">Language</span>
+                  <span className="field-label">{t("Language")}</span>
                   <select
                     value={settings.chatterbox.voice}
                     onChange={(event) =>
@@ -2277,7 +2205,7 @@ function MainApp() {
                   >
                     {activeEngine?.voices.map((voice) => (
                       <option key={voice.id} value={voice.id}>
-                        {voice.label}
+                        {settings.engine === "chatterbox" ? t(voice.label) : voice.label}
                       </option>
                     ))}
                   </select>
@@ -2288,38 +2216,38 @@ function MainApp() {
             ) : null}
             {settings.engine === "fish" ? (
             <details className="disclosure" id="your-voices">
-              <summary>Your voices</summary>
-              {accountError ? <Note kind="error" icon={Icon.xCircle()}>{accountError}</Note> : null}
+              <summary>{t("Your voices")}</summary>
+              {accountError ? <Note kind="error" icon={Icon.xCircle()}>{message(accountError)}</Note> : null}
                 {account && ((account.cloneEntitlement?.limit ?? 0) > 0 || hostedClones.length > 0) ? <section className="clone-panel">
                   <header className="clone-header">
-                    <div className="clone-heading"><span className="clone-heading-icon">{Icon.speaker()}</span><div><h2>Your voices</h2><p>Create a personal voice from a recording you own or have permission to use.</p></div></div>
-                    <span className="clone-count">{hostedClones.length} saved{(account.cloneEntitlement?.limit ?? 0) > 0 ? ` · ${hostedClones.filter((clone) => clone.access !== "disabled" && clone.status !== "failed").length} of ${account.cloneEntitlement?.limit ?? 0} active` : " · access ended"}{account.cloneEntitlement?.source === "topup_trial" && account.cloneEntitlement.expiresAt ? ` · trial ends ${new Date(account.cloneEntitlement.expiresAt).toLocaleDateString()}` : ""}</span>
+                    <div className="clone-heading"><span className="clone-heading-icon">{Icon.speaker()}</span><div><h2>{t("Your voices")}</h2><p>{t("Create a personal voice from a recording you own or have permission to use.")}</p></div></div>
+                    <span className="clone-count">{hostedClones.length}  {t("saved")}{(account.cloneEntitlement?.limit ?? 0) > 0 ? t(" · {0} of {1} active", [hostedClones.filter((clone) => clone.access !== "disabled" && clone.status !== "failed").length, account.cloneEntitlement?.limit ?? 0]) : t(" · access ended")}{account.cloneEntitlement?.source === "topup_trial" && account.cloneEntitlement.expiresAt ? t(" · trial ends {0}", [new Date(account.cloneEntitlement.expiresAt).toLocaleDateString(currentLanguage())]) : ""}</span>
                   </header>
-                  {hostedClones.length ? <div className="clone-list" aria-label="Saved voices">{hostedClones.map((clone) => <div className="clone-item" key={clone.id}>
-                    <span className="clone-avatar">{clone.name.trim().slice(0, 1).toUpperCase()}</span><div className="clone-item-copy"><strong>{clone.name}</strong><span className={`clone-status clone-status-${clone.status}`}>{clone.access === "disabled" ? "Stored · inactive slot" : clone.status === "trained" ? "Ready to use" : clone.status === "failed" ? "Couldn’t train" : "Training"}</span></div>
-                    {clone.status !== "failed" && (account.cloneEntitlement?.limit ?? 0) > 0 ? <button className="clone-delete" onClick={() => void setHostedCloneActive(clone.id, clone.access === "disabled")}>{clone.access === "disabled" ? "Activate" : "Deactivate"}</button> : null}
-                    <button className="clone-delete" aria-label={`Delete ${clone.name}`} onClick={() => void deleteHostedClone(clone.id)}>Delete</button>
-                  </div>)}</div> : <div className="clone-empty"><span className="clone-empty-mark">{Icon.speaker()}</span><strong>No hosted voices yet</strong><span>Your new voice will appear here when it’s ready.</span></div>}
+                  {hostedClones.length ? <div className="clone-list" aria-label={t("Saved voices")}>{hostedClones.map((clone) => <div className="clone-item" key={clone.id}>
+                    <span className="clone-avatar">{clone.name.trim().slice(0, 1).toUpperCase()}</span><div className="clone-item-copy"><strong>{clone.name}</strong><span className={`clone-status clone-status-${clone.status}`}>{clone.access === "disabled" ? t("Stored · inactive slot") : clone.status === "trained" ? t("Ready to use") : clone.status === "failed" ? t("Couldn’t train") : t("Training")}</span></div>
+                    {clone.status !== "failed" && (account.cloneEntitlement?.limit ?? 0) > 0 ? <button className="clone-delete" onClick={() => void setHostedCloneActive(clone.id, clone.access === "disabled")}>{clone.access === "disabled" ? t("Activate") : t("Deactivate")}</button> : null}
+                    <button className="clone-delete" aria-label={t("Delete {0}", [clone.name])} onClick={() => void deleteHostedClone(clone.id)}>{t("Delete")}</button>
+                  </div>)}</div> : <div className="clone-empty"><span className="clone-empty-mark">{Icon.speaker()}</span><strong>{t("No hosted voices yet")}</strong><span>{t("Your new voice will appear here when it’s ready.")}</span></div>}
                   {(account.cloneEntitlement?.limit ?? 0) > 0 ? <div className="clone-create">
-                    <div className="clone-create-title"><span className="clone-step">NEW</span><div><h3>Create a voice</h3><p>Your recording stays on this device until you choose to upload.</p></div></div>
+                    <div className="clone-create-title"><span className="clone-step">{t("NEW")}</span><div><h3>{t("Create a voice")}</h3><p>{t("Your recording stays on this device until you choose to upload.")}</p></div></div>
                     <div className="clone-fields">
-                      <div className="field clone-name-field"><label className="field-label" htmlFor="hosted-clone-name">Voice name <span>Required</span></label><input id="hosted-clone-name" value={cloneName} placeholder="e.g. Warm narration" maxLength={100} required aria-describedby="hosted-clone-name-hint" onChange={(event) => setCloneName(event.target.value)} /><span id="hosted-clone-name-hint" className="field-hint">Up to 100 characters</span></div>
-                      <div className="field"><span className="field-label">Recording <span>Required</span></span><button className={`clone-file-button${clonePath ? " has-file" : ""}`} disabled={accountBusy} onClick={() => void pickCloneAudio()}><span className="clone-file-icon">{Icon.speaker()}</span><span className="clone-file-copy"><strong>{clonePath ? clonePath.split(/[\\/]/).pop() : "Choose an audio file"}</strong><span>{clonePath ? "Selected locally · not uploaded" : "WAV, MP3, M4A, OGG or FLAC · up to 25 MB"}</span></span><span className="clone-file-action">{clonePath ? "Change" : "Browse"}</span></button></div>
+                      <div className="field clone-name-field"><label className="field-label" htmlFor="hosted-clone-name">{t("Voice name")} <span>{t("Required")}</span></label><input id="hosted-clone-name" value={cloneName} placeholder={t("e.g. Warm narration")} maxLength={100} required aria-describedby="hosted-clone-name-hint" onChange={(event) => setCloneName(event.target.value)} /><span id="hosted-clone-name-hint" className="field-hint">{t("Up to 100 characters")}</span></div>
+                      <div className="field"><span className="field-label">{t("Recording")} <span>{t("Required")}</span></span><button className={`clone-file-button${clonePath ? " has-file" : ""}`} disabled={accountBusy} onClick={() => void pickCloneAudio()}><span className="clone-file-icon">{Icon.speaker()}</span><span className="clone-file-copy"><strong>{clonePath ? clonePath.split(/[\\/]/).pop() : t("Choose an audio file")}</strong><span>{clonePath ? t("Selected locally · not uploaded") : t("WAV, MP3, M4A, OGG or FLAC · up to 25 MB")}</span></span><span className="clone-file-action">{clonePath ? t("Change") : t("Browse")}</span></button></div>
                     </div>
-                    <label className="clone-consent"><input type="checkbox" checked={cloneConsent} onChange={(event) => setCloneConsent(event.target.checked)} /><span>I own this voice or have permission to clone it. I understand the recording will be uploaded to Fish Audio and saved to my account.</span></label>
-                    <div className="clone-submit-row"><div className="clone-feedback" role="status">{!cloneName.trim() ? "Add a name to continue" : !clonePath ? "Choose a recording to continue" : !cloneConsent ? "Confirm permission to continue" : "Everything’s ready to upload"}</div><button className="clone-submit" disabled={accountBusy || !cloneName.trim() || !clonePath || !cloneConsent} onClick={() => void uploadClone()}>{accountBusy ? "Creating voice…" : "Upload and create voice"}<span aria-hidden="true">→</span></button></div>
-                    {cloneUploadError ? <div role="alert"><Note kind="error" icon={Icon.xCircle()}>Clone was not created: {cloneUploadError}</Note></div> : null}
-                    {cloneUploadSuccess ? <div role="status"><Note kind="info" icon={Icon.checkCircle()}>{cloneUploadSuccess}</Note></div> : null}
-                    <div className="clone-privacy">{Icon.checkCircle()}<span>Your recording is only sent when you select “Upload and create voice”.</span></div>
-                  </div> : <div className="clone-create"><Note kind="secondary" icon={Icon.info()}>Your clone access has ended. You can still delete saved voices here; choose Plus or Creator to create and use them again.</Note></div>}
+                    <label className="clone-consent"><input type="checkbox" checked={cloneConsent} onChange={(event) => setCloneConsent(event.target.checked)} /><span>{t("I own this voice or have permission to clone it. I understand the recording will be uploaded to Fish Audio and saved to my account.")}</span></label>
+                    <div className="clone-submit-row"><div className="clone-feedback" role="status">{!cloneName.trim() ? t("Add a name to continue") : !clonePath ? t("Choose a recording to continue") : !cloneConsent ? t("Confirm permission to continue") : t("Everything’s ready to upload")}</div><button className="clone-submit" disabled={accountBusy || !cloneName.trim() || !clonePath || !cloneConsent} onClick={() => void uploadClone()}>{accountBusy ? t("Creating voice…") : t("Upload and create voice")}<span aria-hidden="true">→</span></button></div>
+                    {cloneUploadError ? <div role="alert"><Note kind="error" icon={Icon.xCircle()}>{t("Clone was not created:")} {message(cloneUploadError)}</Note></div> : null}
+                    {cloneUploadSuccess ? <div role="status"><Note kind="info" icon={Icon.checkCircle()}>{message(cloneUploadSuccess)}</Note></div> : null}
+                    <div className="clone-privacy">{Icon.checkCircle()}<span>{t("Your recording is only sent when you select “Upload and create voice”.")}</span></div>
+                  </div> : <div className="clone-create"><Note kind="secondary" icon={Icon.info()}>{t("Your clone access has ended. You can still delete saved voices here; choose Plus or Creator to create and use them again.")}</Note></div>}
                 </section> : null}
               {!account || ((account.cloneEntitlement?.limit ?? 0) <= 0 && hostedClones.length === 0) ? <div className="empty-state">
-                <p>Create a voice from your own recording.</p>
-                <button className="plain" onClick={() => setTab("account")}>{account ? "View voice cloning plans" : "Sign in to create a voice"}</button>
+                <p>{t("Create a voice from your own recording.")}</p>
+                <button className="plain accent-action" onClick={() => setTab("account")}>{account ? t("View voice cloning plans") : t("Sign in to create a voice")}</button>
               </div> : null}
             </details>
             ) : null}
-            <Card title="Listen shortcut" icon={Icon.command()}>
+            <Card title={t("Listen shortcut")} icon={Icon.command()}>
               {shortcutControl("speak")}
             </Card>
           </div>
@@ -2327,47 +2255,47 @@ function MainApp() {
 
         {tab === "account" ? (
           <div className="pane-inner">
-            <h1 className="pane-title">Account</h1>
-            <p className="pane-subtitle">Manage your account, credits, and plan.</p>
-            {accountError ? <Note kind="error" icon={Icon.xCircle()}>{accountError}</Note> : null}
+            <h1 className="pane-title">{t("Account")}</h1>
+            <p className="pane-subtitle">{t("Manage your account, credits, and plan.")}</p>
+            {accountError ? <Note kind="error" icon={Icon.xCircle()}>{message(accountError)}</Note> : null}
             {account ? (
               <>
-                <Card title="Signed in" icon={Icon.checkCircle()}>
-                  <div className="inline"><strong>{accountEmail || "TextHalo account"}</strong><button className="plain" disabled={accountBusy} onClick={() => void refreshHostedAccount()}>Refresh</button><button className="plain" disabled={accountBusy} onClick={() => void signOut()}>Sign out</button></div>
+                <Card title={t("Signed in")} icon={Icon.checkCircle()}>
+                  <div className="inline"><strong>{accountEmail || t("TextHalo account")}</strong><button className="plain" disabled={accountBusy} onClick={() => void refreshHostedAccount()}>{t("Refresh")}</button><button className="plain" disabled={accountBusy} onClick={() => void signOut()}>{t("Sign out")}</button></div>
                 </Card>
-                <Card title="Credits" icon={Icon.gauge()}>
+                <Card title={t("Credits")} icon={Icon.gauge()}>
                   <div className="credit-balance">
-                    <div><span className="credit-eyebrow">AVAILABLE TO USE</span><strong>{account.availableCredits.toLocaleString()}</strong><span className="credit-unit">credits</span></div>
+                    <div><span className="credit-eyebrow">{t("AVAILABLE TO USE")}</span><strong>{account.availableCredits.toLocaleString(currentLanguage())}</strong><span className="credit-unit">{t("credits")}</span></div>
                   </div>
                   <div className="credit-breakdown">
-                    <div className="credit-breakdown-heading"><strong>Where your balance comes from</strong><span>Remaining</span></div>
-                    <div className="credit-source"><span><i className="credit-dot plan" />Subscription credits</span><strong>{account.creditBreakdown.planCredits.toLocaleString()}</strong></div>
-                    <div className="credit-source"><span><i className="credit-dot topup" />Purchased top-ups</span><strong>{account.creditBreakdown.topupCredits.toLocaleString()}</strong></div>
-                    {account.creditBreakdown.otherCredits ? <div className="credit-source"><span><i className="credit-dot other" />Other credits</span><strong>{account.creditBreakdown.otherCredits.toLocaleString()}</strong></div> : null}
-                    {(account.creditBreakdown.debtCredits ?? 0) > 0 ? <div className="credit-source"><span><i className="credit-dot other" />Refund balance due</span><strong>{account.creditBreakdown.debtCredits!.toLocaleString()}</strong></div> : null}
-                    <div className="credit-total"><span>Total available</span><strong>{account.creditBreakdown.totalCredits.toLocaleString()}</strong></div>
+                    <div className="credit-breakdown-heading"><strong>{t("Where your balance comes from")}</strong><span>{t("Remaining")}</span></div>
+                    <div className="credit-source"><span><i className="credit-dot plan" />{t("Subscription credits")}</span><strong>{account.creditBreakdown.planCredits.toLocaleString(currentLanguage())}</strong></div>
+                    <div className="credit-source"><span><i className="credit-dot topup" />{t("Purchased top-ups")}</span><strong>{account.creditBreakdown.topupCredits.toLocaleString(currentLanguage())}</strong></div>
+                    {account.creditBreakdown.otherCredits ? <div className="credit-source"><span><i className="credit-dot other" />{t("Other credits")}</span><strong>{account.creditBreakdown.otherCredits.toLocaleString(currentLanguage())}</strong></div> : null}
+                    {(account.creditBreakdown.debtCredits ?? 0) > 0 ? <div className="credit-source"><span><i className="credit-dot other" />{t("Refund balance due")}</span><strong>{account.creditBreakdown.debtCredits!.toLocaleString(currentLanguage())}</strong></div> : null}
+                    <div className="credit-total"><span>{t("Total available")}</span><strong>{account.creditBreakdown.totalCredits.toLocaleString(currentLanguage())}</strong></div>
                   </div>
-                  <p className="credit-explainer">The source amounts above are included in your available balance. They are not extra credits on top of it.</p>
+                  <p className="credit-explainer">{t("The source amounts above are included in your available balance. They are not extra credits on top of it.")}</p>
                 </Card>
                 {planOptionsCard}
-                <Card title="One-time credit packs" icon={Icon.gauge()}>
-                  <div className="card-note">Top-up credits are separate from monthly plan credits. Your first top-up includes seven days of voice cloning with two active slots; the trial waits while Plus or Creator already covers cloning.</div>
-                  <div className="inline"><button className="plain" disabled={accountBusy} onClick={() => void buyTopup("topup-5")}>$5 · 30,000 credits</button><button className="plain" disabled={accountBusy} onClick={() => void buyTopup("topup-10")}>$10 · 60,000 credits</button><button className="plain" disabled={accountBusy} onClick={() => void buyTopup("topup-20")}>$20 · 120,000 credits</button></div>
+                <Card title={t("One-time credit packs")} icon={Icon.gauge()}>
+                  <div className="card-note">{t("Top-up credits are separate from monthly plan credits. Your first top-up includes seven days of voice cloning with two active slots; the trial waits while Plus or Creator already covers cloning.")}</div>
+                  <div className="inline"><button className="plain accent-action" disabled={accountBusy} onClick={() => void buyTopup("topup-5")}>{t("$5 · 30,000 credits")}</button><button className="plain accent-action" disabled={accountBusy} onClick={() => void buyTopup("topup-10")}>{t("$10 · 60,000 credits")}</button><button className="plain accent-action" disabled={accountBusy} onClick={() => void buyTopup("topup-20")}>{t("$20 · 120,000 credits")}</button></div>
                 </Card>
 
               </>
             ) : (
               <>
-                <Card title="Sign in to TextHalo" icon={Icon.gear()}>
+                <Card title={t("Sign in to TextHalo")} icon={Icon.gear()}>
                   <div className="account-brand">
                     <img className="account-brand-mark" src={appLogo} alt="" />
-                    <div><strong>TextHalo</strong><div className="card-note">Your account for hosted speech</div></div>
+                    <div><strong>{t("TextHalo")}</strong><div className="card-note">{t("Your account for hosted speech")}</div></div>
                     <div className="account-brand-actions">
-                      <button className="plain" disabled={accountBusy} onClick={() => void beginDesktopSignIn()}>{accountBusy ? "Waiting for browser sign-in…" : "Sign in"}</button>
-                      {accountBusy ? <button className="text" onClick={() => void cancelDesktopSignIn()}>Cancel</button> : null}
+                      <button className="plain accent-action" disabled={accountBusy} onClick={() => void beginDesktopSignIn()}>{accountBusy ? t("Waiting for browser sign-in…") : t("Sign in")}</button>
+                      {accountBusy ? <button className="text" onClick={() => void cancelDesktopSignIn()}>{t("Cancel")}</button> : null}
                     </div>
                   </div>
-                  <div className="inline"><button className="text" onClick={() => void openUrl(`${websiteUrl}/sign-in/?mode=sign-up`)}>Create an account</button><button className="text" onClick={() => void openUrl(`${websiteUrl}/sign-in/?mode=forgot-password`)}>Forgot password?</button></div>
+                  <div className="inline"><button className="text" onClick={() => void openUrl(`${websiteUrl}/sign-in/?mode=sign-up`)}>{t("Create an account")}</button><button className="text" onClick={() => void openUrl(`${websiteUrl}/sign-in/?mode=forgot-password`)}>{t("Forgot password?")}</button></div>
                 </Card>
                 {planOptionsCard}
               </>
@@ -2376,33 +2304,30 @@ function MainApp() {
         ) : null}
 
         {tab === "permissions" ? <div className="pane-inner">
-          <h1 className="pane-title">Permissions</h1>
-          <p className="pane-subtitle">You control what TextHalo can access.</p>
-            <Card title="Accessibility" icon={Icon.textCursor()}>
+          <h1 className="pane-title">{t("Permissions")}</h1>
+          <p className="pane-subtitle">{t("You control what TextHalo can access.")}</p>
+            <Card title={t("Accessibility")} icon={Icon.textCursor()}>
               {state.trusted ? (
                 <>
                   <Note kind="secondary" icon={Icon.checkCircle()}>
-                    Accessibility access granted. You can read and edit text in other apps.
-                  </Note>
+                    {t("Accessibility access granted. You can read and edit text in other apps.")}</Note>
 
                 </>
               ) : (
                 <>
                   <Note kind="warning" icon={Icon.warn()}>
-                    Allow TextHalo to read selected text and insert your words in other apps.
-                  </Note>
-                  <div className="card-note">Text is captured only when you use a shortcut. Clipboard preferences are in Text capture.</div>
+                    {t("Allow TextHalo to read selected text and insert your words in other apps.")}</Note>
+                  <div className="card-note">{t("Text is captured only when you use a shortcut. Clipboard preferences are in Text capture.")}</div>
                   <div className="inline">
                     {state.settings.accessibility_prompted ? (
                       <button
-                        className="plain"
+                        className="plain accent-action"
                         onClick={() => void invoke("open_accessibility_settings")}
                       >
-                        Open Accessibility Settings…
-                      </button>
+                        {t("Open Accessibility Settings…")}</button>
                     ) : (
                       <button
-                        className="plain"
+                        className="plain accent-action"
                         onClick={() =>
                           void invoke<UiState>("request_accessibility")
                             .then((next) => {
@@ -2412,105 +2337,94 @@ function MainApp() {
                             .catch((cause) => setError(String(cause)))
                         }
                       >
-                        Enable Accessibility
-                      </button>
+                        {t("Enable Accessibility")}</button>
                     )}
                   </div>
                   {state.settings.accessibility_prompted ? (
                     <div className="card-note">
-                      In System Settings, switch <strong>TextHalo</strong> on under Privacy
-                      &amp; Security → Accessibility. This panel notices by itself once you do.
-                    </div>
+                      {t("In System Settings, switch")} <strong>{t("TextHalo")}</strong>  {t("on under Privacy & Security → Accessibility. This panel notices by itself once you do.")}</div>
                   ) : (
                     <div className="card-note">
-                      macOS will show its standard permission prompt. Afterward, enable
-                      <strong> TextHalo</strong> under Privacy &amp; Security → Accessibility.
-                    </div>
+                      {t("macOS will show its standard permission prompt. Afterward, enable")}<strong>  {t("TextHalo")}</strong>  {t("under Privacy & Security → Accessibility.")}</div>
                   )}
 
                 </>
               )}
               {state.focused_password_field ? (
                 <Note kind="warning" icon={Icon.warn()}>
-                  Leave the password field to use TextHalo.
-                </Note>
+                  {t("Leave the password field to use TextHalo.")}</Note>
               ) : null}
             </Card>
 
-          <Card title="Voice and screen access" icon={Icon.gear()}><PermissionsSettings /></Card>
+          <Card title={t("Voice and screen access")} icon={Icon.gear()}><PermissionsSettings /></Card>
         </div> : null}
         {tab === "transcription" ? <div className="pane-inner">
-          <div className="service-heading"><h1 className="pane-title">Dictate</h1>{readinessIcon("transcription", "Dictate")}</div>
-          <p className="pane-subtitle">Hold your shortcut, speak, then release.</p>
+          <div className="service-heading"><h1 className="pane-title">{t("Dictate")}</h1>{readinessIcon("transcription", t("Dictate"))}</div>
+          <p className="pane-subtitle">{t("Hold your shortcut, speak, then release.")}</p>
           {shortcutControl("transcribe")}
-          <Card title="Transcription source" icon={Icon.textCursor()}><TranscriptionSource value={settings.assistant ?? defaultAssistantPreferences} onChange={assistant => void save({ assistant })} availability={serviceAvailability.availability} warningIcon={Icon.warn()} downloadIcon={Icon.download()} /></Card>
+          <Card title={t("Transcription source")} icon={Icon.textCursor()}><TranscriptionSource value={settings.assistant ?? defaultAssistantPreferences} onChange={assistant => void save({ assistant })} availability={serviceAvailability.availability} warningIcon={Icon.warn()} downloadIcon={Icon.download()} /></Card>
           <TaskReadiness mode="dictate" preferences={settings.assistant ?? defaultAssistantPreferences} needsAccessibility={(settings.assistant ?? defaultAssistantPreferences).dictation_output === "insert"} accessibilityPrompted={settings.accessibility_prompted} onAccessibility={enableAccessibility} />
-          <Card title="Preferences" icon={Icon.textCursor()}><TranscriptionSettings value={settings.assistant ?? defaultAssistantPreferences} onChange={assistant => void save({ assistant })} /></Card>
-          <button className="text" onClick={() => { setHistoryView("transcripts"); setTab("history"); }}>View transcripts</button>
+          <Card title={t("Preferences")} icon={Icon.textCursor()}><TranscriptionSettings value={settings.assistant ?? defaultAssistantPreferences} onChange={assistant => void save({ assistant })} /></Card>
+          <button className="text" onClick={() => { setHistoryView("transcripts"); setTab("history"); }}>{t("View transcripts")}</button>
         </div> : null}
         {tab === "assistant" ? <div className="pane-inner">
-          <div className="service-heading"><h1 className="pane-title">Assistant</h1>{readinessIcon("assistant", "Assistant")}</div>
-          <p className="pane-subtitle">Hold your shortcut and ask to write, edit, or read aloud.</p>
+          <div className="service-heading"><h1 className="pane-title">{t("Assistant")}</h1>{readinessIcon("assistant", t("Assistant"))}</div>
+          <p className="pane-subtitle">{t("Hold your shortcut and ask to write, edit, or read aloud.")}</p>
           {shortcutControl("assistant")}
           <TaskReadiness mode="assistant" preferences={settings.assistant ?? defaultAssistantPreferences} accessibilityPrompted={settings.accessibility_prompted} onAccessibility={enableAccessibility} />
-          <Card title="Make it yours" icon={Icon.textCursor()}><AssistantSettings value={settings.assistant ?? defaultAssistantPreferences} onChange={assistant => void save({ assistant })} onSignIn={() => void beginDesktopSignIn()} onCancelSignIn={() => void cancelDesktopSignIn()} signingIn={accountBusy} warningIcon={Icon.warn()} accountMark={appLogo} signInError={accountError} /></Card>
-          <button className="text" onClick={() => { setHistoryView("assistant"); setTab("history"); }}>View Assistant history</button>
-          {(settings.assistant?.provider ?? "local") !== "local" && <button className="text" onClick={() => setTab("account")}>Account and credits</button>}
+          <Card title={t("Make it yours")} icon={Icon.textCursor()}><AssistantSettings value={settings.assistant ?? defaultAssistantPreferences} onChange={assistant => void save({ assistant })} onSignIn={() => void beginDesktopSignIn()} onCancelSignIn={() => void cancelDesktopSignIn()} signingIn={accountBusy} warningIcon={Icon.warn()} accountMark={appLogo} signInError={message(accountError)} /></Card>
+          <button className="text" onClick={() => { setHistoryView("assistant"); setTab("history"); }}>{t("View Assistant history")}</button>
+          {(settings.assistant?.provider ?? "local") !== "local" && <button className="text" onClick={() => setTab("account")}>{t("Account and credits")}</button>}
         </div> : null}
 
         {tab === "shortcuts" ? (
           <div className="pane-inner">
-            <h1 className="pane-title">Shortcuts</h1>
+            <h1 className="pane-title">{t("Shortcuts")}</h1>
             <p className="pane-subtitle">
-              Hold Dictate or Assistant to speak. Press Listen to read selected text.
-            </p>
+              {t("Hold Dictate or Assistant to speak. Press Listen to read selected text.")}</p>
 
             {([
-              {title:"Listen",role:"speak"}, {title:"Dictate",role:"transcribe"},
-              {title:"Assistant",role:"assistant"}, {title:"Stop / cancel",role:"stop"},
+              {title:t("Listen"),role:"speak"}, {title:t("Dictate"),role:"transcribe"},
+              {title:t("Assistant"),role:"assistant"}, {title:t("Stop / cancel"),role:"stop"},
             ] as const).map(({title,role}) => <Card key={role} title={title} icon={Icon.command()}>
               {shortcutControl(role)}
             </Card>)}
-            <Card title="Shortcut availability" icon={Icon.keyboard()}>
+            <Card title={t("Shortcut availability")} icon={Icon.keyboard()}>
               {state.refused_shortcuts.length > 0 ? (
                 <Note kind="error" icon={Icon.xCircle()}>
-                  macOS refused {state.refused_shortcuts.join(", ")} — another app already
-                  owns it. Choose another shortcut.
-                </Note>
+                  {t("macOS refused")} {state.refused_shortcuts.join(", ")}  {t("— another app already owns it. Choose another shortcut.")}</Note>
               ) : null}
               <div className="card-note">
-                A combination needs at least one modifier (⌘ ⌃ ⌥ ⇧); function keys may be
-                used on their own.
-              </div>
+                {t("A combination needs at least one modifier (⌘ ⌃ ⌥ ⇧); function keys may be used on their own.")}</div>
             </Card>
           </div>
         ) : null}
 
         {tab === "capture" ? (
           <div className="pane-inner">
-            <h1 className="pane-title">Text capture</h1>
-            <p className="pane-subtitle">Choose how selected text is read.</p>
+            <h1 className="pane-title">{t("Text capture")}</h1>
+            <p className="pane-subtitle">{t("Choose how selected text is read.")}</p>
 
-            <Card title="Capture method" icon={Icon.textCursor()}>
+            <Card title={t("Capture method")} icon={Icon.textCursor()}>
               <div className="row-stack">
                 {(
                   [
                     {
                       mode: "copy_only" as CaptureMode,
-                      title: "Copy selected text (recommended)",
+                      title: t("Copy selected text (recommended)"),
                       subtitle:
-                        "Uses the clipboard. Requires Accessibility access.",
+                        t("Uses the clipboard. Requires Accessibility access."),
                     },
                     {
                       mode: "ax_then_copy" as CaptureMode,
-                      title: "Read directly, then copy",
+                      title: t("Read directly, then copy"),
                       subtitle:
-                        "Uses the clipboard only when direct reading is unavailable.",
+                        t("Uses the clipboard only when direct reading is unavailable."),
                     },
                     {
                       mode: "ax_only" as CaptureMode,
-                      title: "Read directly",
-                      subtitle: "Never touches the clipboard",
+                      title: t("Read directly"),
+                      subtitle: t("Never touches the clipboard"),
                     },
                   ] as const
                 ).map((option) => (
@@ -2530,7 +2444,7 @@ function MainApp() {
               </div>
             </Card>
 
-            <Card title="Limits" icon={Icon.warn()}>
+            <Card title={t("Limits")} icon={Icon.warn()}>
               <label className="toggle-row">
                 <input
                   type="checkbox"
@@ -2538,14 +2452,13 @@ function MainApp() {
                   onChange={(event) => void save({ restore_clipboard: event.target.checked })}
                 />
                 <span>
-                  <span>Put the clipboard back after a copy-mode capture</span>
+                  <span>{t("Put the clipboard back after a copy-mode capture")}</span>
                   <span className="field-hint" style={{ display: "block" }}>
-                    Without this, capturing overwrites whatever you had copied.
-                  </span>
+                    {t("Without this, capturing overwrites whatever you had copied.")}</span>
                 </span>
               </label>
               <div className="field">
-                <span className="field-label">Speak at most</span>
+                <span className="field-label">{t("Speak at most")}</span>
                 <div className="inline">
                   <input
                     type="number"
@@ -2560,11 +2473,10 @@ function MainApp() {
                       }
                     }}
                   />
-                  <span className="card-note">characters per selection</span>
+                  <span className="card-note">{t("characters per selection")}</span>
                 </div>
                 <span className="field-hint">
-                  Guards against capturing a whole document by accident.
-                </span>
+                  {t("Guards against capturing a whole document by accident.")}</span>
               </div>
             </Card>
           </div>
@@ -2572,30 +2484,28 @@ function MainApp() {
 
         {tab === "history" ? (
           <div className="pane-inner">
-            <div className="section-nav history-tabs" role="group" aria-label="History type">
-              <button aria-pressed={historyView === "audio"} className={historyView === "audio" ? "active" : ""} onClick={() => setHistoryView("audio")}>Audio</button>
-              <button aria-pressed={historyView === "transcripts"} className={historyView === "transcripts" ? "active" : ""} onClick={() => setHistoryView("transcripts")}>Transcripts</button>
-              <button aria-pressed={historyView === "assistant"} className={historyView === "assistant" ? "active" : ""} onClick={() => setHistoryView("assistant")}>Assistant</button>
+            <div className="section-nav history-tabs" role="group" aria-label={t("History type")}>
+              <button aria-pressed={historyView === "audio"} className={historyView === "audio" ? "active" : ""} onClick={() => setHistoryView("audio")}>{t("Audio")}</button>
+              <button aria-pressed={historyView === "transcripts"} className={historyView === "transcripts" ? "active" : ""} onClick={() => setHistoryView("transcripts")}>{t("Transcripts")}</button>
+              <button aria-pressed={historyView === "assistant"} className={historyView === "assistant" ? "active" : ""} onClick={() => setHistoryView("assistant")}>{t("Assistant")}</button>
             </div>
-            {historyView === "assistant" ? <GenerationHistory /> : historyView === "transcripts" ? <><h1 className="pane-title">History</h1><TranscriptionHistory /></> : <>
+            {historyView === "assistant" ? <GenerationHistory /> : historyView === "transcripts" ? <><h1 className="pane-title">{t("History")}</h1><TranscriptionHistory /></> : <>
             <div className="history-heading">
               <div>
-                <h1 className="pane-title">History</h1>
-                <p className="pane-subtitle">Saved privately on this Mac · keeps the latest 50.</p>
+                <h1 className="pane-title">{t("History")}</h1>
+                <p className="pane-subtitle">{t("Saved privately on this Mac · keeps the latest 50.")}</p>
               </div>
               <div className="inline">
                 <button className="plain" onClick={() => void refreshHistory()} disabled={historyLoading}>
-                  Refresh
-                </button>
+                  {t("Refresh")}</button>
                 <button className="plain" onClick={() => void clearHistory()} disabled={!historyEntries.length}>
-                  Clear all
-                </button>
+                  {t("Clear all")}</button>
               </div>
             </div>
-            {historyError ? <Note kind="error" icon={Icon.xCircle()}>{historyError}</Note> : null}
+            {historyError ? <Note kind="error" icon={Icon.xCircle()}>{message(historyError)}</Note> : null}
             {historyLoading && !historyEntries.length ? (
-              <Card title="Loading audio history" icon={Icon.history()}>
-                <div className="card-note">Reading saved recordings…</div>
+              <Card title={t("Loading audio history")} icon={Icon.history()}>
+                <div className="card-note">{t("Reading saved recordings…")}</div>
               </Card>
             ) : historyEntries.length ? (
               <div className="history-list">
@@ -2610,10 +2520,10 @@ function MainApp() {
                     <div className="history-copy">
                       <div className="history-meta">
                         <strong>{entry.engine}</strong>
-                        {entry.partial ? <span title="Only received audio was saved; the text shows the original request">Partial</span> : null}
+                        {entry.partial ? <span title={t("Only received audio was saved; the text shows the original request")}>{t("Partial")}</span> : null}
                         <span>{entry.voice}</span>
                         <time dateTime={new Date(entry.createdAt).toISOString()}>
-                          {new Intl.DateTimeFormat(undefined, {
+                          {new Intl.DateTimeFormat(currentLanguage(), {
                             dateStyle: "medium",
                             timeStyle: "short",
                           }).format(entry.createdAt)}
@@ -2623,22 +2533,20 @@ function MainApp() {
                     </div>
                     <div className="history-actions">
                       <button
-                        className="plain"
+                        className="plain accent-action"
                         onClick={() =>
                           void invoke("play_audio_history", { id: entry.id }).catch((e) =>
                             setHistoryError(String(e)),
                           )
                         }
                       >
-                        {Icon.play()} Play
-                      </button>
+                        {Icon.play()}  {t("Play")}</button>
                       <button
                         className="plain"
                         onClick={() => void deleteHistoryEntry(entry.id)}
-                        aria-label="Delete saved audio"
+                        aria-label={t("Delete saved audio")}
                       >
-                        Delete
-                      </button>
+                        {t("Delete")}</button>
                     </div>
                   </article>
                   ))}
@@ -2648,10 +2556,9 @@ function MainApp() {
                 ))}
               </div>
             ) : (
-              <Card title="No saved audio yet" icon={Icon.history()}>
+              <Card title={t("No saved audio yet")} icon={Icon.history()}>
                 <div className="card-note">
-                  TextHalo will save completed and partial hosted recordings here. Voice preview samples are not saved.
-                </div>
+                  {t("TextHalo will save completed and partial hosted recordings here. Voice preview samples are not saved.")}</div>
               </Card>
             )}
             </> }

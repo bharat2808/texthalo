@@ -1,3 +1,4 @@
+import { t } from "./i18n";
 import { useEffect, useLayoutEffect, useRef } from "react";
 import { watchNativeHover } from "./nativeHover";
 
@@ -67,8 +68,8 @@ export default function LiveTextPreview({ text, expanded, label, pending, toggle
     <div ref={viewport} className="live-text-viewport" aria-label={label}>
       <div className="live-text-content">{expanded ? text : text.replace(/\s+/g, " ")}</div>
     </div>
-    <button ref={expandButton} className="preview-expand" aria-label={expanded ? "Collapse live text" : "Expand live text"}
-      aria-expanded={expanded} title={expanded ? "Show one line" : "Wrap into a passage"}
+    <button ref={expandButton} className="preview-expand" aria-label={expanded ? t("Collapse live text") : t("Expand live text")}
+      aria-expanded={expanded} title={expanded ? t("Show one line") : t("Wrap into a passage")}
       disabled={pending}
       onPointerMove={event => {
         if (event.movementX === 0 && event.movementY === 0) return;

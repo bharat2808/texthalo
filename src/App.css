@@ -389,6 +389,17 @@ body:has(.update-overlay) {
   color: var(--label-secondary);
 }
 
+.model-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.kokoro-language-setup > button {
+  align-self: flex-start;
+  max-width: 100%;
+}
+
 /* ───────────────────────── hosted voice creator ─────────────────────── */
 
 .clone-panel {
@@ -435,8 +446,8 @@ body:has(.update-overlay) {
 .clone-status { flex: 0 0 auto; color: var(--label-secondary); font-size: 10px; }
 .clone-status-trained { color: #39a879; }
 .clone-status-failed { color: var(--danger); }
-.clone-delete { border: 0; background: transparent; color: var(--label-secondary); font: inherit; font-size: 10px; cursor: default; }
-.clone-delete:hover { color: var(--danger); }
+.clone-delete { border: 1px solid var(--accent); border-radius: var(--radius-control); padding: 4px 10px; background: color-mix(in srgb, var(--accent) 10%, transparent); color: var(--accent); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
+.clone-delete:hover { background: color-mix(in srgb, var(--accent) 20%, transparent); }
 .clone-empty { display: flex; align-items: center; gap: 11px; margin: 0 18px 14px; padding: 12px; border: 1px dashed var(--separator); border-radius: 10px; }
 .clone-empty-mark { width: 32px; height: 32px; border-radius: 9px; }
 .clone-empty strong { font-size: 11px; font-weight: 600; }
@@ -649,6 +660,26 @@ button.plain:active:not(:disabled) {
 
 button.plain:disabled {
   opacity: 0.5;
+}
+
+button.plain.accent-action {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+button.plain.accent-action:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 88%, black);
+}
+
+button.plain.accent-action:active:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 76%, black);
+}
+
+button.plain.accent-action:disabled {
+  cursor: default;
 }
 
 button.text {
@@ -873,7 +904,13 @@ kbd { display: inline-block; padding: 5px 8px; border: 1px solid var(--separator
 .task-card { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding: 14px; border: 1px solid var(--separator); border-radius: 12px; background: color-mix(in srgb, var(--control-bg) 65%, transparent); }
 .task-card h2 { margin: 0; font-size: 15px; }
 .task-card p { margin: 0; color: var(--label-secondary); line-height: 1.5; flex: 1; }
-.task-card .plain { margin-top: 3px; }
+.home-voice-actions { display: flex; flex-wrap: wrap; align-items: stretch; gap: 10px; margin-top: 16px; }
+.home-voice-actions > button { min-height: 36px; white-space: normal; }
+.home-shortcut-section { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--separator); }
+.home-shortcut-section .shortcut-control { margin: 0; }
+.home-shortcut-section .task-shortcut { justify-content: space-between; gap: 10px 16px; }
+.home-task-footer { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; width: 100%; margin-top: auto; padding-top: 6px; }
+.home-task-footer > button { min-height: 34px; max-width: 100%; white-space: normal; text-align: left; }
 .task-shortcut { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
 .readiness { color: var(--label-secondary); }
 .readiness:empty { display: none; }
@@ -896,7 +933,7 @@ button:focus-visible, summary:focus-visible, select:focus-visible, input:focus-v
 .hold-key-button { display: inline-flex; align-items: center; gap: 7px; }
 .hold-key-symbol { display: inline-flex; align-items: center; justify-content: center; min-width: 23px; height: 23px; border: 1px solid var(--separator); border-bottom-width: 2px; border-radius: 4px; background: var(--control-bg); font-size: 15px; line-height: 1; }
 .shortcut-error { color: var(--danger); font-size: 12px; overflow-wrap: anywhere; }
-.listen-hero .shortcut-control { margin: 10px 0; }
+.listen-hero > .shortcut-control { margin: 10px 0; }
 .feature-permissions { padding: 16px; border: 1px solid var(--separator); border-radius: var(--radius-card); background: color-mix(in srgb, var(--control-bg) 50%, transparent); }
 .permission-summary { display: flex; justify-content: space-between; gap: 12px; }
 .permission-summary > span { color: var(--label-secondary); font-size: 12px; }
@@ -908,7 +945,7 @@ button:focus-visible, summary:focus-visible, select:focus-visible, input:focus-v
 @media (max-height: 540px) {
   .home-pane { gap: 8px; padding: 12px 16px; }
   .home-intro { display: none; }
-  .listen-hero .shortcut-control { margin: 6px 0; }
+  .listen-hero > .shortcut-control { margin: 6px 0; }
   .home-pane .pane-title { font-size: 19px; }
   .listen-hero { padding: 12px 16px; }
   .listen-hero h2 { font-size: 19px; }
@@ -917,6 +954,9 @@ button:focus-visible, summary:focus-visible, select:focus-visible, input:focus-v
 
 @media (max-width: 580px) {
   .home-tasks { grid-template-columns: 1fr; }
+  .home-voice-actions { flex-direction: column; }
+  .home-voice-actions > button { width: 100%; }
+  .home-shortcut-section .task-shortcut { align-items: flex-start; flex-direction: column; }
 }
 
 .service-heading { display: flex; align-items: center; gap: 8px; }

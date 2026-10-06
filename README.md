@@ -43,6 +43,21 @@ https://github.com/user-attachments/assets/f33d93bc-57c8-4afb-8db1-70b9fac76eca
 
 Change the keyboard shortcuts in **Shortcuts**. Selection length is limited to 5,000 characters by default and can be adjusted in **Capture**.
 
+## Interface languages
+
+The desktop interface supports English, Canadian French, and Latin American Spanish.
+It follows the Mac’s preferred language by default, with English as the fallback.
+Choose a language in **Settings → General → Interface language** to override it;
+the choice is saved and updates open windows and the menu bar menu immediately.
+Voice and dictation language choices remain independent. macOS permission dialogs
+follow the system language and include localized privacy descriptions.
+
+Translations live in `src/locales/`. English source messages serve as catalog keys;
+keep interpolation placeholders such as `{0}` in every translation. Native status
+messages are translated when displayed, preserving their original audit text and
+technical details. User text, recordings, voice names, and Assistant instructions
+are never translated by the interface setting.
+
 ## Speech engines
 
 | Engine | Voices and languages | Setup |

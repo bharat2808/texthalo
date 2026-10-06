@@ -1,3 +1,4 @@
+import { localizedHref, splitLocalizedPath } from "./localization";
 import { createAuthClient, createInternalNeonAuth } from "@neondatabase/auth";
 import { BetterAuthReactAdapter } from "@neondatabase/auth/react/adapters";
 
@@ -31,7 +32,7 @@ export async function getAccessToken(): Promise<string | null> {
 export function safeInternalReturnTo(value: string | null | undefined): string | null {
   if (!value || !value.startsWith("/") || value.startsWith("//")) return null;
   const destination = new URL(value, window.location.origin);
-  if (destination.origin !== window.location.origin || destination.pathname === "/sign-in/") return null;
+  if (destination.origin !== window.location.origin || splitLocalizedPath(destination.pathname).pathname.replace(/\/$/, "") === "/sign-in") return null;
   return `${destination.pathname}${destination.search}${destination.hash}`;
 }
 
@@ -46,7 +47,7 @@ export async function promptSignIn(options: { planId?: "plus" | "creator"; topup
   if (options.topupId) query.set("topup", options.topupId);
   const returnTo = safeInternalReturnTo(options.returnTo);
   if (returnTo) query.set("returnTo", returnTo);
-  window.location.assign(`/sign-in/?${query.toString()}`);
+  window.location.assign(localizedHref(`/sign-in/?${query.toString()}`, splitLocalizedPath(window.location.pathname).language, splitLocalizedPath(window.location.pathname).explicit));
 }
 
 export async function startCheckout(planId: "plus" | "creator"): Promise<void> {
