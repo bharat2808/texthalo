@@ -211,3 +211,34 @@
 @media(max-width:680px){.editorial-header{height:auto;min-height:82px;padding-block:16px}.site-header .editorial-nav{display:flex;flex-basis:100%;justify-content:flex-start;gap:13px;font-size:11px}.site-header .editorial-nav .nav-download{min-height:34px;padding:0 10px;font-size:10px}.editorial-main{width:calc(100% - 38px);padding:57px 0 74px}.editorial-main>h1,.article-header h1{font-size:clamp(39px,11vw,57px)}.editorial-intro,.article-deck{font-size:14px;line-height:1.7}.editorial-grid{grid-template-columns:1fr;gap:10px;margin-top:35px}.editorial-card{min-height:235px;padding:22px}.editorial-card h2{font-size:23px}.article-main{padding-top:32px}.breadcrumbs{margin-bottom:34px}.article-header h1{font-size:clamp(37px,10vw,54px)}.article-body{font-size:15px;line-height:1.85}.article-body h2{font-size:24px}.article-cta{align-items:flex-start;flex-direction:column;margin-top:38px;padding:21px}.article-cta .button{min-height:44px}}
 @media(max-width:900px){.plan-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.plan-card-featured{grid-column:auto}.signin-page{gap:25px}.signin-decoration{height:330px;width:330px}}
 @media(max-width:680px){.pricing-page{padding-top:55px;padding-bottom:66px}.pricing-page>h1{font-size:clamp(43px,12vw,62px)}.pricing-intro{font-size:13px}.plan-grid{grid-template-columns:1fr;gap:11px;margin-top:30px}.plan-card{min-height:0;padding:23px 21px 18px}.plan-description{min-height:0;margin-bottom:15px}.plan-card ul{gap:10px;padding:17px 0;margin-bottom:15px}.plan-ribbon{right:13px;top:13px;font-size:7px}.local-voice-note{margin-top:25px;padding:18px}.signin-page{grid-template-columns:1fr;min-height:0;padding-top:32px;padding-bottom:55px}.signin-decoration{height:180px;width:180px;margin-bottom:9px}.signin-decoration::before{inset:17px}.signin-decoration::after{inset:36px}.signin-decoration .ring-a{inset:28px}.signin-decoration .ring-b{inset:48px}.signin-decoration .privacy-center{gap:7px;font-size:7px}.signin-decoration .brand-mark{width:34px;height:34px}.signin-decoration .brand-mark::before{width:15px;height:15px;border-width:1px;transform:translate(4px,-2px)}.signin-decoration .brand-mark span{width:6px;height:6px;transform:translate(-7px,6px)}.signin-panel{padding:20px 0 0}.signin-panel>h1{font-size:clamp(42px,11vw,57px)}.billing-success{min-height:570px;padding-top:39px;padding-bottom:55px}.credit-topup-panel{padding:18px}.success-actions{align-items:flex-start;flex-direction:column;gap:17px}}
+
+.website-language-picker { display: inline-flex; flex-shrink: 0; }
+.website-language-picker select { max-width: 160px; min-height: 36px; border: 1px solid var(--line, #d8d4ca); border-radius: 6px; padding: 6px 24px 6px 8px; color: inherit; background: transparent; font: inherit; font-size: 12px; cursor: pointer; }
+.website-language-picker select:focus-visible { outline: 2px solid currentColor; outline-offset: 3px; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+@media (max-width: 640px) { .website-language-picker select { max-width: 124px; } }
+
+/* Leave room for longer translated labels and the language picker. */
+.billing-header { gap: 12px; }
+.billing-header .wordmark, .billing-header .header-account-tools { flex-shrink: 0; }
+.billing-header .header-account-tools { margin-left: 0; }
+.billing-header nav { gap: 12px; font-size: 11px; }
+.billing-header nav > a, .header-signin { white-space: nowrap; }
+.mobile-signin { display: none; }
+@media (max-width: 1100px) {
+  .billing-header .menu-toggle { display: block; border: 1px solid #e0e3da; background: transparent; border-radius: 6px; width: 36px; height: 34px; color: #334239; font-size: 15px; }
+  .billing-header nav { display: none; position: absolute; top: 100%; left: 0; right: 0; padding: 17px; background: #f9f8f3; border: 1px solid #e3e5dc; border-radius: 8px; box-shadow: 0 15px 35px #19281c18; align-items: stretch; gap: 4px; flex-direction: column; }
+  .billing-header nav.nav-open { display: flex; }
+  .billing-header nav > a:not(.button) { padding: 11px 8px; }
+}
+@media (max-width: 680px) {
+  .site-header .editorial-nav { position: static; padding: 0; border: 0; box-shadow: none; background: transparent; flex-direction: row; }
+}
+@media (max-width: 480px) {
+  .billing-header { gap: 0; }
+  .billing-header .header-signin { display: none; }
+  .billing-header nav .mobile-signin { display: block; }
+  .billing-header .header-account-tools { gap: 5px; }
+  .billing-header .website-language-picker select { max-width: 100px; }
+  .billing-header .header-account-email { max-width: 35px; }
+}
