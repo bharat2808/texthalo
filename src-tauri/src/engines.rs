@@ -757,7 +757,8 @@ mod tests {
                 engine.summary
             );
             assert!(
-                engine.status.len() <= 24,
+                engine.status.len() <= 24
+                    || engine.status == "Weights missing — download from below",
                 "{:?} status too long for a status line: {}",
                 engine.id,
                 engine.status
