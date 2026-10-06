@@ -1,13 +1,13 @@
 import { useEffect, useSyncExternalStore, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { resolveLanguage, translate, translateMessage, type Language, type LanguagePreference } from "./localization";
+import { isLanguage, resolveLanguage, translate, translateMessage, type Language, type LanguagePreference } from "./localization";
 
 export type LocalizationState = { preference: LanguagePreference; language: Language };
 let language: Language = resolveLanguage("system", typeof navigator === "undefined" ? [] : navigator.languages);
 const subscribers = new Set<() => void>();
 export function applyLocalization(state: LocalizationState) {
-  if (state.language !== "en" && state.language !== "fr-CA" && state.language !== "es-419") return;
+  if (!isLanguage(state.language)) return;
   language = state.language;
   if (typeof document !== "undefined") document.documentElement.lang = language;
   subscribers.forEach(listener => listener());

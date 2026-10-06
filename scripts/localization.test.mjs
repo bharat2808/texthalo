@@ -29,6 +29,7 @@ test('catalogs preserve all interpolation parameters and have complete matching 
   assert.ok(Object.keys(catalogs['fr-CA']).length > 400);
   assert.deepEqual(Object.keys(catalogs['fr-CA']).sort(), Object.keys(catalogs['es-419']).sort());
   for (const [language, catalog] of Object.entries(catalogs)) {
+    assert.deepEqual(Object.keys(catalog).sort(), Object.keys(catalogs["fr-CA"]).sort(), `${language}: complete desktop coverage`);
     for (const [source, target] of Object.entries(catalog)) {
       assert.ok(target.trim(), `${language}: empty translation for ${source}`);
       assert.deepEqual(target.match(/\{\d+\}/g)?.sort() ?? [], source.match(/\{\d+\}/g)?.sort() ?? [], `${language}: ${source}`);
@@ -51,4 +52,33 @@ test('audit phases use localized display labels and unknown phases remain intact
   assert.equal(localization.translatePhase('capturing_screen', 'fr-CA'), 'Capture de l’écran');
   assert.equal(localization.translatePhase('transcript', 'es-419'), 'Transcripción');
   assert.equal(localization.translatePhase('future_phase', 'fr-CA'), 'future_phase');
+});
+
+test('new locales resolve regional and Chinese script preferences consistently', () => {
+  const cases = [['pt-PT', 'pt-BR'], ['pt_BR', 'pt-BR'], ['it-CH', 'it'], ['ja-JP', 'ja'],
+    ['zh', 'zh-Hans'], ['zh-CN', 'zh-Hans'], ['zh-SG', 'zh-Hans'],
+    ['zh-TW', 'zh-Hant'], ['zh_HK', 'zh-Hant'], ['zh-MO', 'zh-Hant'],
+    ['zh-Hans-TW', 'zh-Hans'], ['zh-Hant-CN', 'zh-Hant'], ['hi-IN', 'en']];
+  for (const [preferred, expected] of cases) {
+    assert.equal(localization.resolveLanguage('system', [preferred]), expected, preferred);
+  }
+  for (const language of localization.languages) {
+    assert.equal(localization.resolveLanguage(language, ['en-US']), language);
+    assert.ok(localization.isLanguage(language));
+  }
+  assert.equal(localization.isLanguage('hi'), false);
+  assert.equal(localization.isLanguage('constructor'), false);
+  assert.equal(localization.resolveLanguage('system', ['hi-IN', 'ja-JP']), 'ja');
+});
+
+test('new translations preserve product names and fragment spacing', () => {
+  for (const language of ['pt-BR', 'it', 'ja', 'zh-Hans', 'zh-Hant']) {
+    for (const [source, target] of Object.entries(localization.catalogs[language])) {
+      for (const brand of ['TextHalo', 'Kokoro', 'Whisper', 'Chatterbox', 'Fish Audio', 'Apple Intelligence', 'espeak-ng']) {
+        if (source.toLowerCase().includes(brand.toLowerCase())) assert.ok(target.toLowerCase().includes(brand.toLowerCase()), `${language}: ${brand} in ${source}`);
+      }
+      assert.equal(target.match(/^\s*/)[0], source.match(/^\s*/)[0], `${language}: leading spacing in ${source}`);
+      assert.equal(target.match(/\s*$/)[0], source.match(/\s*$/)[0], `${language}: trailing spacing in ${source}`);
+    }
+  }
 });

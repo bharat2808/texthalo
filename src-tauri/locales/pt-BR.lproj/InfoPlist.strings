@@ -1,0 +1,2 @@
+"NSMicrophoneUsageDescription" = "O TextHalo grava enquanto você mantém pressionado Transcrever ou Assistente e depois processa sua fala neste Mac.";
+"NSSpeechRecognitionUsageDescription" = "O TextHalo transcreve ditados e pedidos ao Assistente usando o reconhecimento de fala no dispositivo.";

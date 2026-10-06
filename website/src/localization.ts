@@ -1,13 +1,21 @@
-import { resolveLanguage, translate, translateMessage, type Language } from "../../src/localization";
+import { languages, resolveLanguage, translate, translateMessage, type Language } from "../../src/localization";
 import french from "./locales/fr-CA.json";
 import spanish from "./locales/es-419.json";
+import ptBR from "./locales/pt-BR.json";
+import it from "./locales/it.json";
+import ja from "./locales/ja.json";
+import zhHans from "./locales/zh-Hans.json";
+import zhHant from "./locales/zh-Hant.json";
 
-export const languages: readonly Language[] = ["en", "fr-CA", "es-419"];
-export const websiteCatalogs: Record<Exclude<Language, "en">, Record<string, string>> = { "fr-CA": french, "es-419": spanish };
+export { languages };
+
+export const websiteCatalogs: Record<Exclude<Language, "en">, Record<string, string>> = { "fr-CA": french, "es-419": spanish, "pt-BR": ptBR, it, ja, "zh-Hans": zhHans, "zh-Hant": zhHant };
 export const languageStorageKey = "texthalo.website.language";
 
+const localizedPathPattern = new RegExp(`^/(${languages.join("|")})(?=/|$)`);
+
 export function splitLocalizedPath(path: string): { language: Language; pathname: string; explicit: boolean } {
-  const match = path.match(/^\/(en|fr-CA|es-419)(?=\/|$)/);
+  const match = path.match(localizedPathPattern);
   return { language: match ? match[1] as Language : "en", pathname: match ? path.slice(match[0].length) || "/" : path, explicit: Boolean(match) };
 }
 

@@ -11,6 +11,16 @@ pub enum LanguagePreference {
     French,
     #[serde(rename = "es-419")]
     Spanish,
+    #[serde(rename = "pt-BR")]
+    Portuguese,
+    #[serde(rename = "it")]
+    Italian,
+    #[serde(rename = "ja")]
+    Japanese,
+    #[serde(rename = "zh-Hans")]
+    ChineseSimplified,
+    #[serde(rename = "zh-Hant")]
+    ChineseTraditional,
     #[default]
     #[serde(other, rename = "system")]
     System,
@@ -27,13 +37,36 @@ pub fn resolve(preference: LanguagePreference, languages: &[String]) -> &'static
         LanguagePreference::English => return "en",
         LanguagePreference::French => return "fr-CA",
         LanguagePreference::Spanish => return "es-419",
+        LanguagePreference::Portuguese => return "pt-BR",
+        LanguagePreference::Italian => return "it",
+        LanguagePreference::Japanese => return "ja",
+        LanguagePreference::ChineseSimplified => return "zh-Hans",
+        LanguagePreference::ChineseTraditional => return "zh-Hant",
         LanguagePreference::System => {}
     }
     for locale in languages {
-        match locale.to_lowercase().split(['-', '_']).next() {
+        let normalized = locale.to_lowercase();
+        let parts: Vec<_> = normalized.split(['-', '_']).collect();
+        match parts.first().copied() {
             Some("en") => return "en",
             Some("fr") => return "fr-CA",
             Some("es") => return "es-419",
+            Some("pt") => return "pt-BR",
+            Some("it") => return "it",
+            Some("ja") => return "ja",
+            Some("zh") => {
+                if parts.contains(&"hant") {
+                    return "zh-Hant";
+                }
+                if parts.contains(&"hans") {
+                    return "zh-Hans";
+                }
+                return if parts.iter().any(|part| ["tw", "hk", "mo"].contains(part)) {
+                    "zh-Hant"
+                } else {
+                    "zh-Hans"
+                };
+            }
             _ => {}
         }
     }
@@ -75,6 +108,11 @@ pub fn state(preference: LanguagePreference) -> LocalizationState {
 pub fn translate(source: &str, language: &str, values: &[&str]) -> String {
     static FRENCH: OnceLock<serde_json::Value> = OnceLock::new();
     static SPANISH: OnceLock<serde_json::Value> = OnceLock::new();
+    static PT_BR: OnceLock<serde_json::Value> = OnceLock::new();
+    static IT: OnceLock<serde_json::Value> = OnceLock::new();
+    static JA: OnceLock<serde_json::Value> = OnceLock::new();
+    static ZH_HANS: OnceLock<serde_json::Value> = OnceLock::new();
+    static ZH_HANT: OnceLock<serde_json::Value> = OnceLock::new();
     let catalog = match language {
         "fr-CA" => Some(FRENCH.get_or_init(|| {
             serde_json::from_str(include_str!("../../src/locales/fr-CA.json"))
@@ -83,6 +121,26 @@ pub fn translate(source: &str, language: &str, values: &[&str]) -> String {
         "es-419" => Some(SPANISH.get_or_init(|| {
             serde_json::from_str(include_str!("../../src/locales/es-419.json"))
                 .expect("valid Spanish catalog")
+        })),
+        "pt-BR" => Some(PT_BR.get_or_init(|| {
+            serde_json::from_str(include_str!("../../src/locales/pt-BR.json"))
+                .expect("valid pt-BR catalog")
+        })),
+        "it" => Some(IT.get_or_init(|| {
+            serde_json::from_str(include_str!("../../src/locales/it.json"))
+                .expect("valid it catalog")
+        })),
+        "ja" => Some(JA.get_or_init(|| {
+            serde_json::from_str(include_str!("../../src/locales/ja.json"))
+                .expect("valid ja catalog")
+        })),
+        "zh-Hans" => Some(ZH_HANS.get_or_init(|| {
+            serde_json::from_str(include_str!("../../src/locales/zh-Hans.json"))
+                .expect("valid zh-Hans catalog")
+        })),
+        "zh-Hant" => Some(ZH_HANT.get_or_init(|| {
+            serde_json::from_str(include_str!("../../src/locales/zh-Hant.json"))
+                .expect("valid zh-Hant catalog")
         })),
         _ => None,
     };
@@ -124,8 +182,43 @@ mod tests {
             resolve(LanguagePreference::System, &["es-MX".into()]),
             "es-419"
         );
-        assert_eq!(resolve(LanguagePreference::System, &["ja-JP".into()]), "en");
+        assert_eq!(resolve(LanguagePreference::System, &["ja-JP".into()]), "ja");
         assert_eq!(resolve(LanguagePreference::System, &[]), "en");
+    }
+    #[test]
+    fn expanded_locales_resolve_and_round_trip_saved_preferences() {
+        for (locale, expected) in [
+            ("pt-PT", "pt-BR"),
+            ("pt_BR", "pt-BR"),
+            ("it-CH", "it"),
+            ("ja-JP", "ja"),
+            ("zh", "zh-Hans"),
+            ("zh-CN", "zh-Hans"),
+            ("zh-SG", "zh-Hans"),
+            ("zh-TW", "zh-Hant"),
+            ("zh_HK", "zh-Hant"),
+            ("zh-MO", "zh-Hant"),
+            ("zh-Hans-TW", "zh-Hans"),
+            ("zh-Hant-CN", "zh-Hant"),
+            ("hi-IN", "en"),
+        ] {
+            assert_eq!(
+                resolve(LanguagePreference::System, &[locale.into()]),
+                expected
+            );
+        }
+        for language in [
+            "en", "fr-CA", "es-419", "pt-BR", "it", "ja", "zh-Hans", "zh-Hant",
+        ] {
+            let preference: LanguagePreference =
+                serde_json::from_value(serde_json::json!(language)).unwrap();
+            assert_eq!(resolve(preference, &["en-US".into()]), language);
+            assert_eq!(serde_json::to_value(preference).unwrap(), language);
+            let settings = translate("Settings…", language, &[]);
+            if language != "en" {
+                assert_ne!(settings, "Settings…");
+            }
+        }
     }
     #[test]
     fn parses_macos_preferred_language_list() {

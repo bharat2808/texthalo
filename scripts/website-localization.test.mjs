@@ -16,7 +16,7 @@ test("website localization preserves backend values, links, and server-rendered 
     assert.equal(l.preferredWebsiteLanguage("/pricing/", null, ["fr-FR"]), "fr-CA");
     assert.equal(l.preferredWebsiteLanguage("/", "en", ["fr-CA"]), "en");
     assert.equal(l.preferredWebsiteLanguage("/", null, ["es-MX"]), "es-419");
-    assert.equal(l.preferredWebsiteLanguage("/", null, ["ja-JP"]), "en");
+    assert.equal(l.preferredWebsiteLanguage("/", null, ["ja-JP"]), "ja");
     assert.equal(l.preferredWebsiteLanguage("/es-419/pricing/", "fr-CA", ["en"]), "es-419");
     assert.equal(l.localizedHref("/fr-CA/desktop-connect/?state=abc#continue", "es-419"), "/es-419/desktop-connect/?state=abc#continue");
     assert.equal(l.localizedHref("/es-419/pricing/", "en"), "/pricing/");
@@ -33,12 +33,17 @@ test("website localization preserves backend values, links, and server-rendered 
     assert.equal(l.websiteTranslate("If there’s an account for {0}, a password reset link is on its way.", "es-419", ["English@example.com"]), "Si hay una cuenta para English@example.com, un enlace de restablecimiento está en camino.");
     assert.deepEqual(Object.keys(l.websiteCatalogs["fr-CA"]).sort(), Object.keys(l.websiteCatalogs["es-419"]).sort());
     for (const [language, catalog] of Object.entries(l.websiteCatalogs)) {
+      assert.deepEqual(Object.keys(catalog).sort(), Object.keys(l.websiteCatalogs["fr-CA"]).sort(), `${language}: complete website coverage`);
       for (const [source, target] of Object.entries(catalog)) {
         assert.ok(target.trim(), `${language}: ${source}`);
         assert.deepEqual(target.match(/\{\d+\}/g)?.sort() ?? [], source.match(/\{\d+\}/g)?.sort() ?? [], `${language}: parameters in ${source}`);
       }
       for (const page of [...blogPosts, ...stories]) {
-        for (const source of [page.title, page.description, page.category, page.readTime, ...page.blocks.flatMap(block => block.type === "list" ? block.items : [block.text])]) assert.notEqual(l.websiteTranslate(source, language), source, `${language}: editorial ${source}`);
+        for (const source of [page.title, page.description, page.category, page.readTime, ...page.blocks.flatMap(block => block.type === "list" ? block.items : [block.text])]) {
+          // “Privacy” is also the conventional Italian label; equal text is not a missing translation.
+          if (language === "it" && source === "Privacy") assert.equal(catalog[source], "Privacy");
+          else assert.notEqual(l.websiteTranslate(source, language), source, `${language}: editorial ${source}`);
+        }
       }
       for (const pathname of getSitePaths()) {
         const html = renderToStaticMarkup(React.createElement(WebsiteLanguageProvider, { language }, React.createElement(SitePage, { pathname })));

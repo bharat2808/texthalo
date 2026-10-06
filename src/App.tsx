@@ -1,3 +1,4 @@
+import { languageNames, languages as interfaceLanguages } from "./localization";
 import KokoroLanguageSetup, { KokoroCjkSetup, type KokoroLanguageInstallEvent } from "./KokoroLanguageSetup";
 import { sourceMessage, t, message, useLanguage, currentLanguage } from "./i18n";
 import TranscriptionSource from "./TranscriptionSource";
@@ -1631,9 +1632,7 @@ function MainApp() {
                 <select aria-label={t("Interface language")} value={settings.ui_language ?? "system"}
                   onChange={event => void save({ ui_language: event.target.value as import("./localization").LanguagePreference })}>
                   <option value="system">{t("Follow Mac language")}</option>
-                  <option value="en">English</option>
-                  <option value="fr-CA">Français (Canada)</option>
-                  <option value="es-419">Español (Latinoamérica)</option>
+                  {interfaceLanguages.map(language => <option key={language} value={language}>{languageNames[language]}</option>)}
                 </select>
               </label>
               <p className="card-note">{t("Changes the interface language. Voice and dictation languages are set separately.")}</p>

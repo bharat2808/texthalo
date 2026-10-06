@@ -66,6 +66,20 @@ pub fn launch() -> Result<bool, Box<dyn std::error::Error>> {
             "es-419",
             include_str!("../locales/es-419.lproj/InfoPlist.strings"),
         ),
+        (
+            "pt-BR",
+            include_str!("../locales/pt-BR.lproj/InfoPlist.strings"),
+        ),
+        ("it", include_str!("../locales/it.lproj/InfoPlist.strings")),
+        ("ja", include_str!("../locales/ja.lproj/InfoPlist.strings")),
+        (
+            "zh-Hans",
+            include_str!("../locales/zh-Hans.lproj/InfoPlist.strings"),
+        ),
+        (
+            "zh-Hant",
+            include_str!("../locales/zh-Hant.lproj/InfoPlist.strings"),
+        ),
     ] {
         let directory = contents.join("Resources").join(format!("{language}.lproj"));
         fs::create_dir_all(&directory)?;

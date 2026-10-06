@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { expect, test, type Page } from "@playwright/test";
 
 async function boot(page: Page, language = "fr-CA", path = "/", onboarding = false) {
@@ -124,3 +125,28 @@ test("Assistant audit statuses translate while requests and stored phases remain
   await expect(record.locator("li")).toContainText("Génération · My diagnostic");
   expect(await page.evaluate(() => (window as any).__native("generation_history", { id: "test-run" }).then((run: any) => run.events[0].phase))).toBe("streaming");
 });
+
+for (const language of ['pt-BR', 'it', 'ja', 'zh-Hans', 'zh-Hant']) {
+  test(`${language}: settings persist and open windows update without changing speech`, async ({ page }) => {
+    const catalog = JSON.parse(readFileSync(`src/locales/${language}.json`, "utf8"));
+    await page.setViewportSize({ width: 780, height: 640 });
+    await boot(page, language);
+    await expect(page.locator('html')).toHaveAttribute('lang', language);
+    await expect(page.getByRole('heading', { name: catalog.Home, exact: true })).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await page.screenshot({ path: `/tmp/texthalo-${language}-home.png` });
+    await page.getByRole('button', { name: catalog.Settings, exact: true }).click();
+    const picker = page.getByLabel(catalog['Interface language']);
+    await expect(picker.locator('option')).toHaveCount(9); // System plus eight interface locales.
+    await picker.selectOption(language);
+    expect(await page.evaluate(() => (window as any).__state.settings.assistant.language)).toBe('en-US');
+    await page.reload();
+    await expect(page.locator('html')).toHaveAttribute('lang', language);
+    await page.goto('/?overlay');
+    await expect(page.getByRole('status')).toHaveText(catalog['Preparing speech…']);
+    await page.evaluate(() => (window as any).__TAURI_INTERNALS__.invoke('plugin:event|emit', {
+      event: 'texthalo:language', payload: { preference: 'en', language: 'en' },
+    }));
+    await expect(page.getByRole('status')).toHaveText('Preparing speech…');
+  });
+}

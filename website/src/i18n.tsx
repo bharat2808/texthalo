@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, type ReactNode } from "react";
-import type { Language } from "../../src/localization";
+import { languageNames, languages, type Language } from "../../src/localization";
 import { languageStorageKey, localizedHref, preferredWebsiteLanguage, websiteTranslate } from "./localization";
 
 const LanguageContext = createContext({ language: "en" as Language, explicitEnglish: false });
@@ -30,5 +30,5 @@ export function LanguagePicker() {
     const selected = event.target.value as Language;
     try { localStorage.setItem(languageStorageKey, selected); } catch { /* The URL still preserves the choice. */ }
     window.location.assign(localizedHref(`${window.location.pathname}${window.location.search}${window.location.hash}`, selected, selected === "en"));
-  }}><option value="en">English</option><option value="fr-CA">Français (Canada)</option><option value="es-419">Español (Latinoamérica)</option></select></label>;
+  }}>{languages.map(language => <option key={language} value={language}>{languageNames[language]}</option>)}</select></label>;
 }

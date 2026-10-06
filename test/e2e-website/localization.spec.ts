@@ -57,7 +57,7 @@ test("live plan data uses translated descriptions, backend limits, and localized
 });
 
 test("unsupported browser language falls back to English", async ({ browser }) => {
-  const context = await browser.newContext({ locale: "ja-JP" });
+  const context = await browser.newContext({ locale: "de-DE" });
   const page = await context.newPage();
   await page.route("**/*.neonauth.*/**", route => route.abort());
   await page.goto("/");
@@ -119,3 +119,30 @@ test("translated headers fit desktop and mobile editorial layouts", async ({ pag
     expect(fits).toBe(true);
   }
 });
+
+for (const [browserLocale, language] of [['pt-BR', 'pt-BR'], ['it-IT', 'it'], ['ja-JP', 'ja'], ['zh-CN', 'zh-Hans'], ['zh-TW', 'zh-Hant']]) {
+  test(`${language}: browser detection, picker persistence and localized routes`, async ({ browser }) => {
+    const context = await browser.newContext({ locale: browserLocale });
+    const page = await context.newPage();
+    await page.route('**/*.neonauth.*/**', route => route.abort());
+    const errors: string[] = [];
+    page.on('pageerror', error => errors.push(error.message));
+    await page.goto('/');
+    await expect(page).toHaveURL(new RegExp(`/${language}/$`));
+    await expect(page.locator('html')).toHaveAttribute('lang', language);
+    const picker = page.locator('.website-language-picker select');
+    await expect(picker).toHaveValue(language);
+    await expect(picker.locator('option')).toHaveCount(8);
+    await page.setViewportSize({ width: 390, height: 844 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await picker.selectOption('en');
+    await page.goto('/privacy/');
+    await expect(page.locator('html')).toHaveAttribute('lang', 'en');
+    await page.locator('.website-language-picker select').selectOption(language);
+    await expect(page).toHaveURL(new RegExp(`/${language}/privacy/$`));
+    await page.reload();
+    await expect(page.locator('html')).toHaveAttribute('lang', language);
+    expect(errors).toEqual([]);
+    await context.close();
+  });
+}

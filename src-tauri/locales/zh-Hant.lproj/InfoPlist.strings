@@ -1,0 +1,2 @@
+"NSMicrophoneUsageDescription" = "TextHalo 會在您按住「轉錄」或「助理」快捷鍵時錄音，然後在此 Mac 上處理您的語音。";
+"NSSpeechRecognitionUsageDescription" = "TextHalo 使用裝置端語音辨識來轉錄聽寫內容和助理請求。";

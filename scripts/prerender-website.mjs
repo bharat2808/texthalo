@@ -36,7 +36,7 @@ try {
       `<link rel="canonical" href="${siteUrl}${metadata.path}" />`,
       ...languages.map(language => `<link rel="alternate" hreflang="${language}" href="${siteUrl}${localizedHref(route.pathname, language)}" />`),
       `<link rel="alternate" hreflang="x-default" href="${siteUrl}${route.pathname}" />`,
-      `<meta property="og:locale" content="${({ en: "en_US", "fr-CA": "fr_CA", "es-419": "es_MX" })[route.language]}" />`,
+      `<meta property="og:locale" content="${({ en: "en_US", "fr-CA": "fr_CA", "es-419": "es_MX", "pt-BR": "pt_BR", it: "it_IT", ja: "ja_JP", "zh-Hans": "zh_CN", "zh-Hant": "zh_TW" })[route.language]}" />`,
       `<meta property="og:type" content="${metadata.type}" />`,
       `<meta property="og:site_name" content="TextHalo" />`,
       `<meta property="og:title" content="${escapeHtml(metadata.title)}" />`,
