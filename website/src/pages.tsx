@@ -1,3 +1,4 @@
+import { ThirdPartyLicenses } from "./ThirdPartyLicenses";
 import { localizedHref, splitLocalizedPath, websiteTranslate } from "./localization";
 import { LanguagePicker, useWebsiteI18n } from "./i18n";
 import { DEMO_VIDEO } from "./demo";
@@ -13,6 +14,7 @@ export function getSitePaths(): string[] {
     "/",
     "/pricing/",
     "/privacy/",
+    "/licenses/",
     "/sign-in/",
     "/desktop-connect/",
     "/reset-password/",
@@ -75,7 +77,7 @@ function EditorialHeader() {
 
 function EditorialFooter() {
   const i18n = useWebsiteI18n();
-  return <footer className="site-footer"><a className="wordmark footer-wordmark" href={i18n.href("/")}><Mark /><span>TextHalo</span></a><span className="footer-copy">{i18n.t("Listen. Dictate. Get a little help.")}</span><div className="footer-links"><a href={i18n.href("/privacy/")}>{i18n.t("Privacy")}</a><a href={i18n.href("/blog/")}>{i18n.t("Blog")}</a><a href={i18n.href("/stories/")}>{i18n.t("Stories")}</a></div><span className="copyright">© {new Date().getFullYear()} TextHalo</span></footer>;
+  return <footer className="site-footer"><a className="wordmark footer-wordmark" href={i18n.href("/")}><Mark /><span>TextHalo</span></a><span className="footer-copy">{i18n.t("Listen. Dictate. Get a little help.")}</span><div className="footer-links"><a href={i18n.href("/privacy/")}>{i18n.t("Privacy")}</a><a href={i18n.href("/licenses/")}>{i18n.t("Third-party licenses")}</a><a href={i18n.href("/blog/")}>{i18n.t("Blog")}</a><a href={i18n.href("/stories/")}>{i18n.t("Stories")}</a></div><span className="copyright">© {new Date().getFullYear()} TextHalo</span></footer>;
 }
 
 function PrivacyPolicyPage() {
@@ -163,6 +165,7 @@ function EditorialArticle({ page, kind }: { page: EditorialPage; kind: "blog" | 
 export function SitePage({ pathname }: { pathname: string }) {
   const i18n = useWebsiteI18n();
   if (pathname === "/") return <Website />;
+  if (pathname === "/licenses/") return <div className="site-shell"><EditorialHeader /><main className="editorial-main article-main"><ThirdPartyLicenses /></main><EditorialFooter /></div>;
   if (pathname === "/privacy/") return <PrivacyPolicyPage />;
   if (pathname === "/pricing/") return <PricingPage />;
   if (pathname === "/sign-in/") return <SignInPage />;
@@ -231,6 +234,11 @@ function getBaseSeoMetadata(pathname: string): SeoMetadata {
   if (path === "/") return defaultMetadata(path);
   if (path === "/pricing/") {
     return { ...defaultMetadata(path), title: "TextHalo Plans — Local Features & Cloud Credits", description: "Compare TextHalo Free, Plus, and Creator plans. Use local voices and dictation for free, then add credits for Fish Audio and Cloud Assistant." };
+  }
+  if (path === "/licenses/") {
+    const title = "Third-party licenses | TextHalo";
+    const description = "Licenses and attribution notices for the libraries, models, and language tools used by TextHalo.";
+    return { ...defaultMetadata(path), title, description, schema: { "@context": "https://schema.org", "@type": "WebPage", name: title, description, url: `${SITE_URL}${path}` } };
   }
   if (path === "/privacy/") {
     const title = "Privacy Policy | TextHalo";

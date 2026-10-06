@@ -57,10 +57,10 @@ test("website localization preserves backend values, links, and server-rendered 
         assert.equal(metadata.schema.inLanguage, language);
       }
       // Catch missing translations when a new authored label is added to a component.
-      for (const file of ["website/src/website.tsx", "website/src/pages.tsx", "website/src/billing.tsx"]) {
+      for (const file of ["website/src/website.tsx", "website/src/pages.tsx", "website/src/billing.tsx", "website/src/ThirdPartyLicenses.tsx"]) {
         const ast = ts.createSourceFile(file, await readFile(file, "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
         const visit = node => {
-          if (ts.isCallExpression(node) && node.expression.getText(ast) === "i18n.t" && ts.isStringLiteral(node.arguments[0])) {
+          if (ts.isCallExpression(node) && ["i18n.t", "t"].includes(node.expression.getText(ast)) && ts.isStringLiteral(node.arguments[0])) {
             const source = node.arguments[0].text;
             assert.ok(Object.prototype.hasOwnProperty.call(catalog, source) || l.websiteTranslate(source, language) !== source, `${language}: missing UI label ${source}`);
           }

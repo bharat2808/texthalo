@@ -16,7 +16,8 @@
     "tauri": "tauri",
     "test:e2e": "playwright test",
     "website:demo": "node modal-video/motion-graphics/render.mjs",
-    "website:test:e2e": "playwright test --config playwright.website.config.ts"
+    "website:test:e2e": "playwright test --config playwright.website.config.ts",
+    "licenses:generate": "node scripts/generate-third-party-licenses.mjs"
   },
   "dependencies": {
     "@neondatabase/auth": "^0.5.0-beta",

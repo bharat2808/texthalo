@@ -242,3 +242,13 @@
   .billing-header .website-language-picker select { max-width: 100px; }
   .billing-header .header-account-email { max-width: 35px; }
 }
+
+.third-party-licenses .article-deck { max-width: 65ch; }
+.third-party-licenses details { margin-block: 1.5rem; }
+.third-party-licenses summary { cursor: pointer; font-weight: 600; }
+.license-table-wrap { overflow-x: auto; margin-block: 1rem 2rem; }
+.license-table { width: 100%; border-collapse: collapse; font-size: .85rem; }
+.license-table th, .license-table td { padding: .75rem; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line, #ddd); }
+.license-table td { overflow-wrap: anywhere; min-width: 7rem; }
+.license-table td a, .license-table td small { display: block; }
+.license-table td small { opacity: .6; }

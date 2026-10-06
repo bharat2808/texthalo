@@ -6,7 +6,7 @@ Implemented on `codex/desktop-localization` for desktop and website.
 
 Adds Brazilian Portuguese (`pt-BR`), Italian (`it`), Japanese (`ja`), Simplified Chinese (`zh-Hans`), and Traditional Chinese (`zh-Hant`). Existing English, Canadian French, and Latin American Spanish remain available. Hindi is outside interface-localization scope; this change does not remove any speech voices.
 
-Each new locale contains all 761 desktop source keys and all 441 website source keys. The native tray uses the same desktop catalogs. macOS microphone and speech-recognition permission descriptions are included in release and development bundles, with matching `CFBundleLocalizations` declarations.
+Each new locale contains all 761 desktop source keys and all website source keys (441 before the third-party notices page). The native tray uses the same desktop catalogs. macOS microphone and speech-recognition permission descriptions are included in release and development bundles, with matching `CFBundleLocalizations` declarations.
 
 Desktop and website share language identifiers and picker names. Desktop follows the Mac's preferred language unless a manual choice is saved. Website follows browser preferences unless a localized route or saved manual choice overrides them. Unsupported preferences retain the existing English fallback. Interface changes leave speech, recognition, user content, and backend plan values independent.
 
@@ -32,4 +32,4 @@ Catalogs began as machine-assisted drafts of static authored interface strings. 
 
 Automated coverage and layout checks do not establish native-speaker editorial quality for every help paragraph, blog post, or privacy-policy translation. A full native-speaker review has not been performed.
 
-This change has not been published as a new signed macOS release or deployed to the production website.
+Release 0.1.16 includes this work. Publication and deployment are recorded by the release receipts.
