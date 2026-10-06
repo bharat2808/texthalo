@@ -9,6 +9,8 @@
 - When adding, removing, or renaming a public route, update the route list and check the generated sitemap. Preserve old URLs with a redirect when a URL must change.
 - Use valid, page-specific JSON-LD that matches visible page content. Structured data does not guarantee a search result enhancement.
 - Give each important video a dedicated watch page where the video is prominent, visible, and the main reason to visit. Keep its thumbnail and MP4 URL stable; include accurate `VideoObject` metadata and the video sitemap entry.
+- Each language’s demo must use its matching MP4, poster, captions, and `VideoObject.inLanguage`. Keep those URLs consistent across the player, Open Graph tags, structured data, and video sitemap.
+- Exclude `noindex` authentication and account routes from the sitemap. Include reciprocal language alternates and an `x-default` alternate for public pages.
 - Keep the shared navigation links crawlable ordinary `<a href>` links and make sure each article is reachable from its section index and relevant related pages.
 
 ## Writing pages and posts

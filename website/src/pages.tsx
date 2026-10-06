@@ -1,7 +1,8 @@
+import type { Language } from "../../src/localization";
 import { ThirdPartyLicenses } from "./ThirdPartyLicenses";
 import { localizedHref, splitLocalizedPath, websiteTranslate } from "./localization";
 import { LanguagePicker, useWebsiteI18n } from "./i18n";
-import { DEMO_VIDEO } from "./demo";
+import { getDemoVideo } from "./demo";
 import { blogPosts, stories, type EditorialPage } from "./content";
 import { BillingAccountPage, BillingSuccessPage, DesktopConnectPage, PasswordResetPage, PricingPage, SignInPage } from "./billing";
 import Website from "./website";
@@ -30,15 +31,16 @@ export function getSitePaths(): string[] {
 
 function VideoWatchPage() {
   const i18n = useWebsiteI18n();
+  const demo = getDemoVideo(i18n.language);
   return <div className="site-shell"><EditorialHeader /><main className="editorial-main watch-main">
     <nav className="breadcrumbs" aria-label={i18n.t("Breadcrumb")}><a href={i18n.href("/")}>{i18n.t("Home")}</a><span>/</span><span>{i18n.t("Product demo")}</span></nav>
     <div className="eyebrow"><span className="eyebrow-line" /> {i18n.t("TEXTHALO FOR MAC")}</div>
     <h1>{i18n.t("Listen. Dictate. Get a little help.")}</h1>
     <p className="editorial-intro">{i18n.t("Watch a 30-second animated walkthrough of Listen, Dictate, and Assistant, with example interactions that show how each workflow fits into your day.")}</p>
     <figure className="watch-player">
-      <video controls playsInline preload="metadata" poster={DEMO_VIDEO.poster} width={DEMO_VIDEO.width} height={DEMO_VIDEO.height} aria-label={i18n.t("30-second animated TextHalo product demo with narration")}>
-        <source src={DEMO_VIDEO.src} type="video/mp4" />
-        <track kind="captions" src={DEMO_VIDEO.captions} srcLang="en" label="English" />
+      <video key={demo.language} controls playsInline preload="metadata" poster={demo.poster} width={demo.width} height={demo.height} aria-label={i18n.t("30-second animated TextHalo product demo with narration")}>
+        <source src={demo.src} type="video/mp4" />
+        <track kind="captions" src={demo.captions} srcLang={demo.language} label={demo.captionLabel} />
         {i18n.t("Your browser does not support embedded video.")}</video>
       <figcaption>{i18n.t("TextHalo workflow demo · 30 seconds · Animated examples · Fish Audio · Sophia narration")}</figcaption>
     </figure>
@@ -207,6 +209,8 @@ export type SeoMetadata = {
     width: number;
     height: number;
     uploadDate: string;
+    inLanguage: Language;
+    embedUrl: string;
   };
   schema: Record<string, unknown>;
 };
@@ -229,7 +233,8 @@ const defaultMetadata = (path: string): SeoMetadata => ({
   },
 });
 
-function getBaseSeoMetadata(pathname: string): SeoMetadata {
+function getBaseSeoMetadata(pathname: string, language: Language): SeoMetadata {
+  const demo = getDemoVideo(language);
   const path = normalizePath(pathname);
   if (path === "/") return defaultMetadata(path);
   if (path === "/pricing/") {
@@ -262,16 +267,18 @@ function getBaseSeoMetadata(pathname: string): SeoMetadata {
   }
   if (path === "/demo/") {
     const title = "TextHalo Mac App Demo — Listen, Dictate & Assistant";
-    const description = DEMO_VIDEO.description;
+    const description = demo.description;
     const video = {
-      name: DEMO_VIDEO.title,
+      name: demo.title,
       description,
-      thumbnailUrl: `${SITE_URL}${DEMO_VIDEO.poster}`,
-      contentUrl: `${SITE_URL}${DEMO_VIDEO.src}`,
-      duration: DEMO_VIDEO.duration,
-      width: DEMO_VIDEO.width,
-      height: DEMO_VIDEO.height,
-      uploadDate: DEMO_VIDEO.published,
+      thumbnailUrl: `${SITE_URL}${demo.poster}`,
+      contentUrl: `${SITE_URL}${demo.src}`,
+      duration: demo.duration,
+      width: demo.width,
+      height: demo.height,
+      uploadDate: demo.published,
+      inLanguage: language,
+      embedUrl: `${SITE_URL}${localizedHref(path, language)}`,
     };
     const videoId = `${SITE_URL}${path}#video`;
     return {
@@ -279,7 +286,7 @@ function getBaseSeoMetadata(pathname: string): SeoMetadata {
       title,
       description,
       type: "video.other",
-      modified: DEMO_VIDEO.published,
+      modified: demo.published,
       video,
       schema: {
         "@context": "https://schema.org",
@@ -304,7 +311,7 @@ function getBaseSeoMetadata(pathname: string): SeoMetadata {
   const page = match && collection.find((item) => item.slug === match[2]);
   if (!page) return { ...defaultMetadata(path), title: "Page not found | TextHalo", description: "This TextHalo page could not be found." };
   const title = `${page.title} | TextHalo`;
-  const image = `${SITE_URL}${DEMO_VIDEO.poster}`;
+  const image = `${SITE_URL}${demo.poster}`;
   const schema = {
     "@context": "https://schema.org",
     "@type": isBlog ? "BlogPosting" : "Article",
@@ -323,7 +330,7 @@ function getBaseSeoMetadata(pathname: string): SeoMetadata {
 
 export function getSeoMetadata(pathname: string): SeoMetadata {
   const route = splitLocalizedPath(normalizePath(pathname));
-  const metadata = getBaseSeoMetadata(route.pathname);
+  const metadata = getBaseSeoMetadata(route.pathname, route.language);
   const localizeSchema = (value: unknown, key = ""): unknown => {
     if (typeof value === "string") {
       if (["name", "headline", "description"].includes(key)) return websiteTranslate(value, route.language);
@@ -333,7 +340,7 @@ export function getSeoMetadata(pathname: string): SeoMetadata {
     if (Array.isArray(value)) return value.map(item => localizeSchema(item));
     if (value && typeof value === "object") {
       const object = Object.fromEntries(Object.entries(value).map(([name, item]) => [name, localizeSchema(item, name)]));
-      if (["WebPage", "CollectionPage", "BlogPosting", "Article", "SoftwareApplication", "VideoObject"].includes(String(object["@type"]))) object.inLanguage = object["@type"] === "VideoObject" ? "en" : route.language;
+      if (["WebPage", "CollectionPage", "BlogPosting", "Article", "SoftwareApplication", "VideoObject"].includes(String(object["@type"]))) object.inLanguage = route.language;
       return object;
     }
     return value;
@@ -346,4 +353,9 @@ export function getSeoMetadata(pathname: string): SeoMetadata {
     video: metadata.video ? { ...metadata.video, name: websiteTranslate(metadata.video.name, route.language), description: websiteTranslate(metadata.video.description, route.language) } : undefined,
     schema: { ...localizeSchema(metadata.schema) as Record<string, unknown>, inLanguage: route.language },
   };
+}
+
+export function isIndexablePath(pathname: string): boolean {
+  const { pathname: path } = splitLocalizedPath(normalizePath(pathname));
+  return !["/sign-in/", "/desktop-connect/", "/reset-password/", "/account/billing/", "/account/billing/success/", "/not-found/"].includes(path);
 }

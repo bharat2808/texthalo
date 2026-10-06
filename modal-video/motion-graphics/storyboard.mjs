@@ -1,21 +1,41 @@
+import locales from "./locales.json" with { type: "json" };
+
 // Illustrated interactions follow the current Listen, Dictate, and Assistant UI.
 export const WIDTH = 1280;
 export const HEIGHT = 720;
 export const FPS = 30;
 export const DURATION = 30;
-export const narration = [
-  { at: 0, duration: 5, text: 'TextHalo. Listen, dictate, and get a little help.' },
-  { at: 5, duration: 7, text: 'Select a passage, then press your shortcut. Hear it read aloud, and stop whenever you like.' },
-  { at: 12, duration: 7, text: 'Hold your dictation shortcut and speak. Release to put your words into the current app, or copy them.' },
-  { at: 19, duration: 7, text: 'Need a clearer draft? Select the text, hold your Assistant shortcut, and ask for an edit.' },
-  { at: 26, duration: 4, text: 'Your words. Your way. TextHalo for Mac.' },
+const sceneTimings = [
+  { at: 0, duration: 5 },
+  { at: 5, duration: 7 },
+  { at: 12, duration: 7 },
+  { at: 19, duration: 7 },
+  { at: 26, duration: 4 },
 ];
+export const demoLanguages = Object.keys(locales);
+export function createStoryboard(language = 'en') {
+ if (!Object.hasOwn(locales, language)) throw new Error(`Unsupported demo language: ${language}`);
+ const locale = locales[language];
+ const translate = value => locale.text[value] ?? value;
+ const narration = sceneTimings.map((cue, i) => ({ ...cue, text: locale.narration[i] }));
+ const textRequests = new Map();
+ const textWidths = new Map();
+ const maxWidth = (x, anchor) => anchor === 'end' ? 650 : anchor === 'middle'
+   ? x === 640 ? 1120 : [390, 640, 890].includes(x) ? 218 : 600
+   : x === 64 ? 430 : x === 842 ? 165 : x === 110 ? 230 : x === 555 ? 450 : 1152 - x;
 const C = { paper:'#f5f4ef', ink:'#18231f', muted:'#707a72', green:'#c8f06b', forest:'#183c32', line:'#e1e5da' };
 const escape = s => String(s).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;');
 const smooth = x => {x=Math.max(0,Math.min(1,x));return x*x*(3-2*x);};
 const rect = (x,y,w,h,fill,rx=0,stroke='none') => `<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="${fill}" rx="${rx}" stroke="${stroke}"/>`;
-const text = (x,y,value,size=18,color=C.ink,weight=400,anchor='start') => `<text x="${x}" y="${y}" font-family="Avenir Next, Helvetica, sans-serif" font-size="${size}" font-weight="${weight}" fill="${color}" text-anchor="${anchor}">${escape(value)}</text>`;
-const lines = (x,y,values,size=18,color=C.ink,weight=400,lineHeight=size*1.45) => values.map((v,i)=>text(x,y+i*lineHeight,v,size,color,weight)).join('');
+const text = (x,y,value,size=18,color=C.ink,weight=400,anchor='start') => {
+ const translated = translate(value);
+ const key = JSON.stringify([translated, size, weight]);
+ textRequests.set(key, { value: translated, size, weight });
+ const measured = textWidths.get(key);
+ const fittedSize = measured ? Math.min(size, size * maxWidth(x, anchor) / measured) : size;
+ return `<text x="${x}" y="${y}" font-family="Avenir Next, Helvetica, sans-serif" font-size="${fittedSize.toFixed(2)}" font-weight="${weight}" fill="${color}" text-anchor="${anchor}">${escape(translated)}</text>`;
+};
+const lines = (x,y,values,size=18,color=C.ink,weight=400,lineHeight=size*1.45,anchor='start') => values.map((v,i)=>text(x,y+i*lineHeight,v,size,color,weight,anchor)).join('');
 function mark(x,y,scale=1,light=false) {
  return `<g transform="translate(${x} ${y}) scale(${scale})"><circle cx="16" cy="16" r="15" fill="none" stroke="${light?'#e2eddb':C.forest}" stroke-width="2"/><circle cx="21" cy="12" r="7" fill="none" stroke="${light?C.green:'#7baf46'}" stroke-width="2"/><circle cx="10" cy="23" r="3" fill="${light?'#e2eddb':C.forest}"/></g>`;
 }
@@ -39,7 +59,7 @@ function listen(t) {
  return copy('01 / LISTEN',['Give your eyes','a little break.'],['Select text. Press your shortcut.','Listen while you keep your flow.'])+windowFrame('Notes · Selected text',content)+keys+(playing?overlay(t,'Speaking'):text(884,120,'Select a passage',15,C.muted,400,'middle'));
 }
 function dictate(t) {
- const phrase='Let’s make time for a fresh idea tomorrow.';
+ const phrase=translate('Let’s make time for a fresh idea tomorrow.');
  const typed=t>=4.6?phrase:phrase.slice(0,Math.floor(Math.max(0,t-.8)/3.3*phrase.length));
  const content=text(569,265,'A NEW MESSAGE',12,C.muted,600)+text(569,309,'Tomorrow’s plan',29,C.ink,600)+text(569,366,'Hi everyone,',20,C.ink)+text(569,414,typed,23,C.ink)+(t<4.6?rect(570+Math.min(560,typed.length*11),394,2,27,'#719849'):text(569,476,'See you then.',20,C.muted));
  return copy('02 / DICTATE',['Say it.','Write it.'],['Hold your shortcut and speak.','Release to insert or copy your words.'])+windowFrame('Mail · Example draft',content)+overlay(t,t<4.6?'Listening…':'Inserted',t<4.6?'Hold your dictation shortcut':'Release to finish')+rect(620,584,501,48,'#e9eddf',9)+text(870,614,'On-device transcription · macOS or Whisper',15,C.forest,500,'middle');
@@ -54,9 +74,9 @@ function intro(t) {
  return `<g transform="translate(0 ${lift})">`+text(640,235,'Your words.',69,C.ink,600,'middle')+text(640,316,'More possibilities.',69,'#628744',600,'middle')+text(640,373,'Three ways to work, one shortcut away.',22,C.muted,400,'middle')+['Listen','Dictate','Assistant'].map((v,i)=>rect(271+i*250,435,238,98,i===2?'#e9eddf':'#fff',14,C.line)+text(390+i*250,490,v,25,C.forest,600,'middle')).join('')+text(640,606,'For your Mac. In the apps you already use.',17,C.muted,400,'middle')+'</g>';
 }
 function outro() {
- return `<circle cx="640" cy="370" r="294" fill="none" stroke="#3c5847" opacity=".5"/><circle cx="640" cy="370" r="237" fill="none" stroke="#3c5847" opacity=".5"/>`+mark(483,182,1.6,true)+text(555,222,'TextHalo',44,'#f5f4ef',700)+lines(640,327,['Listen. Dictate.','Get a little help.'],57,'#f5f4ef',600,67).replaceAll('text-anchor="start"','text-anchor="middle"')+text(640,479,'Free local features · Optional paid cloud services',18,'#c0ceba',400,'middle')+rect(510,528,260,54,C.green,10)+text(640,562,'texthalo.app',23,C.forest,600,'middle');
+ return `<circle cx="640" cy="370" r="294" fill="none" stroke="#3c5847" opacity=".5"/><circle cx="640" cy="370" r="237" fill="none" stroke="#3c5847" opacity=".5"/>`+mark(483,182,1.6,true)+text(555,222,'TextHalo',44,'#f5f4ef',700)+lines(640,327,['Listen. Dictate.','Get a little help.'],57,'#f5f4ef',600,67,'middle')+text(640,479,'Free local features · Optional paid cloud services',18,'#c0ceba',400,'middle')+rect(510,528,260,54,C.green,10)+text(640,562,'texthalo.app',23,C.forest,600,'middle');
 }
-export function frameSvg(time) {
+function frameSvg(time) {
  const index=Math.max(0,narration.findLastIndex(cue=>time>=cue.at));
  const start=narration[index].at;
  const dark=index===4;
@@ -64,3 +84,18 @@ export function frameSvg(time) {
  const opacity=start===0?1:smooth((time-start)/.28);
  return `<svg xmlns="http://www.w3.org/2000/svg" width="${WIDTH}" height="${HEIGHT}" viewBox="0 0 ${WIDTH} ${HEIGHT}"><defs><filter id="shadow" x="-20%" y="-30%" width="140%" height="170%"><feGaussianBlur stdDeviation="14"/></filter></defs>${rect(0,0,WIDTH,HEIGHT,dark?C.forest:C.paper)}${masthead(dark)}<g opacity="${opacity}">${body}</g>${rect(64,672,1152,3,dark?'#375346':'#e1e5da',1.5)}${rect(64,672,Math.max(1,1152*time/DURATION),3,dark?C.green:'#819d65',1.5)}</svg>`;
 }
+
+ async function prepareTypography(sharp) {
+   // Measure every animated text state with the renderer's font engine before encoding.
+   for (let frame = 0; frame < DURATION * FPS; frame++) frameSvg(frame / FPS);
+   for (const [key, { value, size, weight }] of textRequests) {
+     if (!value) { textWidths.set(key, 0); continue; }
+     const { width } = await sharp({ text: { text: escape(value), font: `Avenir Next ${weight >= 600 ? 'Bold' : ''} ${size}`, rgba: true } }).metadata();
+     textWidths.set(key, width);
+   }
+ }
+ return { language, narration, frameSvg, prepareTypography };
+}
+const english = createStoryboard();
+export const narration = english.narration;
+export const frameSvg = english.frameSvg;

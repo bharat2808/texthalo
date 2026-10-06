@@ -1,5 +1,5 @@
 import { useWebsiteI18n } from "./i18n";
-import { DEMO_VIDEO } from "./demo";
+import { getDemoVideo } from "./demo";
 import { SiteHeader } from "./billing";
 import { MAC_DOWNLOAD as DOWNLOAD } from "./downloads";
 import { version as sourceVersion } from "../../package.json";
@@ -21,18 +21,19 @@ function Arrow() {
 
 function ProductVideo() {
   const i18n = useWebsiteI18n();
+  const demo = getDemoVideo(i18n.language);
   return (
     <div className="product-video">
       <div className="product-video-label"><span className="live-dot" /> {i18n.t("SEE TEXTHALO IN ACTION")}</div>
-      <video
+      <video key={demo.language}
         controls
         playsInline
         preload="metadata"
-        poster={DEMO_VIDEO.poster}
+        poster={demo.poster}
         aria-label={i18n.t("30-second animated TextHalo demo: Listen, Dictate, and Assistant")}
       >
-        <source src={DEMO_VIDEO.src} type="video/mp4" />
-        <track kind="captions" src={DEMO_VIDEO.captions} srcLang="en" label="English" />
+        <source src={demo.src} type="video/mp4" />
+        <track kind="captions" src={demo.captions} srcLang={demo.language} label={demo.captionLabel} />
         {i18n.t("Your browser does not support embedded video.")}</video>
       <div className="product-video-caption"><span>{i18n.t("30 SECOND WORKFLOW DEMO")}</span><span>{i18n.t("VOICEOVER · FISH AUDIO")}</span></div>
       <a className="video-watch-link" href={i18n.href("/demo/")}>{i18n.t("Watch the product demo")} <Arrow /></a>

@@ -13,8 +13,8 @@ const vite = await createServer({
 });
 
 try {
-  const { DEMO_VIDEO } = await vite.ssrLoadModule("/src/demo.ts");
-  const { SitePage, getSeoMetadata, getSitePaths } = await vite.ssrLoadModule("/src/pages.tsx");
+  const { DEMO_VIDEO, getDemoVideo } = await vite.ssrLoadModule("/src/demo.ts");
+  const { SitePage, getSeoMetadata, getSitePaths, isIndexablePath } = await vite.ssrLoadModule("/src/pages.tsx");
   const shell = await readFile(resolve(outputDirectory, "index.html"), "utf8");
   const { WebsiteLanguageProvider } = await vite.ssrLoadModule("/src/i18n.tsx");
   const { languages, localizedHref, splitLocalizedPath, websiteTranslate } = await vite.ssrLoadModule("/src/localization.ts");
@@ -28,11 +28,11 @@ try {
   for (const pathname of routes) {
     const metadata = getSeoMetadata(pathname);
     const route = splitLocalizedPath(pathname);
-    const image = `${siteUrl}${DEMO_VIDEO.poster}`;
+    const image = `${siteUrl}${getDemoVideo(route.language).poster}`;
     const headTags = [
       `<title>${escapeHtml(metadata.title)}</title>`,
       `<meta name="description" content="${escapeHtml(metadata.description)}" />`,
-      `<meta name="robots" content="${["/sign-in/", "/desktop-connect/", "/reset-password/", "/account/billing/success/"].includes(route.pathname) ? "noindex,follow" : "index,follow,max-image-preview:large"}" />`,
+      `<meta name="robots" content="${!isIndexablePath(pathname) ? "noindex,follow" : "index,follow,max-image-preview:large"}" />`,
       `<link rel="canonical" href="${siteUrl}${metadata.path}" />`,
       ...languages.map(language => `<link rel="alternate" hreflang="${language}" href="${siteUrl}${localizedHref(route.pathname, language)}" />`),
       `<link rel="alternate" hreflang="x-default" href="${siteUrl}${route.pathname}" />`,
@@ -97,10 +97,10 @@ try {
 
 
   const today = new Date().toISOString().slice(0, 10);
-  const urlEntries = routes.filter(path => !path.startsWith("/en/")).map((pathname) => {
+  const urlEntries = routes.filter(path => !path.startsWith("/en/") && isIndexablePath(path)).map((pathname) => {
     const metadata = getSeoMetadata(pathname);
     const route = splitLocalizedPath(pathname);
-    const alternates = languages.map(language => `<xhtml:link rel="alternate" hreflang="${language}" href="${siteUrl}${localizedHref(route.pathname, language)}" />`).join("");
+    const alternates = languages.map(language => `<xhtml:link rel="alternate" hreflang="${language}" href="${siteUrl}${localizedHref(route.pathname, language)}" />`).join("") + `<xhtml:link rel="alternate" hreflang="x-default" href="${siteUrl}${route.pathname}" />`;
     const lastmod = metadata.modified ?? metadata.published ?? today;
     const videoEntry = metadata.video ? `\n    <video:video>
       <video:thumbnail_loc>${xmlEscape(metadata.video.thumbnailUrl)}</video:thumbnail_loc>
