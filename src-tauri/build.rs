@@ -53,6 +53,7 @@ fn build_assistant() {
     std::fs::create_dir_all("binaries").expect("create native binary directory");
     for file in [
         "native/Contracts.swift",
+        "native/FocusedPaste.swift",
         "native/HoldShortcuts.swift",
         "native/SpeechSupport.swift",
         "native/ScreenCapture.swift",
@@ -75,6 +76,7 @@ fn build_assistant() {
         "-sdk",
         &toolchain.sdk,
         "native/Contracts.swift",
+        "native/FocusedPaste.swift",
         "native/HoldShortcuts.swift",
         "native/SpeechSupport.swift",
         "native/ScreenCapture.swift",
