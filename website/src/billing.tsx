@@ -157,7 +157,7 @@ export function SiteHeader() {
       <div className="header-account-tools"><LanguagePicker />
         {session.data?.user ? <details ref={accountMenuRef} className="header-account">
           <summary aria-label={i18n.t("Signed in as {0}", [session.data.user.email])} title={session.data.user.email}>
-            <span className="header-account-email">{session.data.user.email}</span><span className="header-account-chevron" aria-hidden="true">⌄</span>
+            <span className="header-account-avatar" aria-hidden="true">{session.data.user.email.slice(0, 1).toUpperCase()}</span><span className="header-account-chevron" aria-hidden="true">⌄</span>
           </summary>
           <div className="header-account-menu">
             <span className="header-account-label">{i18n.t("SIGNED IN AS")}</span>

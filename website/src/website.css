@@ -17,11 +17,13 @@
 
 /* Signed-in account controls for pricing and checkout pages */
 .header-account-tools{position:relative;z-index:7;display:flex;align-items:center;gap:9px;margin-left:14px}
-.header-signin,.header-account>summary{min-height:38px;padding:0 11px;border:1px solid #dfe4d9;border-radius:7px;background:#fbfaf7;color:#344238;display:inline-flex;align-items:center;justify-content:center;gap:8px;font-size:10px;font-weight:600;cursor:pointer;list-style:none}
+.header-signin{min-height:38px;padding:0 11px;border:1px solid #dfe4d9;border-radius:7px;background:#fbfaf7;color:#344238;display:inline-flex;align-items:center;justify-content:center;gap:8px;font-size:10px;font-weight:600;cursor:pointer}
+.header-account>summary{min-height:30px;padding:0 5px;display:inline-flex;align-items:center;justify-content:center;gap:5px;border-radius:5px;color:#344238;cursor:pointer;list-style:none;transition:background .15s}
+.header-account>summary:hover,.header-account[open]>summary{background:#e9ece3}
+.header-account>summary:focus-visible{outline:2px solid #628744;outline-offset:3px}
 .header-account>summary::-webkit-details-marker{display:none}
-.header-account-email{display:block;max-width:155px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.header-account-avatar{width:24px;height:24px;display:grid;place-items:center;border-radius:50%;background:#e5ebdc;color:#465c38;font-size:11px;font-weight:600}
 .header-account-chevron{color:#71806f;font-size:13px;line-height:1}
-.header-account[open]>summary{border-color:#bac9ad}
 .header-account-menu{position:absolute;top:calc(100% + 8px);right:0;width:min(270px,calc(100vw - 38px));padding:15px;border:1px solid #dfe4d9;border-radius:9px;background:#fbfaf7;box-shadow:0 14px 36px rgba(24,35,31,.14);display:grid;gap:10px}
 .header-account-label{color:#788178;font:8px var(--mono);letter-spacing:.1em}
 .header-account-menu>strong{overflow-wrap:anywhere;color:#26352b;font-size:11px}
@@ -29,9 +31,9 @@
 .header-account-menu>button{background:transparent;color:#788178}
 .balance-owner{overflow-wrap:anywhere}
 .balance-owner strong{color:#465649;font-weight:600}
-@media(max-width:900px){.header-account-tools{margin-left:8px}.header-account-email{max-width:115px}}
-@media(max-width:680px){.header-account-tools{margin-left:auto}.header-account-email{max-width:clamp(80px,30vw,145px)}.header-signin,.header-account>summary{min-height:34px;padding:0 9px;font-size:9px}.header-account-menu{top:calc(100% + 7px)}}
-@media(max-width:370px){.header-account-tools{gap:5px}.header-account-email{max-width:64px}.header-signin,.header-account>summary{padding-inline:6px}}
+@media(max-width:900px){.header-account-tools{margin-left:8px}}
+@media(max-width:680px){.header-account-tools{margin-left:auto}.header-signin{min-height:34px;padding:0 9px;font-size:9px}.header-account>summary{min-height:36px}.header-account-menu{top:calc(100% + 7px)}}
+@media(max-width:370px){.header-account-tools{gap:5px}.header-signin{padding-inline:6px}}
 .product-video{width:min(100%,530px);margin-inline:auto;z-index:1}.product-video-label,.product-video-caption{display:flex;align-items:center;justify-content:space-between;color:#778477;font:8px var(--mono);letter-spacing:.11em}.product-video-label{justify-content:center;gap:8px;margin-bottom:13px}.product-video-label .live-dot{background:#89aa5b}.product-video video{display:block;width:100%;aspect-ratio:16/9;object-fit:cover;background:#183b31;border:1px solid #e4e7de;border-radius:12px;box-shadow:0 22px 55px rgba(33,48,38,.16)}.product-video-caption{margin-top:11px;font-size:7px;letter-spacing:.08em}
 @media(max-width:680px){.product-video{width:min(100%,530px);margin-top:23px}.product-video video{border-radius:9px}.product-video-caption{font-size:6px}}
 
@@ -212,26 +214,31 @@
 @media(max-width:900px){.plan-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.plan-card-featured{grid-column:auto}.signin-page{gap:25px}.signin-decoration{height:330px;width:330px}}
 @media(max-width:680px){.pricing-page{padding-top:55px;padding-bottom:66px}.pricing-page>h1{font-size:clamp(43px,12vw,62px)}.pricing-intro{font-size:13px}.plan-grid{grid-template-columns:1fr;gap:11px;margin-top:30px}.plan-card{min-height:0;padding:23px 21px 18px}.plan-description{min-height:0;margin-bottom:15px}.plan-card ul{gap:10px;padding:17px 0;margin-bottom:15px}.plan-ribbon{right:13px;top:13px;font-size:7px}.local-voice-note{margin-top:25px;padding:18px}.signin-page{grid-template-columns:1fr;min-height:0;padding-top:32px;padding-bottom:55px}.signin-decoration{height:180px;width:180px;margin-bottom:9px}.signin-decoration::before{inset:17px}.signin-decoration::after{inset:36px}.signin-decoration .ring-a{inset:28px}.signin-decoration .ring-b{inset:48px}.signin-decoration .privacy-center{gap:7px;font-size:7px}.signin-decoration .brand-mark{width:34px;height:34px}.signin-decoration .brand-mark::before{width:15px;height:15px;border-width:1px;transform:translate(4px,-2px)}.signin-decoration .brand-mark span{width:6px;height:6px;transform:translate(-7px,6px)}.signin-panel{padding:20px 0 0}.signin-panel>h1{font-size:clamp(42px,11vw,57px)}.billing-success{min-height:570px;padding-top:39px;padding-bottom:55px}.credit-topup-panel{padding:18px}.success-actions{align-items:flex-start;flex-direction:column;gap:17px}}
 
-.website-language-picker { display: inline-flex; flex-shrink: 0; }
-.website-language-picker select { max-width: 160px; min-height: 36px; border: 1px solid var(--line, #d8d4ca); border-radius: 6px; padding: 6px 24px 6px 8px; color: inherit; background: transparent; font: inherit; font-size: 12px; cursor: pointer; }
-.website-language-picker select:focus-visible { outline: 2px solid currentColor; outline-offset: 3px; }
+.website-language-picker { position: relative; display: inline-flex; align-items: center; flex-shrink: 0; min-height: 30px; padding: 0 7px; border-radius: 5px; color: #58675d; transition: background .15s, color .15s; }
+.website-language-picker:hover { background: #e9ece3; color: #18231f; }
+.website-language-picker:focus-within { outline: 2px solid #628744; outline-offset: 3px; }
+.website-language-display { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 500; letter-spacing: .03em; pointer-events: none; }
+.website-language-chevron { opacity: .6; }
+.website-language-picker select { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
-@media (max-width: 640px) { .website-language-picker select { max-width: 124px; } }
+@media (max-width: 680px) { .website-language-picker { min-height: 36px; } }
 
-/* Leave room for longer translated labels and the language picker. */
-.billing-header { gap: 12px; }
+/* Give desktop navigation readable labels and room between links. */
+.billing-header { width: min(1280px, calc(100% - 64px)); gap: 20px; }
 .billing-header .wordmark, .billing-header .header-account-tools { flex-shrink: 0; }
 .billing-header .header-account-tools { margin-left: 0; }
-.billing-header nav { gap: 12px; font-size: 11px; }
+.billing-header nav { gap: 22px; font-size: 14px; }
+.billing-header .nav-download { font-size: 14px; }
 .billing-header nav > a, .header-signin { white-space: nowrap; }
 .mobile-signin { display: none; }
-@media (max-width: 1100px) {
+@media (max-width: 1344px) {
   .billing-header .menu-toggle { display: block; border: 1px solid #e0e3da; background: transparent; border-radius: 6px; width: 36px; height: 34px; color: #334239; font-size: 15px; }
   .billing-header nav { display: none; position: absolute; top: 100%; left: 0; right: 0; padding: 17px; background: #f9f8f3; border: 1px solid #e3e5dc; border-radius: 8px; box-shadow: 0 15px 35px #19281c18; align-items: stretch; gap: 4px; flex-direction: column; }
   .billing-header nav.nav-open { display: flex; }
   .billing-header nav > a:not(.button) { padding: 11px 8px; }
 }
 @media (max-width: 680px) {
+  .billing-header { width: calc(100% - 38px); gap: 12px; }
   .site-header .editorial-nav { position: static; padding: 0; border: 0; box-shadow: none; background: transparent; flex-direction: row; }
 }
 @media (max-width: 480px) {
@@ -239,8 +246,6 @@
   .billing-header .header-signin { display: none; }
   .billing-header nav .mobile-signin { display: block; }
   .billing-header .header-account-tools { gap: 5px; }
-  .billing-header .website-language-picker select { max-width: 100px; }
-  .billing-header .header-account-email { max-width: 35px; }
 }
 
 .third-party-licenses .article-deck { max-width: 65ch; }
