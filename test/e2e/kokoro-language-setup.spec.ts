@@ -22,7 +22,7 @@ async function boot(page: Page, runtimeInstalled: boolean) {
         fish: { voice_id: "", model_id: "fish-s21-pro", enhance_text: false, privacy_accepted: false },
       }, voices: [], engines: [{ id: "kokoro", label: "Kokoro 82M", summary: "On this Mac", can_speak: true, status: "Ready", needs_download: runtimeInstalled, download_bytes: 6789120,
         voices: [{ id: "af_heart", label: "Heart", language: "American English", requires_espeak: false, unavailable: null, note: null }, ...voices,
-          { id: "jf_alpha", label: "Alpha", language: "Japanese", requires_espeak: false, unavailable: "Front end missing", note: null }],
+          { id: "jf_alpha", label: "Alpha", language: "Japanese", requires_espeak: false, requires_cjk: true, unavailable: "Voice files need downloading", note: null }],
         ref_voices: [], models: [{ id: "fp32", label: "Full precision", description: "Default quality and speed. Largest download.", bytes: 326000000, installed: true }], selected_voice: "af_heart" }],
       trusted: true, focused_password_field: false, speaking: false, refused_shortcuts: [], system_language: "en_US", config_path: "/test/settings.json",
     };
@@ -60,7 +60,7 @@ async function emit(page: Page, phase: string, message: string) {
 for (const runtimeInstalled of [false, true]) {
   test(`${runtimeInstalled ? "existing eSpeak installation" : "fresh setup"} uses one action for all additional voice files`, async ({ page }, testInfo) => {
     await boot(page, runtimeInstalled);
-    const setup = page.locator(".kokoro-language-setup");
+    const setup = page.locator(".kokoro-language-setup:not(.kokoro-cjk-setup)");
     await expect(setup).toContainText("Spanish · French · Hindi · Italian · Portuguese (Brazil)");
     if (runtimeInstalled) {
       const advanced = page.locator("details.disclosure").filter({ hasText: "Advanced voice settings" });
@@ -92,13 +92,13 @@ for (const runtimeInstalled of [false, true]) {
     await emit(page, "done", "Additional Kokoro voices are ready.");
     await expect(setup).toHaveCount(0);
     await expect(page.getByRole("status")).toContainText("Additional Kokoro voices are ready.");
-    await expect(page.getByText("Front end missing", { exact: true })).toBeVisible();
+    await expect(page.locator(".kokoro-cjk-setup")).toBeVisible();
   });
 }
 
 test("failed file transfer settles progress and allows retry with eSpeak already installed", async ({ page }) => {
   await boot(page, true);
-  const setup = page.locator(".kokoro-language-setup");
+  const setup = page.locator(".kokoro-language-setup:not(.kokoro-cjk-setup)");
   await setup.getByRole("button", { name: "Download 13 voices" }).click();
   await emit(page, "voices", "Downloading voice files… Existing model files are reused.");
   await page.evaluate(async () => {
@@ -110,4 +110,32 @@ test("failed file transfer settles progress and allows retry with eSpeak already
   await expect(setup.getByRole("button", { name: "Retry voice setup" })).toBeEnabled();
   await setup.getByRole("button", { name: "Retry voice setup" }).click();
   await expect.poll(() => page.evaluate(() => (window as any).__calls.filter((command: string) => command === "install_kokoro_languages").length)).toBe(2);
+});
+
+
+test("Japanese and Mandarin files download without requesting eSpeak, and become selectable", async ({ page }) => {
+  await boot(page, false);
+  await page.evaluate(async () => {
+    const win = window as any;
+    const ids = ["jf_alpha", "jf_gongitsune", "jf_nezumi", "jf_tebukuro", "jm_kumo", "zf_xiaobei", "zf_xiaoni", "zf_xiaoxiao", "zf_xiaoyi", "zm_yunjian", "zm_yunxi", "zm_yunxia", "zm_yunyang"];
+    const engine = win.__state.engines[0];
+    engine.voices = engine.voices.filter((voice: any) => !voice.requires_cjk);
+    engine.voices.push(...ids.map(id => ({ id, label: id, language: id.startsWith("j") ? "Japanese" : "Mandarin Chinese", requires_cjk: true, requires_espeak: false, unavailable: "Voice files need downloading", note: null })));
+    await win.__TAURI_INTERNALS__.invoke("plugin:event|emit", { event: "kiegen:install", payload: { engine: "kokoro", quant: "fp32", phase: "done", done: 0, total: 0, file: "", message: null } });
+  });
+  const setup = page.locator(".kokoro-cjk-setup");
+  await expect(setup).toContainText("Pronunciation support is built in.");
+  await setup.getByRole("button", { name: "Download 13 voices" }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).__calls.filter((command: string) => command === "install_engine").length)).toBe(1);
+  expect(await page.evaluate(() => (window as any).__calls.includes("install_kokoro_languages"))).toBe(false);
+  await page.evaluate(async () => {
+    const win = window as any;
+    win.__state.engines[0].voices.forEach((voice: any) => { if (voice.requires_cjk) voice.unavailable = null; });
+    win.__state.engines[0].needs_download = false;
+    await win.__TAURI_INTERNALS__.invoke("plugin:event|emit", { event: "kiegen:install", payload: { engine: "kokoro", quant: "fp32", phase: "done", done: 0, total: 0, file: "", message: null } });
+  });
+  await expect(setup).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Preview jf_alpha", exact: true })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "Preview zf_xiaobei", exact: true })).toBeEnabled();
+  await expect(page.locator(".kokoro-language-setup:not(.kokoro-cjk-setup)").getByRole("button", { name: "Download 13 voices" })).toBeEnabled();
 });

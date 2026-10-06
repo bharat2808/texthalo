@@ -756,5 +756,8 @@
   "Could not finish voice setup: {0}. Try again to download only the missing files.": "Impossible de terminer la configuration des voix : {0}. Réessayez pour télécharger seulement les fichiers manquants.",
   "Voice files need downloading": "Fichiers vocaux à télécharger",
   "Download missing files": "Télécharger les fichiers manquants",
-  "Retry voice setup": "Réessayer la configuration des voix"
+  "Retry voice setup": "Réessayer la configuration des voix",
+  "Japanese and Mandarin Chinese": "Japonais et chinois mandarin",
+  "Pronunciation support is built in. Download the voice files to start listening.": "La prise en charge de la prononciation est intégrée. Téléchargez les fichiers des voix pour commencer à écouter.",
+  "English, Japanese and Mandarin": "Anglais, japonais et mandarin"
 }

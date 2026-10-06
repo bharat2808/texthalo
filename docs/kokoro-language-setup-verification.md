@@ -1,6 +1,6 @@
 # Kokoro additional voice setup
 
-The Voices screen offers one action to install eSpeak NG and Kokoro's 13 additional voice tables for Spanish, French, Hindi, Italian, and Brazilian Portuguese. Japanese and Mandarin remain unavailable because their text front ends are not implemented.
+The Voices screen offers one action to install eSpeak NG and Kokoro's 13 additional voice tables for Spanish, French, Hindi, Italian, and Brazilian Portuguese. Japanese and Mandarin now use built-in native pronunciation support and their 13 voice files are included in the standard Kokoro download. See `kokoro-cjk-verification.md` for the integration verification.
 
 The native command detects an existing runtime and skips its installation. It then runs the existing selected-model installer, which reuses completed files and fetches missing files. Catalog readiness checks each voice table's expected size, so older installations with eSpeak NG but missing tables still show the download button and explain why those voices cannot yet be selected. Partial failures retain a retry action and settle both language and model progress.
 

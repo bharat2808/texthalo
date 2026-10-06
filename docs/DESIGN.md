@@ -13,7 +13,7 @@ Yes, and it names an established category — this is a **macOS menu-bar agent /
 - a settings window is created on demand and destroyed on close
 - the "product" is a *service*: select text → chord → audio
 
-What distinguishes it from the category: the input is the OS-wide selection rather than text you pasted into the app, and the output is locally generated speech (Kokoro, English-only unless you accept GPL espeak-ng — plus Chatterbox Multilingual's 23 languages — §5).
+What distinguishes it from the category: the input is the OS-wide selection rather than text you pasted into the app, and the output is locally generated speech (Kokoro, English/Japanese/Mandarin with native front ends and five further languages through optional espeak-ng — plus Chatterbox Multilingual's 23 languages — §5).
 
 ---
 
@@ -230,7 +230,7 @@ The corpus covers accented text, `¿¡`/`«»`/`;`, numbers as digits, and a dec
 
 The one line that differs is Portuguese `está` in final position: upstream's library path (`espeak_TextToPhonemes`, no synthesis) gives it secondary stress — `estˌa` — where the CLI's synthesis path gives `estˈa`. It is **not** state carry-over across calls, not call ordering, not the voice, and not a missing flag: every CLI spelling tried returns `estˈa`, including `--punct`, `-x`, `--stdout`, `--stdin` and several utterances in one process. It is also not general — `café`, `sofá`, `você`, `avô`, `Pará`, `Aracaju`, and pt-BR `está` in *medial* position all match exactly. So the price of using the binary instead of the library is one stress mark on one word, and it is inherent to the arm's-length boundary rather than a bug with a flag-shaped fix. If it ever needs fixing, the mechanism is a pronunciation override (`~/.config/kiegen/pronounce.json`), not another flag.
 
-**What the catalogue does with it.** An espeak-backed voice is listed but not selectable until espeak-ng is found, and the reason names both the dependency and the licence (`Needs espeak-ng (GPL-3.0)`), so the state is never a mystery or a silent failure. Installing it flips all 13 voices usable without a restart, and adds their 13 style tables — ~6.8 MB — to the next download, because `kokoro_plan` uses the same availability rule the catalogue shows. Japanese and Mandarin stay unavailable in both states: no install fixes them, and the copy says so.
+**What the catalogue does with it.** An espeak-backed voice is listed but not selectable until espeak-ng is found, and the reason names both the dependency and the licence (`Needs espeak-ng (GPL-3.0)`), so the state is never a mystery or a silent failure. Installing it flips all 13 voices usable without a restart, and adds their 13 style tables — ~6.8 MB — to the next download, because `kokoro_plan` uses the same availability rule the catalogue shows. Japanese and Mandarin use built-in native pronunciation dictionaries and Misaki-compatible phone mappings; their 13 voice files are now included in both download plans, independently of eSpeak. Existing installations can fetch just their missing files.
 
 ### `kokoro-tts` is not the clean build it looks like
 
@@ -494,7 +494,7 @@ Explicitly *not* in v0: history, streaming word-highlight, per-app shortcuts, th
 ## 9. Open product questions for you
 
 1. ~~Is kiegen closed-source/commercial?~~ **Current decision: source available under LICENSE-TEXTHALO.md; prior Apache-licensed releases retain their terms** — with independent dependency licence checks in `cargo-deny` (§5).
-2. ~~English-only for v1, or the full 9 languages?~~ **Decided: English only for v1.** Mandarin/Japanese remain reachable later; the other five (Spanish, French, Hindi, Italian, Portuguese) use an optional separately installed espeak-ng runtime. **Partly superseded:** a second engine — Chatterbox Multilingual — now offers 23 languages, none of them through espeak, so the "which languages" question is answered twice over: Kokoro's 9 codes, and Chatterbox's 23 for everything Kokoro cannot reach without GPL code (§5).
+2. ~~English-only for v1, or the full 9 languages?~~ **Decided: English only for v1.** **Superseded 2026-10-06:** native Mandarin/Japanese front ends are now integrated; the other five (Spanish, French, Hindi, Italian, Portuguese) use an optional separately installed espeak-ng runtime. **Partly superseded:** a second engine — Chatterbox Multilingual — now offers 23 languages, none of them through espeak, so the "which languages" question is answered twice over: Kokoro's 9 codes, and Chatterbox's 23 for everything Kokoro cannot reach without GPL code (§5).
 3. Does the audio **play** and/or get **written to a file** by default? "Speak" vs "Speak to file" as separate chords is the plan.
 4. Should the user be able to configure **per-app** shortcuts/voices, or is one global chord enough for v1?
 

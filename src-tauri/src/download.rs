@@ -126,9 +126,8 @@ pub struct Entry {
 /// What Kokoro needs on disk: the graph, the phoneme tokenizer, and one style table per
 /// *usable* voice.
 ///
-/// Only the voices that can actually be used are fetched. The Japanese and Chinese front
-/// ends are separate modules that cannot ship here, so their style tables would be 13 MB of
-/// dead weight. The espeak-backed five languages are fetched **only when espeak-ng has been
+/// English, Japanese and Mandarin use built-in front ends and are always included.
+/// The espeak-backed five languages are fetched **only when espeak-ng has been
 /// found** — the same availability rule the catalogue shows, so installing espeak-ng adds
 /// those voice tables to the next download rather than leaving them unreachable.
 pub fn kokoro_plan() -> Result<Vec<Entry>, String> {
@@ -753,7 +752,7 @@ mod tests {
     /// espeak-ng states, because that is the only thing that moves the voice count.
     #[test]
     fn the_plan_covers_the_graph_tokenizer_and_usable_voices() {
-        for (espeak_ready, expected_voices) in [(false, 28), (true, 41)] {
+        for (espeak_ready, expected_voices) in [(false, 41), (true, 54)] {
             let plan = kokoro_plan_with(espeak_ready).expect("plan");
             let paths: Vec<&str> = plan.iter().map(|entry| entry.path.as_str()).collect();
             assert!(paths.contains(&"onnx/model.onnx"));
@@ -769,12 +768,11 @@ mod tests {
             );
             assert!(paths.contains(&"voices/af_heart.bin"));
             assert!(paths.contains(&"voices/af_sky.bin"));
-            // The stray and the Japanese/Chinese voices must stay out of the download in
-            // both states.
+            // Native Japanese/Chinese voices are included in both runtime states.
             assert!(!paths.contains(&"voices/af.bin"), "512-row stray");
             assert!(
-                !paths.contains(&"voices/zf_xiaoxiao.bin"),
-                "needs a Chinese front end"
+                paths.contains(&"voices/zf_xiaoxiao.bin"),
+                "native Chinese front end"
             );
             // The espeak-backed voices follow the install: absent without it, present with.
             assert_eq!(
@@ -865,6 +863,30 @@ mod tests {
         let _ = fs::remove_dir_all(dir);
     }
 
+    #[test]
+    fn an_existing_english_install_only_needs_the_native_cjk_voice_files() {
+        let dir =
+            std::env::temp_dir().join(format!("texthalo-cjk-upgrade-{}", uuid::Uuid::new_v4()));
+        let plan = kokoro_plan_with(false).unwrap();
+        for entry in &plan {
+            if entry.path.starts_with("voices/j") || entry.path.starts_with("voices/z") {
+                continue;
+            }
+            let path = dir.join(&entry.path);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            File::create(path).unwrap().set_len(entry.bytes).unwrap();
+        }
+        assert_eq!(missing_bytes_in(&plan, Some(&dir)), 13 * VOICE_BYTES);
+        assert_eq!(
+            plan.iter()
+                .filter(|entry| entry.path.starts_with("voices/j")
+                    || entry.path.starts_with("voices/z"))
+                .count(),
+            13
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
     /// The byte total the UI shows is derived from the plan, so it cannot drift from the
     /// work: 325.5 MB graph + 3.5 kB tokenizer + one 522,240-byte table per usable voice +
     /// the two dictionaries. Asserted in both espeak-ng states, because the second one adds
@@ -873,15 +895,14 @@ mod tests {
     fn the_byte_total_matches_the_plan() {
         let lexicon: u64 = LEXICON_FILES.iter().map(|(_, bytes, _)| *bytes).sum();
 
-        let without = KOKORO_GRAPH_BYTES + KOKORO_TOKENIZER_BYTES + 28 * VOICE_BYTES + lexicon;
-        // 340,158,449 before the dictionaries joined the plan; the UI reads "346 MB", and
-        // that number comes from here rather than from this comment.
-        assert_eq!(without, 346_258_435);
+        let without = KOKORO_GRAPH_BYTES + KOKORO_TOKENIZER_BYTES + 41 * VOICE_BYTES + lexicon;
+        // Includes 28 English and 13 native Japanese/Mandarin style tables.
+        assert_eq!(without, 353_047_555);
 
-        let with = KOKORO_GRAPH_BYTES + KOKORO_TOKENIZER_BYTES + 41 * VOICE_BYTES + lexicon;
+        let with = KOKORO_GRAPH_BYTES + KOKORO_TOKENIZER_BYTES + 54 * VOICE_BYTES + lexicon;
         assert_eq!(
-            with, 353_047_555,
-            "13 more voice tables than the English-only plan"
+            with, 359_836_675,
+            "13 more voice tables than the native-language plan"
         );
 
         // And the state the machine is actually in agrees with `kokoro_bytes()`.

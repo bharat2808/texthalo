@@ -1,7 +1,7 @@
 import { message, t } from "./i18n";
 
 export type KokoroLanguageInstallEvent = { phase: "runtime" | "voices" | "done" | "error"; message: string };
-type Voice = { language: string; requires_espeak?: boolean; unavailable: string | null };
+type Voice = { language: string; requires_espeak?: boolean; requires_cjk?: boolean; unavailable: string | null };
 
 export function additionalKokoroVoices(voices: readonly Voice[]) {
   return voices.filter(voice => voice.requires_espeak);
@@ -28,4 +28,20 @@ export default function KokoroLanguageSetup({ voices, event, busy, disabled, onD
     </div> : null}
     {event ? <p className="card-note" role={event.phase === "error" ? "alert" : "status"}>{message(event.message)}</p> : null}
   </>;
+}
+
+
+export function KokoroCjkSetup({ voices, busy, disabled, error, onDownload }: {
+  voices: readonly Voice[]; busy: boolean; disabled: boolean; error: string | null; onDownload: () => void;
+}) {
+  const missing = voices.filter(voice => voice.requires_cjk && voice.unavailable !== null);
+  if (!missing.length) return null;
+  return <div className="field kokoro-language-setup kokoro-cjk-setup">
+    <span className="field-label">{t("Japanese and Mandarin Chinese")}</span>
+    <span className="field-hint">{t("Pronunciation support is built in. Download the voice files to start listening.")}</span>
+    <button className="plain accent-action" disabled={busy || disabled} onClick={onDownload}>
+      {busy ? t("Downloading voice files…") : error ? t("Retry voice setup") : t("Download {0} voices", [missing.length])}
+    </button>
+    {error ? <p className="card-note" role="alert">{message(error)}</p> : null}
+  </div>;
 }

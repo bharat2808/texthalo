@@ -41,6 +41,13 @@ whisper-rs = { version = "=0.16.0", default-features = false }
 sha2 = "0.10"
 base64 = "0.22"
 url = "2"
+# Native Japanese readings and embedded BSD dictionary; no external runtime.
+jpreprocess = { version = "=0.15.0", features = ["naist-jdic"] }
+# Embedded Mandarin phrase/character readings (MIT), including polyphonic words.
+pinyin_pro = "=3.29.4"
+# Misaki-compatible Mandarin word boundaries, with its embedded MIT dictionary.
+jieba-rs = "=0.10.3"
+unicode-normalization = "0.1"
 uuid = { version = "1", features = ["v4"] }
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"

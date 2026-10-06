@@ -10,6 +10,7 @@ mod assistant_stream;
 mod capture;
 pub mod chatterbox;
 pub mod chatterbox_models;
+pub mod cjk;
 pub mod config;
 pub mod download;
 mod engine_locks;
@@ -835,8 +836,16 @@ fn preview_voice(
         }
         config::Engine::Fish => settings.fish.voice_id = voice.unwrap_or_default(),
     }
-    let sample =
-        text.unwrap_or_else(|| "This is how I sound when reading your selection.".to_string());
+    let sample = text.unwrap_or_else(|| {
+        let native_sample = if settings.engine == config::Engine::Kokoro {
+            cjk::preview_text(&settings.kokoro.voice)
+        } else {
+            None
+        };
+        native_sample
+            .unwrap_or("This is how I sound when reading your selection.")
+            .to_string()
+    });
     std::thread::spawn(move || {
         run_speech(
             &app,

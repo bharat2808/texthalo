@@ -1,4 +1,4 @@
-import KokoroLanguageSetup, { type KokoroLanguageInstallEvent } from "./KokoroLanguageSetup";
+import KokoroLanguageSetup, { KokoroCjkSetup, type KokoroLanguageInstallEvent } from "./KokoroLanguageSetup";
 import { sourceMessage, t, message, useLanguage, currentLanguage } from "./i18n";
 import TranscriptionSource from "./TranscriptionSource";
 import Row from "./SelectionRow";
@@ -42,6 +42,7 @@ type EngineVoice = {
   label: string;
   language: string;
   requires_espeak?: boolean;
+  requires_cjk?: boolean;
   /** Non-null when the engine cannot use this voice at all — shown, not selectable. */
   unavailable: string | null;
   note: string | null;
@@ -2007,6 +2008,10 @@ function MainApp() {
                   </span>
                 </div>
 
+                {settings.engine === "kokoro" ? <KokoroCjkSetup voices={engineVoices}
+                  busy={installStarting || installing} disabled={modelDownloadBusy}
+                  error={installForEngine?.phase === "error" ? installForEngine.message ?? null : null}
+                  onDownload={() => { setInstall(null); void downloadSelectedModel().catch(cause => setError(String(cause))); }} /> : null}
                 {settings.engine === "kokoro" ? <KokoroLanguageSetup voices={engineVoices}
                   event={languageInstall} busy={languageInstalling} disabled={modelDownloadBusy}
                   onDownload={() => {

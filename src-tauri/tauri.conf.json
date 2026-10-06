@@ -41,7 +41,8 @@
       "files": {
         "Resources/en.lproj/InfoPlist.strings": "locales/en.lproj/InfoPlist.strings",
         "Resources/fr-CA.lproj/InfoPlist.strings": "locales/fr-CA.lproj/InfoPlist.strings",
-        "Resources/es-419.lproj/InfoPlist.strings": "locales/es-419.lproj/InfoPlist.strings"
+        "Resources/es-419.lproj/InfoPlist.strings": "locales/es-419.lproj/InfoPlist.strings",
+        "Resources/licenses": "licenses"
       }
     },
     "category": "Productivity",

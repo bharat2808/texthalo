@@ -1,0 +1,81 @@
+{
+  "INITIAL_MAPPING": {
+    "b": "p",
+    "c": "ʦʰ",
+    "ch": "ꭧʰ",
+    "d": "t",
+    "f": "f",
+    "g": "k",
+    "h": "x",
+    "j": "ʨ",
+    "k": "kʰ",
+    "l": "l",
+    "m": "m",
+    "n": "n",
+    "p": "pʰ",
+    "q": "ʨʰ",
+    "r": "ɻ",
+    "s": "s",
+    "sh": "ʂ",
+    "t": "tʰ",
+    "x": "ɕ",
+    "z": "ʦ",
+    "zh": "ꭧ"
+  },
+  "SYLLABIC_CONSONANT_MAPPINGS": {
+    "hm": "hm0",
+    "hng": "hŋ0",
+    "m": "m0",
+    "n": "n0",
+    "ng": "ŋ0"
+  },
+  "INTERJECTION_MAPPINGS": {
+    "io": "jɔ0",
+    "ê": "ɛ0",
+    "er": "ɚ0",
+    "o": "ɔ0"
+  },
+  "FINAL_MAPPING": {
+    "a": "a0",
+    "ai": "ai̯0",
+    "an": "a0n",
+    "ang": "a0ŋ",
+    "ao": "au̯0",
+    "e": "ɤ0",
+    "ei": "ei̯0",
+    "en": "ə0n",
+    "eng": "ə0ŋ",
+    "i": "i0",
+    "ia": "ja0",
+    "ian": "jɛ0n",
+    "iang": "ja0ŋ",
+    "iao": "jau̯0",
+    "ie": "je0",
+    "in": "i0n",
+    "iou": "jou̯0",
+    "ing": "i0ŋ",
+    "iong": "jʊ0ŋ",
+    "ong": "ʊ0ŋ",
+    "ou": "ou̯0",
+    "u": "u0",
+    "uei": "wei̯0",
+    "ua": "wa0",
+    "uai": "wai̯0",
+    "uan": "wa0n",
+    "uen": "wə0n",
+    "uang": "wa0ŋ",
+    "ueng": "wə0ŋ",
+    "uo": "wo0",
+    "o": "wo0",
+    "ü": "y0",
+    "üe": "ɥe0",
+    "üan": "ɥɛ0n",
+    "ün": "y0n"
+  },
+  "FINAL_MAPPING_AFTER_ZH_CH_SH_R": {
+    "i": "ɻ̩0"
+  },
+  "FINAL_MAPPING_AFTER_Z_C_S": {
+    "i": "ɹ̩0"
+  }
+}
