@@ -23,6 +23,8 @@ export default function KokoroModelPicker({ models, selected, disabled, onSelect
   deleteDisabled?: boolean;
 }) {
   const current = models.find(model => model.id === selected);
+  const showDownload = onDownload && current && (!current.installed || needsDownload);
+  const showDelete = onDelete && current && (current.removable ?? current.installed);
   return <div className="field">
     <label className="field-label" htmlFor={`${engine.toLowerCase()}-model-size`}>{t("{0} model size", [engine])}</label>
     <select id={`${engine.toLowerCase()}-model-size`} value={selected} disabled={disabled}
@@ -31,14 +33,12 @@ export default function KokoroModelPicker({ models, selected, disabled, onSelect
         {message(model.label)} · {model.bytes >= 1_000_000_000 ? `${(model.bytes / 1_000_000_000).toFixed(2)} GB` : `${Math.round(model.bytes / 1_000_000)} MB`} · {model.installed ? t("Installed") : t("Download needed")}
       </option>)}
     </select>
-    {onDownload && current && (!current.installed || needsDownload) ? (
-      <button className="plain accent-action" disabled={disabled} onClick={onDownload}>{downloadLabel}</button>
-    ) : null}
-    {onDelete && current && (current.removable ?? current.installed) ? (
-      <button className="plain accent-action" disabled={disabled || deleteDisabled} onClick={onDelete}>
+    {showDownload || showDelete ? <div className="model-actions">
+      {showDownload ? <button className="plain accent-action" disabled={disabled} onClick={onDownload}>{downloadLabel}</button> : null}
+      {showDelete ? <button className="plain" disabled={disabled || deleteDisabled} onClick={onDelete}>
         {deleting ? t("Deleting…") : t("Delete selected model")}
-      </button>
-    ) : null}
+      </button> : null}
+    </div> : null}
     {current ? <p className="card-note">{message(current.description)}</p> : null}
   </div>;
 }

@@ -26,6 +26,7 @@ mod hosted_input;
 mod instance;
 pub mod kokoro;
 pub mod kokoro_models;
+mod kokoro_setup;
 pub mod lexicon;
 mod localization;
 pub mod model_storage;
@@ -1140,21 +1141,78 @@ async fn delete_local_model(
     .map_err(|error| error.to_string())?
 }
 
-/// Install espeak-ng — the extra back end for Kokoro's five non-English languages.
-///
-/// Threaded and event-reported rather than returning a value, because a package-manager run
-/// takes long enough that blocking the command would freeze the pane, and because the
-/// catalogue has to be re-read afterwards either way.
+/// One action installs both the pronunciation runtime and all missing Kokoro voice files.
+#[derive(Serialize, Clone)]
+struct KokoroLanguageInstallEvent {
+    phase: &'static str,
+    message: String,
+}
+
 #[tauri::command]
-fn install_espeak_ng(app: AppHandle) {
+fn install_kokoro_languages(app: AppHandle) -> Result<(), String> {
+    let state = app.state::<AppState>();
+    let quant = state.settings.lock().unwrap().kokoro.quant.clone();
+    kokoro_models::get(&quant)?;
+    let mut downloading = state.model_download.lock().unwrap();
+    if *downloading {
+        return Err("A voice model download is already running.".into());
+    }
+    *downloading = true;
+    drop(downloading);
     std::thread::spawn(move || {
-        let _ = app.emit("kiegen:espeak", "Downloading and verifying espeak-ng…");
-        let message = match espeak::install() {
-            Ok(message) => message,
-            Err(error) => error,
+        let state = app.state::<AppState>();
+        struct Reset<'a>(&'a Mutex<bool>);
+        impl Drop for Reset<'_> {
+            fn drop(&mut self) {
+                *self.0.lock().unwrap_or_else(|error| error.into_inner()) = false;
+            }
+        }
+        let _reset = Reset(&state.model_download);
+        let emit = |phase, message: &str| {
+            let _ = app.emit(
+                "kiegen:kokoro-languages",
+                KokoroLanguageInstallEvent {
+                    phase,
+                    message: message.into(),
+                },
+            );
         };
-        let _ = app.emit("kiegen:espeak", message);
+        emit("runtime", "Installing language support…");
+        let result = kokoro_setup::install_languages(
+            espeak::EspeakNg::detect().is_some(),
+            || {
+                espeak::install()?;
+                Ok(())
+            },
+            || {
+                emit(
+                    "voices",
+                    "Downloading voice files… Existing model files are reused.",
+                );
+                install_local_engine(&app, config::Engine::Kokoro, Some(&quant))
+            },
+        );
+        match result {
+            Ok(()) => emit("done", "Additional Kokoro voices are ready."),
+            Err(error) => {
+                // Settle model progress too, so a failed voice-file transfer can be retried.
+                emit_install(
+                    &app,
+                    InstallEvent {
+                        engine: config::Engine::Kokoro,
+                        quant: Some(quant.clone()),
+                        phase: "error",
+                        file: String::new(),
+                        done: 0,
+                        total: 0,
+                        message: Some(error.clone()),
+                    },
+                );
+                emit("error", &format!("Could not finish voice setup: {error}. Try again to download only the missing files."));
+            }
+        }
     });
+    Ok(())
 }
 
 #[tauri::command]
@@ -1501,7 +1559,7 @@ pub fn run() {
             stop_speaking,
             install_engine,
             delete_local_model,
-            install_espeak_ng,
+            install_kokoro_languages,
             add_chatterbox_voice,
             delete_chatterbox_voice,
             open_settings_window,

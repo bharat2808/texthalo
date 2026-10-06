@@ -1,3 +1,4 @@
+import KokoroLanguageSetup, { type KokoroLanguageInstallEvent } from "./KokoroLanguageSetup";
 import { sourceMessage, t, message, useLanguage, currentLanguage } from "./i18n";
 import TranscriptionSource from "./TranscriptionSource";
 import Row from "./SelectionRow";
@@ -40,6 +41,7 @@ type EngineVoice = {
   id: string;
   label: string;
   language: string;
+  requires_espeak?: boolean;
   /** Non-null when the engine cannot use this voice at all — shown, not selectable. */
   unavailable: string | null;
   note: string | null;
@@ -519,10 +521,8 @@ function MainApp() {
   const [setupOpen, setSetupOpen] = useState(false);
   const [setupRevision, setSetupRevision] = useState(0);
   const accessibilityPromptStarted = useRef(false);
-  // The last word from an espeak-ng install attempt. Kept until the next attempt rather
-  // than timed out, because the message is the only answer the user gets.
-  const [espeakMessage, setEspeakMessage] = useState<string | null>(null);
-  const [espeakInstalling, setEspeakInstalling] = useState(false);
+  const [languageInstall, setLanguageInstall] = useState<KokoroLanguageInstallEvent | null>(null);
+  const [languageInstalling, setLanguageInstalling] = useState(false);
   const [tab, setTab] = useState<Tab>("home");
   const [status, setStatus] = useState<Status>({ phase: "idle" });
   const [error, setError] = useState<string | null>(null);
@@ -872,13 +872,11 @@ function MainApp() {
       setInstall(event.payload);
       if (event.payload.phase !== "downloading") void refresh();
     });
-    // Installation can use Homebrew or the app-managed runtime. Report each stage and
-    // re-read the catalogue when it finishes so the newly unlocked voices appear.
-    const unespeak = listen<string>("kiegen:espeak", (event) => {
-      setEspeakMessage(event.payload);
-      const installing = event.payload.startsWith("Downloading and verifying");
-      setEspeakInstalling(installing);
-      if (!installing) void refresh();
+    const languageSetup = listen<KokoroLanguageInstallEvent>("kiegen:kokoro-languages", event => {
+      setLanguageInstall(event.payload);
+      const busy = event.payload.phase === "runtime" || event.payload.phase === "voices";
+      setLanguageInstalling(busy);
+      if (!busy) void refresh();
     });
     const recovery = listen<"account" | "voice" | "assistant">("texthalo:speech-recovery", (event) => {
       setTab(event.payload);
@@ -894,7 +892,7 @@ function MainApp() {
     return () => {
       void unlisten.then((off) => off());
       void uninstall.then((off) => off());
-      void unespeak.then((off) => off());
+      void languageSetup.then((off) => off());
       void setupWizard.then((off) => off());
       void recovery.then((off) => off());
       window.clearInterval(poll);
@@ -1108,12 +1106,6 @@ function MainApp() {
     blocked: engineVoices.filter((voice) => voice.unavailable !== null).length,
   };
 
-  // The espeak-backed voices are the only locked ones a user can unlock with one click, so
-  // the pane offers exactly that — and offers nothing when there is nothing to unlock.
-  const espeakVoiceCount = engineVoices.filter((voice) =>
-    voice.unavailable?.includes("espeak-ng"),
-  ).length;
-
   const saveShortcut = useCallback(async (role: ShortcutRole, accelerator: string) => {
     const current = latestState.current;
     if (!current) return;
@@ -1229,7 +1221,7 @@ function MainApp() {
    */
   const installForEngine = install && install.engine === settings.engine
     && (!install.quant || install.quant === (settings.engine === "kokoro" ? settings.kokoro.quant : settings.chatterbox.quant)) ? install : null;
-  const modelDownloadBusy = modelDeleting || installStarting || install?.phase === "downloading";
+  const modelDownloadBusy = modelDeleting || installStarting || languageInstalling || install?.phase === "downloading";
   const installing = installForEngine?.phase === "downloading";
   const installPercent =
     installForEngine && installForEngine.total > 0
@@ -1751,7 +1743,7 @@ function MainApp() {
                   selected={settings.engine === "kokoro" ? settings.kokoro.quant : settings.chatterbox.quant}
                   disabled={modelDownloadBusy}
                   needsDownload={activeEngine?.needs_download}
-                  downloadLabel={installStarting ? t("Starting…") : installing ? t("Downloading…") : t("Download selected model")}
+                  downloadLabel={installStarting ? t("Starting…") : installing ? t("Downloading…") : activeEngine?.models.find(model => model.id === (settings.engine === "kokoro" ? settings.kokoro.quant : settings.chatterbox.quant))?.installed && activeEngine.needs_download ? t("Download missing files") : t("Download selected model")}
                   onDownload={() => void downloadSelectedModel().catch(cause => setError(String(cause)))}
                   deleting={modelDeleting}
                   deleteDisabled={state.speaking}
@@ -2015,24 +2007,16 @@ function MainApp() {
                   </span>
                 </div>
 
-                {espeakVoiceCount > 0 ? (
-                  <div className="field">
-                    <span className="field-label">{t("espeak-ng")}</span>
-                    <span className="inline">
-                      <button className="plain accent-action" disabled={espeakInstalling} onClick={() => void invoke("install_espeak_ng")}>
-                        {Icon.download()} {espeakInstalling ? t("Installing…") : t("Add {0} voices", [espeakVoiceCount])}
-                      </button>
-                    </span>
-                  </div>
-                ) : null}
-
-                {espeakMessage ? (
-                  <Note kind="secondary" icon={Icon.info()}>
-                    <span className="truncate" title={message(espeakMessage ?? "")}>
-                      {message(espeakMessage ?? "")}
-                    </span>
-                  </Note>
-                ) : null}
+                {settings.engine === "kokoro" ? <KokoroLanguageSetup voices={engineVoices}
+                  event={languageInstall} busy={languageInstalling} disabled={modelDownloadBusy}
+                  onDownload={() => {
+                    setLanguageInstalling(true);
+                    setLanguageInstall({ phase: "runtime", message: sourceMessage("Installing language support…") });
+                    void saveTail.current.then(() => invoke("install_kokoro_languages")).catch(cause => {
+                      setLanguageInstalling(false);
+                      setLanguageInstall({ phase: "error", message: String(cause) });
+                    });
+                  }} /> : null}
 
                 <div className="voice-list">
                   {[...engineVoicesByLanguage.entries()].map(([groupLanguage, list]) => (

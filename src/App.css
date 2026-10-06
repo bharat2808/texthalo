@@ -389,6 +389,17 @@ body:has(.update-overlay) {
   color: var(--label-secondary);
 }
 
+.model-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.kokoro-language-setup > button {
+  align-self: flex-start;
+  max-width: 100%;
+}
+
 /* ───────────────────────── hosted voice creator ─────────────────────── */
 
 .clone-panel {

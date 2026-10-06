@@ -74,7 +74,7 @@ const LEXICON_FILES: [(&str, u64, &str); 2] = [
 /// Every shipped voice style table measured 522,240 bytes (510 rows x 256 float32). The
 /// repo also carries `voices/af.bin` at 524,288 bytes — 512 rows, absent from Kokoro's
 /// documented voice list — which is exactly why it is offered nowhere.
-const VOICE_BYTES: u64 = 522_240;
+pub(crate) const VOICE_BYTES: u64 = 522_240;
 
 /// Chatterbox Multilingual's ONNX export, pinned to the commit these sizes were read from:
 /// `onnx-community/chatterbox-multilingual-ONNX`, MIT and ungated.

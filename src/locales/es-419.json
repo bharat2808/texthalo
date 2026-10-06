@@ -745,5 +745,16 @@
   "Interrupted": "Interrumpido",
   "Idle": "Inactivo",
   "Capturing screen": "Capturando pantalla",
-  "Transcript": "Transcripción"
+  "Transcript": "Transcripción",
+  "Additional languages": "Idiomas adicionales",
+  "Download {0} voices": "Descargar {0} voces",
+  "Installs language support and voice files together. Existing model files are reused.": "Instala el soporte de idiomas y los archivos de voz juntos. Reutiliza los archivos del modelo ya instalados.",
+  "Installing language support…": "Instalando soporte de idiomas…",
+  "Downloading voice files…": "Descargando archivos de voz…",
+  "Downloading voice files… Existing model files are reused.": "Descargando archivos de voz… Se reutilizan los archivos del modelo existentes.",
+  "Additional Kokoro voices are ready.": "Las voces adicionales de Kokoro están listas.",
+  "Could not finish voice setup: {0}. Try again to download only the missing files.": "No se pudo completar la configuración de las voces: {0}. Inténtalo de nuevo para descargar solo los archivos faltantes.",
+  "Voice files need downloading": "Archivos de voz pendientes de descarga",
+  "Download missing files": "Descargar archivos faltantes",
+  "Retry voice setup": "Reintentar la configuración de voces"
 }

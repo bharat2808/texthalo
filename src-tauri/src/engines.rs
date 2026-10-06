@@ -31,6 +31,8 @@ pub struct EngineVoice {
     /// Display name with the engine's own prefixes stripped.
     pub label: String,
     pub language: String,
+    /// Requires the optional pronunciation runtime and a language voice table.
+    pub requires_espeak: bool,
     /// `Some(why)` = shown, but not selectable, and the UI says why.
     pub unavailable: Option<String>,
     /// Voice metadata the engine happens to know (Kokoro encodes gender in the id).
@@ -279,6 +281,7 @@ pub fn kokoro_voices(espeak_ready: bool) -> Vec<EngineVoice> {
                 id: (*id).to_string(),
                 label: kokoro_label(id),
                 language: family.language.to_string(),
+                requires_espeak: family.espeak.is_some(),
                 // An espeak-backed family is unusable until the user installs espeak-ng —
                 // a condition they can fix, unlike `blocked`, which no install resolves.
                 unavailable: match (family.espeak, espeak_ready) {
@@ -369,6 +372,7 @@ pub fn chatterbox_voices() -> Vec<EngineVoice> {
             id: (*code).to_string(),
             label: (*name).to_string(),
             language: (*name).to_string(),
+            requires_espeak: false,
             unavailable: chatterbox_language_blocked(code).map(str::to_string),
             // `zh` works, but through the reference's own no-segmenter path. Saying so is the
             // difference between a degradation the user can see and one they cannot.
@@ -419,9 +423,27 @@ pub fn catalog(settings: &Settings) -> Vec<EngineInfo> {
     catalog_with(settings, crate::voices::list())
 }
 
+fn kokoro_voices_with_files(espeak_ready: bool, dir: Option<&std::path::Path>) -> Vec<EngineVoice> {
+    let mut kokoro = kokoro_voices(espeak_ready);
+    for voice in &mut kokoro {
+        if voice.unavailable.is_none()
+            && !dir.is_some_and(|dir| {
+                std::fs::metadata(dir.join(format!("voices/{}.bin", voice.id)))
+                    .is_ok_and(|metadata| metadata.len() == crate::download::VOICE_BYTES)
+            })
+        {
+            voice.unavailable = Some("Voice files need downloading".into());
+        }
+    }
+    kokoro
+}
+
 /// Same catalogue, with the user's clips injected.
 pub fn catalog_with(settings: &Settings, clips: Vec<crate::voices::VoiceClip>) -> Vec<EngineInfo> {
-    let kokoro = kokoro_voices(crate::engine_paths::espeak_ng().is_some());
+    let kokoro = kokoro_voices_with_files(
+        crate::engine_paths::espeak_ng().is_some(),
+        crate::engine_paths::kokoro_dir().as_deref(),
+    );
     let chatterbox = chatterbox_voices();
     let ref_voices = chatterbox_ref_voices(&clips);
     let fish_configured = crate::hosted::service_configured();
@@ -569,6 +591,48 @@ pub fn catalog_with(settings: &Settings, clips: Vec<crate::voices::VoiceClip>) -
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn existing_espeak_with_missing_voice_tables_still_needs_language_setup() {
+        let dir = std::env::temp_dir().join(format!(
+            "texthalo-kokoro-language-catalog-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let before = kokoro_voices_with_files(false, Some(&dir));
+        assert_eq!(
+            before
+                .iter()
+                .filter(|voice| voice.requires_espeak && voice.unavailable.is_some())
+                .count(),
+            13
+        );
+        let after_runtime = kokoro_voices_with_files(true, Some(&dir));
+        let missing: Vec<_> = after_runtime
+            .iter()
+            .filter(|voice| voice.requires_espeak && voice.unavailable.is_some())
+            .collect();
+        assert_eq!(missing.len(), 13);
+        assert!(missing
+            .iter()
+            .all(|voice| voice.unavailable.as_deref() == Some("Voice files need downloading")));
+        std::fs::create_dir_all(dir.join("voices")).unwrap();
+        for voice in missing {
+            std::fs::File::create(dir.join(format!("voices/{}.bin", voice.id)))
+                .unwrap()
+                .set_len(crate::download::VOICE_BYTES)
+                .unwrap();
+        }
+        let complete = kokoro_voices_with_files(true, Some(&dir));
+        assert!(complete
+            .iter()
+            .filter(|voice| voice.requires_espeak)
+            .all(|voice| voice.unavailable.is_none()));
+        assert!(complete
+            .iter()
+            .filter(|voice| voice.language == "Japanese" || voice.language == "Mandarin Chinese")
+            .all(|voice| voice.unavailable.is_some()));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     /// Kokoro v1.0 ships 54 voices. If this changes, a real voice was added or one was
     /// dropped, and the count in the UI copy is wrong.
