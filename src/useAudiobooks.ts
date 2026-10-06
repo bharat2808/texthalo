@@ -1,6 +1,11 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 export type Checkpoint = {
+  id: string;
+  status: "complete" | "partial" | "preparing" | "attention";
+  duration: number;
+  complete: boolean;
+  needsEarlier: boolean;
   label: string;
   sentence: number;
   page: string;
@@ -19,6 +24,15 @@ export type Audiobook = {
   complete: boolean;
   fromBeginning: boolean;
   message: string | null;
+  activity: "forward" | "backfill" | null;
+  backfillBlocked: string | null;
+  backfillProgress: {
+    chapter: string | null;
+    phase: "searching" | "rendering" | "publishing";
+    pages: number;
+    ready: number;
+    total: number | null;
+  } | null;
   checkpoints: Checkpoint[];
   passage: { text: string; page: string } | null;
 };
@@ -93,4 +107,24 @@ export function listenBook(id: string, seconds?: number) {
 }
 export function generateBook(id?: string, full = false) {
   return invoke<string>("audiobook_generate", { id: id ?? null, full });
+}
+
+export function completeChapter(id: string) {
+  return invoke<string>("audiobook_complete_chapter", { id });
+}
+
+export function preparationLabel(book: Audiobook) {
+  const progress = book.backfillProgress;
+  if (!progress) return "Preparing pages ahead of you";
+  const chapter = progress.chapter || "chapter";
+  if (book.activity === "forward") {
+    return `Preparing pages ahead · ${progress.pages} earlier pages saved`;
+  }
+  if (progress.phase === "searching") {
+    return `Finding chapter beginning · ${progress.pages} earlier pages captured`;
+  }
+  if (progress.phase === "publishing") return `Adding earlier audio to ${chapter}`;
+  return progress.total === null
+    ? `Preparing ${chapter} · ${progress.pages} earlier pages captured`
+    : `Preparing ${chapter} · ${progress.ready}/${progress.total} sentences`;
 }

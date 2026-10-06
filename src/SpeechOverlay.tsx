@@ -9,6 +9,7 @@ import {
   generateBook,
   listenBook,
   audioClock,
+  preparationLabel,
 } from "./useAudiobooks";
 import "./SpeechOverlay.css";
 
@@ -283,15 +284,20 @@ export default function SpeechOverlay() {
   const bookOnly = status.phase === "idle" && !playback.available && !!bookTray;
   const currentBook =
     books.books.find((b) => b.id === books.playback?.bookId) ?? bookTray?.book;
+  const playingDetectedBook =
+    playback.available && books.playback?.bookId === bookTray?.book?.id;
+  const preparingDetectedBook =
+    !!bookTray?.book && books.generating === bookTray.book.id;
   const bookPanel =
     bookTray && showControls ? (
       <div className="book-tray-details">
         <div className="book-tray-title">
           <span>Kindle · {bookTray.reader.progress}</span>
-          <strong>{bookTray.reader.title}</strong>
+          <strong title={bookTray.reader.title}>{bookTray.reader.title}</strong>
         </div>
         <div className="book-tray-actions">
-          <button
+          {!playingDetectedBook && (
+            <button
             disabled={
               busy || (bookTray.generating && !bookTray.book?.generated)
             }
@@ -307,33 +313,48 @@ export default function SpeechOverlay() {
             {bookTray.book?.generated
               ? "Continue listening"
               : "Create audiobook"}
-          </button>
+            </button>
+          )}
           {bookTray.book && !bookTray.book.complete && (
             <button
-              disabled={busy || !!books.generating}
+              disabled={busy || (!!books.generating && !preparingDetectedBook)}
               onClick={() =>
-                void bookAction(() => generateBook(bookTray.book!.id))
+                void bookAction(() =>
+                  preparingDetectedBook
+                    ? invoke("audiobook_stop_generation")
+                    : generateBook(bookTray.book!.id),
+                )
               }
             >
-              Buffer ahead
+              {preparingDetectedBook ? "Stop preparing" : "Buffer ahead"}
             </button>
           )}
         </div>
+        {currentBook && books.generating === currentBook.id && (
+          <p className="book-tray-progress" role="status">
+            {preparationLabel(currentBook)}
+          </p>
+        )}
         <div
           className="book-tray-checkpoints"
           aria-label="Audiobook checkpoints"
         >
-          {currentBook?.checkpoints.map((c, i) => (
+          {currentBook?.checkpoints.map((c) => (
             <button
-              key={`${c.sentence}-${i}`}
+              key={c.id}
+              data-complete={c.complete}
+              title={`${c.label} · ${audioClock(c.duration)} audio`}
               disabled={c.seconds === null || busy}
               onClick={() =>
                 void bookAction(() => listenBook(currentBook.id, c.seconds!))
               }
             >
               <span>{c.label}</span>
-              <small>
-                {c.seconds === null ? "Preparing" : audioClock(c.seconds)}
+              <small className="book-chapter-duration">
+                {c.seconds === null ? "—" : audioClock(c.duration)}
+              </small>
+              <small className="book-chapter-status">
+                {c.seconds === null ? "Preparing" : c.complete ? "Complete" : "Partial"}
               </small>
             </button>
           ))}
@@ -481,7 +502,7 @@ export default function SpeechOverlay() {
             )
           }
         >
-          <span />
+          <span className="stop-icon" />
         </button>
       </div>
       {showControls ? (

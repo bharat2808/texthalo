@@ -84,6 +84,11 @@ struct SampleBuffer {
     played_audio_bytes: u64,
 }
 impl SampleBuffer {
+    fn rebase_disk(&mut self, disk: DiskSamples, added: usize) {
+        self.cursor = self.cursor.saturating_add(added).min(disk.samples);
+        self.disk = Some(disk);
+    }
+
     fn len(&self) -> usize {
         self.disk.as_ref().map_or(self.samples.len(), |d| d.samples)
     }
@@ -310,6 +315,25 @@ impl Player {
         Ok(())
     }
 
+    /// Queued buffers still contain the same passage; only future reads move in the new file.
+    pub(crate) fn update_file_rebased(
+        &self,
+        path: &std::path::Path,
+        samples: u64,
+        added: u64,
+    ) -> Result<(), String> {
+        let disk = DiskSamples::open(path, samples)?;
+        let added = usize::try_from(added).map_err(|_| "Recording exceeds playback capacity")?;
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        if state.cancelled {
+            // Stop may race the publication. Preserve the final bookmark in the rebased timeline.
+            state.cursor = state.cursor.saturating_add(added).min(disk.samples);
+        } else {
+            state.rebase_disk(disk, added);
+        }
+        Ok(())
+    }
+
     pub fn buffered_seconds(&self) -> f64 {
         let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         state.len().saturating_sub(state.cursor) as f64 / SAMPLE_RATE as f64
@@ -528,6 +552,29 @@ mod tests {
         std::fs::remove_file(path).unwrap();
     }
     #[test]
+    fn prefix_publication_keeps_the_next_unplayed_sample() {
+        let old = std::env::temp_dir().join(format!("pcm-old-{}.wav", uuid::Uuid::new_v4()));
+        let new = old.with_extension("new.wav");
+        crate::kokoro::write_wav(&old, &[0.25, 0.5, 0.75], SAMPLE_RATE as u32).unwrap();
+        crate::kokoro::write_wav(&new, &[-0.5, -0.25, 0.25, 0.5, 0.75], SAMPLE_RATE as u32)
+            .unwrap();
+        let mut buffer = SampleBuffer {
+            disk: Some(DiskSamples::open(&old, 3).unwrap()),
+            finished: true,
+            ..Default::default()
+        };
+        assert_eq!(buffer.read(&mut [0.; 1]), 1);
+        buffer.rebase_disk(DiskSamples::open(&new, 5).unwrap(), 2);
+        assert_eq!(buffer.cursor, 3);
+        let mut out = [0.; 2];
+        assert_eq!(buffer.read(&mut out), 2);
+        assert!((out[0] - 0.5).abs() < 0.001);
+        assert!((out[1] - 0.75).abs() < 0.001);
+        drop(buffer);
+        std::fs::remove_file(old).unwrap();
+        std::fs::remove_file(new).unwrap();
+    }
+    #[test]
     fn samples_cross_generation_boundaries_without_gaps() {
         let mut buffer = SampleBuffer::default();
         buffer.samples.extend([0.1, 0.2]);
@@ -576,6 +623,41 @@ mod tests {
         assert_eq!(buffer.played_audio_bytes, 4);
         assert_eq!(buffer.read(&mut out), 2);
         assert_eq!(buffer.played_audio_bytes, 8);
+    }
+
+    #[test]
+    #[ignore = "requires a macOS audio output device"]
+    fn native_prefix_publication_preserves_paused_playback_and_speed() {
+        let old = std::env::temp_dir().join(format!("pcm-native-{}.wav", uuid::Uuid::new_v4()));
+        let new = old.with_extension("new.wav");
+        crate::kokoro::write_wav(&old, &vec![0.; 24000], SAMPLE_RATE as u32).unwrap();
+        crate::kokoro::write_wav(&new, &vec![0.; 48000], SAMPLE_RATE as u32).unwrap();
+        let player = Player::new().unwrap();
+        player.update_file(&old, 24000, false).unwrap();
+        player.start().unwrap();
+        player.pause(true).unwrap();
+        player.set_speed(1.5).unwrap();
+        let position = player.snapshot().position;
+        player.update_file_rebased(&new, 48000, 24000).unwrap();
+        let updated = player.snapshot();
+        assert!(updated.paused);
+        assert_eq!(updated.speed, 1.5);
+        assert!((updated.position - position - 1.).abs() < 0.00001);
+        player.stop();
+        drop(player);
+        // A Stop racing prefix publication still needs its final bookmark rebased.
+        let stopped = Player::new().unwrap();
+        stopped.update_file(&old, 24000, false).unwrap();
+        stopped.start().unwrap();
+        stopped.pause(true).unwrap();
+        let stopped_position = stopped.snapshot().position;
+        stopped.stop();
+        stopped.update_file_rebased(&new, 48000, 24000).unwrap();
+        assert!((stopped.snapshot().position - stopped_position - 1.).abs() < 0.00001);
+        assert!(!stopped.snapshot().available);
+        drop(stopped);
+        std::fs::remove_file(old).unwrap();
+        std::fs::remove_file(new).unwrap();
     }
 
     #[test]

@@ -136,7 +136,7 @@ fn tick(app: &AppHandle) {
         } else {
             let _ = window.set_focusable(expanded || hovered || playback.paused || completed);
             if !error && book && (expanded || hovered || playback.paused) {
-                position_sized(&window, 350.0, if playback.available { 316.0 } else { 248.0 });
+                position_sized(&window, 350.0, if playback.available { 344.0 } else { 276.0 });
             } else if !error && (expanded || hovered || playback.paused) {
                 position_sized(&window, 350.0, 112.0);
             } else {

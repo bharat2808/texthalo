@@ -874,6 +874,8 @@ fn stop_speaking(app: AppHandle) {
     job.cancel();
     state.spoken.stop();
     let _ = app.emit("kiegen:status", &job.status);
+    drop(job);
+    app.state::<audiobooks::Audiobooks>().stopped();
 }
 
 // ─────────────────────────── weight downloads ───────────────────────────
@@ -1368,6 +1370,7 @@ fn install_tray(app: &AppHandle) -> tauri::Result<()> {
             }
             "quit" => {
                 app.state::<AppState>().spoken.stop();
+                app.state::<audiobooks::Audiobooks>().stopped();
                 assistant::shutdown(app);
                 app.exit(0);
             }
@@ -1555,6 +1558,7 @@ pub fn run() {
             preview_voice,
             audiobooks::audiobook_state,
             audiobooks::audiobook_generate,
+            audiobooks::audiobook_complete_chapter,
             audiobooks::audiobook_play,
             audiobooks::audiobook_dismiss,
             audiobooks::audiobook_stop_generation,

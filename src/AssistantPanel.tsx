@@ -73,7 +73,7 @@ export default function AssistantPanel() {
       <OverlayGrip onError={setError}>{busy ? <div className="activity" aria-hidden="true">{[0,1,2,3,4].map(index => <i key={index} style={{animationDelay:`${index * -0.13}s`}} />)}</div> : <span aria-hidden="true">✓</span>}</OverlayGrip>
       <span className="speech-label" role={error ? "alert" : "status"} title={error || `${providerLabel}${usageLabel ? ` · ${usageLabel}` : ""}`}>{message(error || label)}{status.provider === "cloud" && <small className="assistant-provider-label">{status.usage?.outputLimited ? t("Cloud · shorter answer limit") : t("Cloud")}</small>}</span>
       {applied && status.canUndo ? <button className="overlay-undo" disabled={pending} onClick={() => void action("undo")}>{t("Undo")}</button>
-        : <button aria-label={busy ? t("Cancel") : t("Dismiss")} title={busy ? t("Cancel (Esc)") : t("Dismiss")} onClick={() => void action("cancel")}><span /></button>}
+        : <button aria-label={busy ? t("Cancel") : t("Dismiss")} title={busy ? t("Cancel (Esc)") : t("Dismiss")} onClick={() => void action("cancel")}><span className="stop-icon" /></button>}
       </div>
       {livePreview && <LiveTextPreview key={status.id} text={status.text!} expanded={!!status.previewExpanded}
         label={status.phase === "recording" ? t("Live transcript") : t("Generated text")} pending={pending}

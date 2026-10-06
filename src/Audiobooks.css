@@ -278,3 +278,16 @@
     flex-wrap: wrap;
   }
 }
+
+.audiobook-chapters .chapter-status {
+  display: block;
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--label-secondary);
+}
+.audiobook-chapters .chapter-status-complete {
+  color: light-dark(#16805d, #5acda1);
+}
+.audiobook-chapters .chapter-status-attention {
+  color: light-dark(#94601c, #e9ae64);
+}

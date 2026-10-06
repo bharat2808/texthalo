@@ -5,6 +5,8 @@ import {
   audioClock,
   listenBook,
   generateBook,
+  completeChapter,
+  preparationLabel,
 } from "./useAudiobooks";
 import "./Audiobooks.css";
 export default function Audiobooks() {
@@ -95,7 +97,7 @@ export default function Audiobooks() {
                   <h2>{b.title}</h2>
                   <p>
                     {state.generating === b.id
-                      ? "Preparing audio…"
+                      ? preparationLabel(b)
                       : b.complete
                         ? "Complete audiobook"
                         : `${audioClock(b.seconds)} ready`}{" "}
@@ -221,7 +223,7 @@ export default function Audiobooks() {
               {state.generating === book.id ? (
                 <div className="audiobook-buffer">
                   <span className="audiobook-pulse" />
-                  Preparing pages ahead of you
+                  <span role="status">{preparationLabel(book)}</span>
                   <button
                     onClick={() =>
                       run(() => invoke("audiobook_stop_generation"))
@@ -241,6 +243,18 @@ export default function Audiobooks() {
                     >
                       Buffer as I listen
                     </button>
+                    {book.checkpoints[0] && !book.checkpoints[0].complete && (
+                      <button
+                        disabled={
+                          busy || !!state.generating || open?.book?.id !== book.id
+                        }
+                        onClick={() => run(() => completeChapter(book.id))}
+                      >
+                        {book.backfillBlocked
+                          ? "Retry chapter preparation"
+                          : "Complete first saved chapter"}
+                      </button>
+                    )}
                     <button
                       disabled={
                         busy ||
@@ -262,25 +276,43 @@ export default function Audiobooks() {
               )}
               {!book.fromBeginning && (
                 <p className="audiobook-hint">
-                  This recording starts at your imported page. To create a
-                  complete book, import it from the beginning.
+                  {book.checkpoints[0]?.needsEarlier
+                    ? "Listening starts at your imported page. Earlier pages of this chapter are filled while your listening buffer is ready."
+                    : "This book starts at the first saved chapter. To create the entire book, import it from the beginning."}
                 </p>
               )}
             </div>
           </div>
           <div className="audiobook-chapters">
-            <h3>Checkpoints</h3>
-            <p>Chapter headings appear as their pages are captured.</p>
-            {book.checkpoints.map((c, i) => (
+            <h3>Chapters and checkpoints</h3>
+            <p>
+              Partial chapters stay here so you can continue listening or finish
+              preparing them.
+            </p>
+            {book.checkpoints.map((c) => (
               <button
-                key={`${c.sentence}-${i}`}
+                key={c.id}
                 disabled={c.seconds === null || busy}
                 onClick={() => run(() => listenBook(book.id, c.seconds!))}
               >
-                <span>{c.label}</span>
+                <span>
+                  {c.label}
+                  <small className={`chapter-status chapter-status-${c.status}`}>
+                    {c.status === "attention"
+                      ? "Needs attention"
+                      : c.status === "complete"
+                        ? "Complete"
+                        : c.status === "preparing"
+                          ? "Preparing"
+                          : "Partial · ready to continue"}
+                  </small>
+                </span>
                 <small>
                   {c.page} ·{" "}
-                  {c.seconds === null ? "Preparing" : audioClock(c.seconds)}
+                  {c.seconds === null
+                    ? "Preparing"
+                    : `${audioClock(c.duration)} ready`}
+                  {c.needsEarlier && " · earlier pages pending"}
                 </small>
                 <span aria-hidden="true">▶</span>
               </button>

@@ -75,7 +75,7 @@ body:has(.overlay-root),
   outline: 2px solid white;
   outline-offset: 2px;
 }
-.speech-overlay button span {
+.speech-overlay .stop-icon {
   display: block;
   width: 8px;
   height: 8px;
@@ -490,26 +490,34 @@ body:has(.overlay-root),
   flex-shrink: 0;
 }
 .book-tray.book-expanded {
-  height: 248px;
+  height: 276px;
 }
 .playback-overlay.book-playing-expanded {
-  height: 316px;
+  height: 344px;
 }
 .book-tray-details {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
   border-top: 1px solid var(--overlay-separator);
   padding: 12px;
   min-height: 0;
   overflow: hidden;
   flex: 1;
 }
+.book-tray-title {
+  min-width: 0;
+  flex-shrink: 0;
+}
 .book-tray-title span {
-  color: #999;
+  color: var(--overlay-secondary);
   font-size: 10px;
 }
 .book-tray-title strong {
   display: block;
   font-size: 12px;
-  margin: 5px 0 10px;
+  line-height: 1.4;
+  margin-top: 4px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -517,46 +525,86 @@ body:has(.overlay-root),
 .book-tray-actions {
   display: flex;
   gap: 8px;
+  flex-shrink: 0;
 }
 .speech-overlay .book-tray-actions button {
   background: #ffffff15;
-  color: #eee;
+  color: var(--overlay-label);
   display: block;
   width: auto;
-  height: 27px;
-  padding: 0 9px;
+  height: 28px;
+  padding: 0 10px;
   border-radius: 6px;
   font: 11px system-ui;
 }
+.speech-overlay .book-tray-actions button:hover:not(:disabled) {
+  background: #ffffff24;
+}
 .book-tray-checkpoints {
-  max-height: 82px;
-  overflow: auto;
-  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
 }
 .speech-overlay .book-tray-checkpoints button {
-  background: transparent;
-  color: #eee;
-  display: flex;
+  background: #ffffff08;
+  color: var(--overlay-label);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 38px 54px;
   align-items: center;
-  justify-content: space-between;
+  justify-items: stretch;
+  gap: 8px;
   width: 100%;
-  height: 28px;
-  padding: 0 4px;
-  border-radius: 4px;
+  height: 32px;
+  min-height: 32px;
+  padding: 0 8px;
+  border-radius: 6px;
   font: 11px system-ui;
+  text-align: left;
+}
+.speech-overlay .book-tray-checkpoints button:hover:not(:disabled) {
+  background: #ffffff18;
+}
+.book-tray-checkpoints button > span {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  text-align: left;
 }
 .book-tray-checkpoints small,
 .book-tray-checkpoints p {
-  color: #999;
+  color: var(--overlay-secondary);
   font-size: 10px;
+}
+.book-tray-checkpoints small {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.book-tray-checkpoints button[data-complete="true"] .book-chapter-status {
+  color: #8dc9af;
 }
 .book-tray-error {
   color: #ee9b90;
   font-size: 10px;
   max-height: 30px;
+  flex-shrink: 0;
   overflow: auto;
-  margin: 6px 0;
+  margin: 0;
 }
 .book-tray-start:disabled {
   opacity: 0.5;
+}
+
+.speech-overlay .book-tray-progress {
+  margin: 0;
+  flex-shrink: 0;
+  font-size: 10px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.72);
 }
