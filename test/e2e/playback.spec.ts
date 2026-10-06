@@ -82,7 +82,24 @@ test("completed reading exposes Replay and control failures stay visible", async
   await expect(page.getByRole("status")).toHaveText("Finished");
   await page.getByRole("button", {name:"Replay", exact:true}).click();
   await expect(page.getByRole("status")).toHaveText("Speaking", {timeout:15000});
+  await leave(page);
+  await expect(page.getByRole("button", {name:"Pause", exact:true})).toHaveCount(0, {timeout:3000});
+  await page.locator(".speech-label").hover();
   await page.evaluate(() => { (window as any).__failControl = true; });
   await page.getByRole("button", {name:"Pause", exact:true}).click();
   await expect(page.getByRole("alert")).toHaveText("Playback device unavailable");
+});
+
+test("native cursor events reveal controls without a click or DOM mouse-enter", async ({ page }) => {
+  await boot(page);
+  await page.evaluate(() => (window as any).__TAURI_INTERNALS__.invoke("plugin:event|emit", {
+    event: "texthalo:playback-hover", payload: true,
+  }));
+  await expect(page.getByRole("button", {name:"Pause", exact:true})).toBeVisible();
+  await expect.poll(() => page.evaluate(() => (window as any).__commands.filter((item: any) => item.method === "playback_control").length)).toBe(0);
+  await expect.poll(() => page.evaluate(() => document.activeElement?.tagName)).toBe("BODY");
+  await page.evaluate(() => (window as any).__TAURI_INTERNALS__.invoke("plugin:event|emit", {
+    event: "texthalo:playback-hover", payload: false,
+  }));
+  await expect(page.getByRole("button", {name:"Pause", exact:true})).toHaveCount(0, {timeout:3000});
 });

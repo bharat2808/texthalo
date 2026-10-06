@@ -78,3 +78,7 @@ html:has(.overlay-root), body:has(.overlay-root), #root:has(.overlay-root) { mar
 .playback-overlay button:disabled, .playback-overlay select:disabled { opacity:.35; cursor:default; }
 .paused .activity i, .idle .activity i { animation:none; height:7px; opacity:.5; }
 .playback-error { display:block; max-width:100%; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; color:#ff9690; font-size:10px; }
+
+/* Native hover also reveals the grip while the webview is inactive. */
+.playback-overlay.controls-expanded .overlay-move { opacity:1; }
+.playback-overlay.controls-expanded .overlay-grip-indicator { opacity:0; }

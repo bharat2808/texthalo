@@ -31,6 +31,24 @@ export default function SpeechOverlay() {
   };
   useEffect(() => () => { if (collapseTimer.current) clearTimeout(collapseTimer.current); }, []);
   useEffect(() => { void invoke("set_playback_overlay", { expanded: showControls, interacting }).catch(() => {}); }, [showControls, interacting]);
+  useEffect(() => {
+    let mounted = true;
+    let received = false;
+    const update = (hovered: boolean) => {
+      if (!mounted || pointerInside.current === hovered) return;
+      pointerInside.current = hovered;
+      // A control can be removed by Replay, so do not retain its stale focus flag.
+      focusInside.current = !!document.activeElement?.closest(".playback-overlay");
+      interaction();
+    };
+    const subscription = listen<boolean>("texthalo:playback-hover", ({ payload }) => {
+      received = true;
+      update(payload);
+    });
+    void subscription.then(() => invoke<boolean>("get_playback_hover"))
+      .then(hovered => { if (!received && typeof hovered === "boolean") update(hovered); }).catch(() => {});
+    return () => { mounted = false; void subscription.then(off => off()); };
+  }, []);
   const control = async (command: string, value?: number) => {
     setActionError(null);
     try {
@@ -110,7 +128,7 @@ export default function SpeechOverlay() {
   return (
     <div className={`overlay-root speech-overlay playback-overlay ${status.phase} ${showControls ? "controls-expanded" : ""} ${playback.paused ? "paused" : ""}`}
       onMouseEnter={() => { pointerInside.current = true; interaction(); }}
-      onMouseLeave={() => { pointerInside.current = false; interaction(); }}
+      onMouseLeave={event => { pointerInside.current = false; focusInside.current = event.currentTarget.contains(document.activeElement); interaction(); }}
       onFocus={() => { focusInside.current = true; interaction(); }}
       onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) { focusInside.current = false; interaction(); } }}>
       <div className="playback-heading">

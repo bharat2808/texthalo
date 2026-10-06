@@ -16,6 +16,7 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
     .shadow(false)
     .resizable(false)
     .focused(false)
+    .accept_first_mouse(true)
     .focusable(false)
     .always_on_top(true)
     .visible_on_all_workspaces(true)
@@ -101,6 +102,7 @@ pub fn show_update_error(app: &AppHandle, message: String) {
 }
 
 fn tick(app: &AppHandle) {
+    let hovered = sync_native_hover(app);
     let state = app.state::<AppState>();
     let mut job = state.job.lock().unwrap();
     let playing = state.spoken.is_speaking();
@@ -113,11 +115,12 @@ fn tick(app: &AppHandle) {
     let playback = state.spoken.playback();
     let completed = matches!(job.status.phase, Phase::Idle) && playback.available;
     let visible = !matches!(job.status.phase, Phase::Idle)
-        || keep_completed_visible(completed, interacting, job.changed.elapsed());
-    drop(job);
+        || keep_completed_visible(completed, interacting || hovered, job.changed.elapsed());
     if completed && !visible {
+        // Keep the job lock so expiry cannot stop a replacement reading.
         state.spoken.stop();
     }
+    drop(job);
     let owned = crate::assistant::sync_speech(app);
     let assistant_error = crate::assistant::assistant_error_overlay_height(app);
     let visible = (visible && !owned) || assistant_error.is_some();
@@ -194,6 +197,46 @@ pub(crate) fn position_sized(window: &tauri::WebviewWindow, width: f64, height: 
     }
 }
 
+// Inactive WebKit windows may not deliver DOM mouse-enter until the first click.
+// Poll the native cursor in the existing main-thread tick, without activating the app.
+fn sync_native_hover(app: &AppHandle) -> bool {
+    let hovered = app
+        .get_webview_window("speech-overlay")
+        .is_some_and(|window| {
+            #[cfg(target_os = "macos")]
+            if let Ok(raw) = window.ns_window() {
+                use objc2_app_kit::{NSEvent, NSWindow};
+                let native = unsafe { &*(raw as *const NSWindow) };
+                native.setAcceptsMouseMovedEvents(true);
+                let frame = native.frame();
+                let cursor = NSEvent::mouseLocation();
+                return native.isVisible()
+                    && pointer_in_bounds(
+                        cursor.x,
+                        cursor.y,
+                        frame.origin.x,
+                        frame.origin.y,
+                        frame.size.width,
+                        frame.size.height,
+                    );
+            }
+            false
+        });
+    let state = app.state::<AppState>();
+    let mut previous = state.playback_hover.lock().unwrap();
+    if *previous != hovered {
+        *previous = hovered;
+        if let Some(window) = app.get_webview_window("speech-overlay") {
+            let _ = window.emit("texthalo:playback-hover", hovered);
+        }
+    }
+    hovered
+}
+
+fn pointer_in_bounds(x: f64, y: f64, left: f64, bottom: f64, width: f64, height: f64) -> bool {
+    x >= left && x < left + width && y >= bottom && y < bottom + height
+}
+
 fn keep_completed_visible(completed: bool, interacting: bool, elapsed: Duration) -> bool {
     completed && (interacting || elapsed < Duration::from_secs(5))
 }
@@ -201,6 +244,20 @@ fn keep_completed_visible(completed: bool, interacting: bool, elapsed: Duration)
 #[cfg(test)]
 mod playback_tests {
     use super::*;
+    #[test]
+    fn native_cursor_tracks_enter_leave_resize_and_negative_monitor_coordinates() {
+        assert!(pointer_in_bounds(-300.0, 500.0, -400.0, 490.0, 350.0, 44.0));
+        assert!(!pointer_in_bounds(-49.0, 500.0, -400.0, 490.0, 350.0, 44.0));
+        assert!(!pointer_in_bounds(
+            -300.0, 450.0, -400.0, 490.0, 350.0, 44.0
+        ));
+        assert!(pointer_in_bounds(
+            -300.0, 450.0, -400.0, 422.0, 350.0, 112.0
+        ));
+        assert!(!pointer_in_bounds(
+            -300.0, 534.0, -400.0, 422.0, 350.0, 112.0
+        ));
+    }
     #[test]
     fn completion_waits_five_seconds_and_never_hides_during_interaction() {
         assert!(keep_completed_visible(

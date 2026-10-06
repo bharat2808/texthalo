@@ -82,6 +82,7 @@ pub struct AppState {
     update_available_version: Mutex<Option<String>>,
     update_overlay_status: Mutex<UpdateOverlayStatus>,
     playback_overlay: Mutex<(bool, bool)>,
+    playback_hover: Mutex<bool>,
 }
 
 #[derive(Deserialize, Serialize, Clone, Default)]
@@ -835,6 +836,11 @@ fn get_playback_status(app: AppHandle) -> pcm::PlaybackStatus {
 }
 
 #[tauri::command]
+fn get_playback_hover(app: AppHandle) -> bool {
+    *app.state::<AppState>().playback_hover.lock().unwrap()
+}
+
+#[tauri::command]
 fn playback_control(app: AppHandle, command: String, value: Option<f64>) -> Result<(), String> {
     let state = app.state::<AppState>();
     let mut job = state.job.lock().unwrap();
@@ -1488,6 +1494,7 @@ pub fn run() {
                 update_available_version: Mutex::new(None),
                 update_overlay_status: Mutex::new(UpdateOverlayStatus::default()),
                 playback_overlay: Mutex::new((false, false)),
+                playback_hover: Mutex::new(false),
             });
             app.manage(update_safety::UpdateRecovery::default());
 
@@ -1529,6 +1536,7 @@ pub fn run() {
             localization_state,
             get_speech_status,
             get_playback_status,
+            get_playback_hover,
             playback_control,
             set_playback_overlay,
             get_update_overlay_status,
