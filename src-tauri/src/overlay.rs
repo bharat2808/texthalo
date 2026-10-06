@@ -132,8 +132,8 @@ fn tick(app: &AppHandle) {
             let _ = window.set_focusable(height > 190.0);
             position_sized(&window, 430.0, height);
         } else {
-            let _ = window.set_focusable(expanded || playback.paused || completed);
-            if !error && (expanded || playback.paused) {
+            let _ = window.set_focusable(expanded || hovered || playback.paused || completed);
+            if !error && (expanded || hovered || playback.paused) {
                 position_sized(&window, 350.0, 112.0);
             } else {
                 position(&window, error);
