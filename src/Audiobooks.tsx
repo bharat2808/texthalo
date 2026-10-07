@@ -4,6 +4,7 @@ import {
   useAudiobooks,
   audioClock,
   listenBook,
+  listenFromPage,
   generateBook,
   completeChapter,
   preparationLabel,
@@ -46,22 +47,52 @@ export default function Audiobooks() {
           <div>
             <span>OPEN IN KINDLE · {open.reader.progress}</span>
             <strong>{open.reader.title || "Kindle book"}</strong>
+            {open.book?.resume && (
+              <p className="audiobook-location">
+                Last listened:{" "}
+                {open.book.resume.chapter
+                  ? `${open.book.resume.chapter} · `
+                  : ""}
+                {open.book.resume.page}
+              </p>
+            )}
+            {open.book?.pendingPage && (
+              <p role="status">{preparationLabel(open.book)}</p>
+            )}
           </div>
-          <button
-            disabled={busy || (!!state.generating && !open.book?.generated)}
-            onClick={() =>
-              run(async () => {
-                if (open.book?.generated) {
-                  await listenBook(open.book.id);
-                } else {
-                  const id = await generateBook(open.book?.id);
-                  setSelected(id);
+          <div className="audiobook-detected-actions">
+            <button
+              disabled={
+                busy ||
+                !!open.book?.pendingPage ||
+                (!!state.generating && !open.book?.generated)
+              }
+              onClick={() =>
+                run(async () => {
+                  if (open.book?.generated) {
+                    await listenBook(open.book.id);
+                  } else {
+                    const id = await generateBook(open.book?.id);
+                    setSelected(id);
+                  }
+                })
+              }
+            >
+              {open.book?.generated ? "Continue listening" : "Create audiobook"}
+            </button>
+            {open.book && open.differentPage && (
+              <button
+                disabled={busy}
+                onClick={() =>
+                  run(() =>
+                    listenFromPage(open.book!.id, open.reader.fingerprint),
+                  )
                 }
-              })
-            }
-          >
-            {open.book?.generated ? "Continue listening" : "Create audiobook"}
-          </button>
+              >
+                Listen from this page
+              </button>
+            )}
+          </div>
         </div>
       )}
       {!book ? (
@@ -96,12 +127,12 @@ export default function Audiobooks() {
                   </div>
                   <h2>{b.title}</h2>
                   <p>
-                    {state.generating === b.id
+                    {b.pendingPage || state.generating === b.id
                       ? preparationLabel(b)
                       : b.complete
                         ? "Complete audiobook"
-                        : `${audioClock(b.seconds)} ready`}{" "}
-                    · {b.pages} pages
+                        : `${audioClock(b.totalSeconds)} ready`}{" "}
+                    · {b.totalPages} pages
                   </p>
                   <progress
                     aria-label="Listening progress"
@@ -135,9 +166,24 @@ export default function Audiobooks() {
               </span>
               <h2>{book.title}</h2>
               <p>
-                {audioClock(book.seconds)} of audio ready · {book.pages} pages ·{" "}
-                {book.generated} sentences
+                {audioClock(book.totalSeconds)} of audio ready · {book.totalPages} pages ·{" "}
+                {book.totalGenerated} sentences
               </p>
+              {book.resume && (
+                <p className="audiobook-location">
+                  Last listened:{" "}
+                  {book.resume.chapter ? `${book.resume.chapter} · ` : ""}
+                  {book.resume.page}
+                </p>
+              )}
+              {open?.book?.id === book.id && (
+                <p className="audiobook-location">
+                  Open in Kindle: {open.reader.progress}
+                </p>
+              )}
+              {book.pendingPage && state.generating !== book.id && (
+                <p role="status">{preparationLabel(book)}</p>
+              )}
               {book.message && (
                 <p className="audiobook-error" role="status">
                   {book.message}
@@ -146,7 +192,11 @@ export default function Audiobooks() {
               <div className="audiobook-actions">
                 <button
                   className="primary"
-                  disabled={busy || !book.generated}
+                  disabled={
+                    busy ||
+                    !book.generated ||
+                    (!!book.pendingPage && (!playing || playing.paused))
+                  }
                   onClick={() =>
                     run(() =>
                       playing
@@ -159,15 +209,27 @@ export default function Audiobooks() {
                 >
                   {playing
                     ? playing.paused
-                      ? "Resume"
-                      : "Pause"
-                    : book.position
+                      ? "Resume listening"
+                      : "Pause listening"
+                    : book.resume || book.position
                       ? "Continue listening"
                       : "Play"}
                 </button>
+                {open?.book?.id === book.id && open.differentPage && (
+                  <button
+                    disabled={busy}
+                    onClick={() =>
+                      run(() =>
+                        listenFromPage(book.id, open.reader.fingerprint),
+                      )
+                    }
+                  >
+                    Listen from this page
+                  </button>
+                )}
                 {playing && (
                   <button onClick={() => run(() => invoke("stop_speaking"))}>
-                    Stop
+                    Stop listening
                   </button>
                 )}
                 <label>
@@ -241,12 +303,14 @@ export default function Audiobooks() {
                       }
                       onClick={() => run(() => generateBook(book.id))}
                     >
-                      Buffer as I listen
+                      {book.pendingPage ? "Resume preparing" : "Buffer as I listen"}
                     </button>
                     {book.checkpoints[0] && !book.checkpoints[0].complete && (
                       <button
                         disabled={
-                          busy || !!state.generating || open?.book?.id !== book.id
+                          busy ||
+                          !!state.generating ||
+                          open?.book?.id !== book.id
                         }
                         onClick={() => run(() => completeChapter(book.id))}
                       >
@@ -259,17 +323,12 @@ export default function Audiobooks() {
                       disabled={
                         busy ||
                         !!state.generating ||
-                        open?.book?.id !== book.id ||
-                        !book.fromBeginning
+                        open?.book?.id !== book.id
                       }
-                      title={
-                        book.fromBeginning
-                          ? "Generate every remaining page"
-                          : "A complete audiobook must be imported from the beginning of the book."
-                      }
+                      title="Fill missing passages and reuse audio already prepared"
                       onClick={() => run(() => generateBook(book.id, true))}
                     >
-                      Create complete audiobook
+                      Create full audiobook
                     </button>
                   </div>
                 )
@@ -278,7 +337,7 @@ export default function Audiobooks() {
                 <p className="audiobook-hint">
                   {book.checkpoints[0]?.needsEarlier
                     ? "Listening starts at your imported page. Earlier pages of this chapter are filled while your listening buffer is ready."
-                    : "This book starts at the first saved chapter. To create the entire book, import it from the beginning."}
+                    : "Create full audiobook fills earlier gaps and missing passages while keeping your saved audio."}
                 </p>
               )}
             </div>
@@ -293,11 +352,15 @@ export default function Audiobooks() {
               <button
                 key={c.id}
                 disabled={c.seconds === null || busy}
-                onClick={() => run(() => listenBook(book.id, c.seconds!))}
+                onClick={() =>
+                  run(() => listenBook(book.id, c.seconds!, c.rangeId))
+                }
               >
                 <span>
                   {c.label}
-                  <small className={`chapter-status chapter-status-${c.status}`}>
+                  <small
+                    className={`chapter-status chapter-status-${c.status}`}
+                  >
                     {c.status === "attention"
                       ? "Needs attention"
                       : c.status === "complete"

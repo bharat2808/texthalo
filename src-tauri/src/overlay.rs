@@ -124,7 +124,10 @@ fn tick(app: &AppHandle) {
     let owned = crate::assistant::sync_speech(app);
     let assistant_error = crate::assistant::assistant_error_overlay_height(app);
     let reader = app.state::<crate::reader_bridge::ReaderBridge>().status();
-    let book = app.state::<crate::audiobooks::Audiobooks>().tray(&reader).is_some();
+    let book = app
+        .state::<crate::audiobooks::Audiobooks>()
+        .tray(&reader)
+        .is_some();
     let visible = ((visible || book) && !owned) || assistant_error.is_some();
     let Some(window) = app.get_webview_window("speech-overlay") else {
         return;
@@ -136,7 +139,11 @@ fn tick(app: &AppHandle) {
         } else {
             let _ = window.set_focusable(expanded || hovered || playback.paused || completed);
             if !error && book && (expanded || hovered || playback.paused) {
-                position_sized(&window, 350.0, if playback.available { 344.0 } else { 276.0 });
+                position_sized(
+                    &window,
+                    350.0,
+                    if playback.available { 344.0 } else { 276.0 },
+                );
             } else if !error && (expanded || hovered || playback.paused) {
                 position_sized(&window, 350.0, 112.0);
             } else {

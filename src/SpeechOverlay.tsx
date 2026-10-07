@@ -8,6 +8,7 @@ import {
   useAudiobooks,
   generateBook,
   listenBook,
+  listenFromPage,
   audioClock,
   preparationLabel,
 } from "./useAudiobooks";
@@ -292,49 +293,83 @@ export default function SpeechOverlay() {
     bookTray && showControls ? (
       <div className="book-tray-details">
         <div className="book-tray-title">
-          <span>Kindle · {bookTray.reader.progress}</span>
+          <span>Open in Kindle · {bookTray.reader.progress}</span>
           <strong title={bookTray.reader.title}>{bookTray.reader.title}</strong>
+          {bookTray.book?.resume && (
+            <p
+              className="book-tray-location"
+              title={`Last listened: ${bookTray.book.resume.chapter ? `${bookTray.book.resume.chapter} · ` : ""}${bookTray.book.resume.page}`}
+            >
+              Last listened:{" "}
+              {bookTray.book.resume.chapter
+                ? `${bookTray.book.resume.chapter} · `
+                : ""}
+              {bookTray.book.resume.page}
+            </p>
+          )}
         </div>
         <div className="book-tray-actions">
           {!playingDetectedBook && (
             <button
-            disabled={
-              busy || (bookTray.generating && !bookTray.book?.generated)
-            }
-            onClick={() => {
-              setBusy(true);
-              void bookAction(() =>
-                bookTray.book?.generated
-                  ? listenBook(bookTray.book.id)
-                  : generateBook(bookTray.book?.id),
-              ).finally(() => setBusy(false));
-            }}
-          >
-            {bookTray.book?.generated
-              ? "Continue listening"
-              : "Create audiobook"}
-            </button>
-          )}
-          {bookTray.book && !bookTray.book.complete && (
-            <button
-              disabled={busy || (!!books.generating && !preparingDetectedBook)}
-              onClick={() =>
-                void bookAction(() =>
-                  preparingDetectedBook
-                    ? invoke("audiobook_stop_generation")
-                    : generateBook(bookTray.book!.id),
-                )
+              disabled={
+                busy ||
+                !!bookTray.book?.pendingPage ||
+                (bookTray.generating && !bookTray.book?.generated)
               }
+              onClick={() => {
+                setBusy(true);
+                void bookAction(() =>
+                  bookTray.book?.generated
+                    ? listenBook(bookTray.book.id)
+                    : generateBook(bookTray.book?.id),
+                ).finally(() => setBusy(false));
+              }}
             >
-              {preparingDetectedBook ? "Stop preparing" : "Buffer ahead"}
+              {bookTray.book?.generated
+                ? "Continue listening"
+                : "Create audiobook"}
             </button>
           )}
+          {bookTray.book && bookTray.differentPage && (
+            <button
+              disabled={busy}
+              onClick={() => {
+                setBusy(true);
+                void bookAction(() =>
+                  listenFromPage(
+                    bookTray.book!.id,
+                    bookTray.reader.fingerprint,
+                  ),
+                ).finally(() => setBusy(false));
+              }}
+            >
+              Listen from this page
+            </button>
+          )}
+          {bookTray.book &&
+            (preparingDetectedBook || !bookTray.book.complete) && (
+              <button
+                disabled={
+                  busy || (!!books.generating && !preparingDetectedBook)
+                }
+                onClick={() =>
+                  void bookAction(() =>
+                    preparingDetectedBook
+                      ? invoke("audiobook_stop_generation")
+                      : generateBook(bookTray.book!.id),
+                  )
+                }
+              >
+                {preparingDetectedBook ? "Stop preparing" : bookTray.book.pendingPage ? "Resume preparing" : "Buffer ahead"}
+              </button>
+            )}
         </div>
-        {currentBook && books.generating === currentBook.id && (
-          <p className="book-tray-progress" role="status">
-            {preparationLabel(currentBook)}
-          </p>
-        )}
+        {bookTray.book &&
+          (bookTray.book.pendingPage || preparingDetectedBook) && (
+            <p className="book-tray-progress" role="status">
+              {preparationLabel(bookTray.book)}
+            </p>
+          )}
         <div
           className="book-tray-checkpoints"
           aria-label="Audiobook checkpoints"
@@ -346,7 +381,9 @@ export default function SpeechOverlay() {
               title={`${c.label} · ${audioClock(c.duration)} audio`}
               disabled={c.seconds === null || busy}
               onClick={() =>
-                void bookAction(() => listenBook(currentBook.id, c.seconds!))
+                void bookAction(() =>
+                  listenBook(currentBook.id, c.seconds!, c.rangeId),
+                )
               }
             >
               <span>{c.label}</span>
@@ -354,7 +391,11 @@ export default function SpeechOverlay() {
                 {c.seconds === null ? "—" : audioClock(c.duration)}
               </small>
               <small className="book-chapter-status">
-                {c.seconds === null ? "Preparing" : c.complete ? "Complete" : "Partial"}
+                {c.seconds === null
+                  ? "Preparing"
+                  : c.complete
+                    ? "Complete"
+                    : "Partial"}
               </small>
             </button>
           ))}
@@ -402,7 +443,9 @@ export default function SpeechOverlay() {
           <button
             className="book-tray-start"
             disabled={
-              busy || (bookTray.generating && !bookTray.book?.generated)
+              busy ||
+              !!bookTray.book?.pendingPage ||
+              (bookTray.generating && !bookTray.book?.generated)
             }
             onClick={() => {
               setBusy(true);
@@ -413,7 +456,7 @@ export default function SpeechOverlay() {
               ).finally(() => setBusy(false));
             }}
           >
-            {bookTray.generating
+            {bookTray.book?.pendingPage || bookTray.generating
               ? "Preparing…"
               : bookTray.book?.generated
                 ? "Continue"
@@ -521,8 +564,24 @@ export default function SpeechOverlay() {
               <button
                 className="playback-button playback-toggle"
                 disabled={!playback.available}
-                aria-label={playback.paused ? t("Resume") : t("Pause")}
-                title={playback.paused ? t("Resume") : t("Pause")}
+                aria-label={
+                  books.playback
+                    ? playback.paused
+                      ? "Resume listening"
+                      : "Pause listening"
+                    : playback.paused
+                      ? t("Resume")
+                      : t("Pause")
+                }
+                title={
+                  books.playback
+                    ? playback.paused
+                      ? "Resume listening"
+                      : "Pause listening"
+                    : playback.paused
+                      ? t("Resume")
+                      : t("Pause")
+                }
                 onClick={() =>
                   void control(playback.paused ? "resume" : "pause")
                 }

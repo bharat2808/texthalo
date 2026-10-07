@@ -524,8 +524,18 @@ body:has(.overlay-root),
 }
 .book-tray-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   flex-shrink: 0;
+}
+.book-tray-location {
+  margin: 4px 0 0;
+  color: var(--overlay-secondary);
+  font-size: 10px;
+  line-height: 14px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 .speech-overlay .book-tray-actions button {
   background: #ffffff15;

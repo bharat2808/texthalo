@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 export type Checkpoint = {
   id: string;
+  rangeId: string;
   status: "complete" | "partial" | "preparing" | "attention";
   duration: number;
   complete: boolean;
@@ -18,13 +19,18 @@ export type Audiobook = {
   platform: string;
   pages: number;
   generated: number;
+  totalPages: number;
+  totalGenerated: number;
+  totalSeconds: number;
   seconds: number;
   position: number;
   speed: number;
   complete: boolean;
   fromBeginning: boolean;
   message: string | null;
-  activity: "forward" | "backfill" | null;
+  activity: "forward" | "backfill" | "selected" | "locating" | null;
+  resume: { page: string; chapter: string | null } | null;
+  pendingPage: string | null;
   backfillBlocked: string | null;
   backfillProgress: {
     chapter: string | null;
@@ -47,9 +53,16 @@ export type Audio = {
 export type AudiobookState = {
   books: Audiobook[];
   tray: {
-    reader: { title: string; progress: string; bookId: string; url: string };
+    reader: {
+      title: string;
+      progress: string;
+      bookId: string;
+      url: string;
+      fingerprint: string;
+    };
     book: Audiobook | null;
     generating: boolean;
+    differentPage: boolean;
   } | null;
   generating: string | null;
   playback: { bookId: string; audio: Audio } | null;
@@ -102,8 +115,15 @@ export function useAudiobooks() {
 }
 export const audioClock = (seconds: number) =>
   `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, "0")}`;
-export function listenBook(id: string, seconds?: number) {
-  return invoke("audiobook_play", { id, seconds: seconds ?? null });
+export function listenBook(id: string, seconds?: number, rangeId?: string) {
+  return invoke("audiobook_play", {
+    id,
+    seconds: seconds ?? null,
+    rangeId: rangeId ?? null,
+  });
+}
+export function listenFromPage(id: string, fingerprint: string) {
+  return invoke<string>("audiobook_listen_page", { id, fingerprint });
 }
 export function generateBook(id?: string, full = false) {
   return invoke<string>("audiobook_generate", { id: id ?? null, full });
@@ -115,6 +135,18 @@ export function completeChapter(id: string) {
 
 export function preparationLabel(book: Audiobook) {
   const progress = book.backfillProgress;
+  if (book.activity === "locating") return "Locating your saved sentence…";
+  if (book.pendingPage && book.activity === null) {
+    return `Selected page saved · ${book.pendingPage}. Resume preparing to listen.`;
+  }
+  if (book.pendingPage || book.activity === "selected") {
+    const page = book.pendingPage ? ` · ${book.pendingPage}` : "";
+    const sentences =
+      progress?.total != null
+        ? ` · ${progress.ready}/${progress.total} sentences`
+        : "";
+    return `Preparing selected page…${page}${sentences}`;
+  }
   if (!progress) return "Preparing pages ahead of you";
   const chapter = progress.chapter || "chapter";
   if (book.activity === "forward") {
@@ -123,7 +155,8 @@ export function preparationLabel(book: Audiobook) {
   if (progress.phase === "searching") {
     return `Finding chapter beginning · ${progress.pages} earlier pages captured`;
   }
-  if (progress.phase === "publishing") return `Adding earlier audio to ${chapter}`;
+  if (progress.phase === "publishing")
+    return `Adding earlier audio to ${chapter}`;
   return progress.total === null
     ? `Preparing ${chapter} · ${progress.pages} earlier pages captured`
     : `Preparing ${chapter} · ${progress.ready}/${progress.total} sentences`;

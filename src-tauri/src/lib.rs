@@ -7,6 +7,7 @@
 mod assistant;
 mod assistant_job;
 mod assistant_stream;
+mod audiobooks;
 mod capture;
 pub mod chatterbox;
 pub mod chatterbox_models;
@@ -20,8 +21,6 @@ pub mod espeak;
 pub mod g2p;
 mod generation_history;
 mod history;
-mod reader_bridge;
-mod audiobooks;
 mod hosted;
 mod hosted_assistant;
 mod hosted_input;
@@ -36,6 +35,7 @@ pub mod model_storage;
 pub mod numbers;
 mod overlay;
 mod pcm;
+mod reader_bridge;
 mod shortcuts;
 mod speech;
 mod speech_input;
@@ -1501,10 +1501,12 @@ pub fn run() {
                 playback_overlay: Mutex::new((false, false)),
                 playback_hover: Mutex::new(false),
             });
-            app.manage(reader_bridge::ReaderBridge::start().unwrap_or_else(|error| {
-                eprintln!("[TextHalo] reader relay unavailable: {error}");
-                reader_bridge::ReaderBridge::disabled()
-            }));
+            app.manage(
+                reader_bridge::ReaderBridge::start().unwrap_or_else(|error| {
+                    eprintln!("[TextHalo] reader relay unavailable: {error}");
+                    reader_bridge::ReaderBridge::disabled()
+                }),
+            );
             app.manage(audiobooks::Audiobooks::setup(&handle));
             app.manage(update_safety::UpdateRecovery::default());
 
@@ -1560,6 +1562,7 @@ pub fn run() {
             audiobooks::audiobook_generate,
             audiobooks::audiobook_complete_chapter,
             audiobooks::audiobook_play,
+            audiobooks::audiobook_listen_page,
             audiobooks::audiobook_dismiss,
             audiobooks::audiobook_stop_generation,
             reader_bridge::reader_bridge_status,

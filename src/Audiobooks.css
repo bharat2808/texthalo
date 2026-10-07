@@ -52,6 +52,15 @@
   padding: 16px;
   margin: 24px 0;
 }
+.audiobook-detected-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.audiobooks .audiobook-location {
+  margin: 6px 0;
+  font-size: 11px;
+}
 .kindle-mark {
   font: bold 28px Georgia;
   color: #f9b34a;
