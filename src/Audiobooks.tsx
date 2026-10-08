@@ -24,7 +24,7 @@ export default function Audiobooks() {
     setBusy(true);
     void action(fn).finally(() => setBusy(false));
   };
-  const open = state.tray;
+  const open = state.readerContext ?? state.tray;
   return (
     <section className="audiobooks">
       <div className="audiobook-header">

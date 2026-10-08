@@ -265,7 +265,7 @@ impl ReaderBridge {
     pub(crate) fn command(&self, mut command: Value) -> Result<Value, String> {
         if !matches!(
             command["type"].as_str(),
-            Some("inspect" | "ocr" | "navigate" | "chapters" | "chapter-navigate")
+            Some("inspect" | "ocr" | "navigate")
         ) {
             return Err("Unsupported browser command".into());
         }
@@ -289,13 +289,11 @@ impl ReaderBridge {
             {
                 return Err("Connected book changed".into());
             }
-            if matches!(
-                command["type"].as_str(),
-                Some("navigate" | "ocr" | "chapters" | "chapter-navigate")
-            ) && inner
-                .reader
-                .as_ref()
-                .is_some_and(|r| r["windowState"] == "minimized")
+            if matches!(command["type"].as_str(), Some("navigate" | "ocr"))
+                && inner
+                    .reader
+                    .as_ref()
+                    .is_some_and(|r| r["windowState"] == "minimized")
             {
                 return Err("CHROME_MINIMIZED".into());
             }

@@ -198,16 +198,6 @@ test("a minimized book remains connected and reports its window state",async()=>
   assert.equal(reader.status,"ready");
   assert.equal(reader.windowState,"minimized");
 });
-test("chapter commands are forwarded to the connected book and blocked while minimized",async()=>{
-  const {api,chrome}=minimizedHarness("normal");
-  let forwarded;
-  chrome.tabs.sendMessage=async(_id,message)=>{forwarded=message;return {ok:true,data:{chapters:[]}};};
-  await api.run({type:"chapters",tabId:1,bookId:"B0GY3RKVRZ",fingerprint:"view"});
-  assert.equal(forwarded.type,"chapters");
-  chrome.windows.get=async()=>({state:"minimized"});
-  for(const type of ["chapters","chapter-navigate"])
-    await assert.rejects(api.run({type,tabId:1,bookId:"B0GY3RKVRZ",fingerprint:"view"}),/CHROME_MINIMIZED/);
-});
 test("minimized windows refuse navigation and capture before changing the reader",async()=>{
   const {api,counts}=minimizedHarness("minimized");
   for(const type of ["navigate","ocr"]){
@@ -235,4 +225,26 @@ test("minimizing during a successful capture discards that capture and waits",as
     return "png";
   };
   await assert.rejects(api.run({type:"ocr",tabId:1,bookId:"B0GY3RKVRZ",fingerprint:"view"}),/CHROME_MINIMIZED/);
+});
+
+test("the app relay pump rejects removed sidebar commands", async () => {
+  for (const type of ["chapters", "chapter-navigate"]) {
+    const {api, chrome} = harness();
+    api.setBinding({id:"session",tabId:1,bookId:"B0GY3RKVRZ"});
+    api.reader(async()=>({id:1,windowId:2}));
+    chrome.windows={get:async()=>({state:"normal"})};
+    let forwarded, reply;
+    chrome.tabs.sendMessage=async(_id,message)=>{
+      forwarded=message;
+      return {ok:true,data:{chapters:[{id:"one",label:"Chapter One"}]}};
+    };
+    api.native(async(method,payload)=>{
+      if(method==="relay-poll") return {command:{id:"request",relayId:"session",expiresAt:Date.now()+15000,type,chapterId:"one",bookId:"B0GY3RKVRZ",fingerprint:"view"}};
+      if(method==="relay-reply") {reply=payload.result;api.stop();return {};}
+    });
+    await api.pumpRelay();
+    assert.equal(reply.ok,false,`${type} must be rejected`);
+    assert.match(reply.error,/Expired or unsupported app command/);
+    assert.equal(forwarded,undefined);
+  }
 });

@@ -90,14 +90,13 @@ async function run(message) {
     return { connected: true };
   }
   if (message.type === "inspect") return inspect(tab);
-  if (["navigate", "ocr", "chapters", "chapter-navigate"].includes(message.type) &&
+  if (["navigate", "ocr"].includes(message.type) &&
       (await chrome.windows.get(tab.windowId)).state === "minimized")
     throw Error("CHROME_MINIMIZED");
-  if (["navigate", "chapters", "chapter-navigate"].includes(message.type)) {
+  if (message.type === "navigate") {
     const response = await chrome.tabs.sendMessage(tab.id, {
       protocolVersion: 1,
       type: message.type,
-      chapterId: message.chapterId,
       direction: message.direction,
       bookId: message.bookId,
       fingerprint: message.fingerprint,

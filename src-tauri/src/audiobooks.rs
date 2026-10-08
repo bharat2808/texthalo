@@ -924,7 +924,7 @@ fn locate_continuation_with_limit(
     book: &Book,
     view_limit: usize,
 ) -> Result<(Value, String, usize), String> {
-    locate_continuation_report(&command, &active, book, view_limit, &|_| {}, true)
+    locate_continuation_report(&command, &active, book, view_limit, &|_| {})
 }
 fn locate_continuation_report(
     command: &dyn Fn(Value) -> Result<Value, String>,
@@ -932,17 +932,18 @@ fn locate_continuation_report(
     book: &Book,
     view_limit: usize,
     report: &dyn Fn(Value),
-    try_chapter: bool,
 ) -> Result<(Value, String, usize), String> {
     let mut trace = Vec::<Value>::new();
     let mut nearby = None::<Value>;
-    let mut chapter_found = None::<String>;
-    let mut next_chapter = None::<String>;
     let hint = book
         .reader_hint
         .as_ref()
-        .and_then(|h| page_number(&h.progress))
-        .or_else(|| book.pages.last().and_then(|p| page_number(&p.progress)));
+        .and_then(|h| ReaderPosition::parse(&h.progress))
+        .or_else(|| {
+            book.pages
+                .last()
+                .and_then(|p| ReaderPosition::parse(&p.progress))
+        });
     let mut reader = command(json!({"type":"inspect"}))?;
     if key(&reader)? != book.key {
         return Err("Connected book changed".into());
@@ -950,98 +951,21 @@ fn locate_continuation_report(
     if !active() {
         return Err("Preparation stopped".into());
     }
-    if try_chapter {
-        if let Some(saved) = book
-            .checkpoints
-            .last()
-            .filter(|c| c.verified_start && chapter(&c.label).is_some())
-        {
-            report(
-                json!({"step":"chapter","label":format!("Opening {}…",saved.label),"views":trace}),
-            );
-            if !active() {
-                return Err("Preparation stopped".into());
-            }
-            let list = command(
-                json!({"type":"chapters","bookId":reader["bookId"],"fingerprint":reader["fingerprint"]}),
-            );
-            match list {
-                Ok(list) => {
-                    let normalized = |label: &str| {
-                        label
-                            .chars()
-                            .filter(|c| c.is_alphanumeric())
-                            .flat_map(char::to_lowercase)
-                            .collect::<String>()
-                    };
-                    if let Some(entries) = list["chapters"].as_array() {
-                        let matches = entries
-                            .iter()
-                            .enumerate()
-                            .filter(|(_, e)| {
-                                e["label"].as_str().is_some_and(|label| {
-                                    normalized(label) == normalized(&saved.label)
-                                })
-                            })
-                            .collect::<Vec<_>>();
-                        if matches.len() == 1 {
-                            let (index, entry) = matches[0];
-                            if !active() {
-                                return Err("Preparation stopped".into());
-                            }
-                            match command(
-                                json!({"type":"chapter-navigate","bookId":reader["bookId"],"fingerprint":reader["fingerprint"],"chapterId":entry["id"]}),
-                            ) {
-                                Ok(at)
-                                    if at["navigationVerified"] == true
-                                        && at["chapter"]["id"] == entry["id"] =>
-                                {
-                                    reader = at;
-                                    if key(&reader)? != book.key {
-                                        return Err("Connected book changed".into());
-                                    }
-                                    chapter_found = Some(saved.label.clone());
-                                    next_chapter = entries
-                                        .get(index + 1)
-                                        .and_then(|e| e["label"].as_str())
-                                        .map(str::to_owned);
-                                }
-                                Err(error)
-                                    if error == "Connected book changed"
-                                        || error == "Preparation stopped" =>
-                                {
-                                    return Err(error)
-                                }
-                                result => {
-                                    trace.push(json!({"action":"chapter-navigation-fallback","reason":result.err().unwrap_or_else(||"Chapter navigation could not be verified".into())}));
-                                    if !active() {
-                                        return Err("Preparation stopped".into());
-                                    }
-                                    reader = command(json!({"type":"inspect"}))?;
-                                    if key(&reader)? != book.key {
-                                        return Err("Connected book changed".into());
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                Err(error)
-                    if error == "Connected book changed" || error == "Preparation stopped" =>
-                {
-                    return Err(error)
-                }
-                Err(error) => trace.push(json!({"action":"chapter-fallback","reason":error})),
-            }
-        }
-    }
     let mut visited = std::collections::HashSet::new();
-    if view_limit > 12 && chapter_found.is_none() {
-        let seek_direction = reader["progress"]
-            .as_str()
-            .and_then(page_number)
+    if view_limit > 12 {
+        let seek_direction = ReaderPosition::parse(reader["progress"].as_str().unwrap_or(""))
             .zip(hint)
-            .map(|(at, goal)| if at < goal { "next" } else { "previous" });
+            .and_then(|(at, goal)| match at.compare(goal) {
+                Some(std::cmp::Ordering::Less) => Some("next"),
+                Some(_) => Some("previous"),
+                None if matches!(at, ReaderPosition::Location(1))
+                    && reader["startOfBook"] == true =>
+                {
+                    Some("next")
+                }
+                None if matches!(goal, ReaderPosition::Location(1)) => Some("previous"),
+                None => None,
+            });
         for _ in 0..view_limit {
             if !active() {
                 return Err("Preparation stopped".into());
@@ -1049,13 +973,24 @@ fn locate_continuation_report(
             if key(&reader)? != book.key {
                 return Err("Connected book changed".into());
             }
-            let Some((at, goal)) = reader["progress"].as_str().and_then(page_number).zip(hint)
+            let Some((at, goal)) =
+                ReaderPosition::parse(reader["progress"].as_str().unwrap_or("")).zip(hint)
             else {
                 break;
             };
-            if at.abs_diff(goal) <= 6
-                || (seek_direction == Some("next") && at >= goal)
-                || (seek_direction == Some("previous") && at <= goal)
+            // Approach within two views before the bounded passage search. Starting
+            // six pages away could reverse after five turns before reaching the hint.
+            let distance = match (at, goal) {
+                (ReaderPosition::Page(a), ReaderPosition::Page(b))
+                | (ReaderPosition::Location(a), ReaderPosition::Location(b)) => Some(a.abs_diff(b)),
+                _ => None,
+            };
+            let comparison = at.compare(goal);
+            if distance.is_some_and(|d| d <= 2)
+                || (seek_direction == Some("next")
+                    && comparison == Some(std::cmp::Ordering::Greater))
+                || (seek_direction == Some("previous")
+                    && comparison == Some(std::cmp::Ordering::Less))
             {
                 break;
             }
@@ -1087,8 +1022,8 @@ fn locate_continuation_report(
         visited.clear();
     }
     let mut previous_forward_view: Option<String> = None;
-    let scan_limit = if chapter_found.is_some() { 128 } else { 12 };
-    let mut direction: Option<&str> = chapter_found.as_ref().map(|_| "next");
+    let scan_limit = 12;
+    let mut direction: Option<&str> = None;
     let mut reversed = false;
     let mut scans = 0;
     let mut travelled = 0;
@@ -1164,11 +1099,6 @@ fn locate_continuation_report(
         report(
             json!({"step":"searching","label":format!("Finding your saved passage · {}",reader["progress"].as_str().unwrap_or("")),"nearby":nearby,"views":trace}),
         );
-        if next_chapter.as_ref().is_some_and(|label| {
-            chapter(raw).is_some_and(|found| found.eq_ignore_ascii_case(label))
-        }) {
-            break;
-        }
         if let Some(previous) = &previous_forward_view {
             let previous_words = text_words(previous);
             let current_words = text_words(&normalized);
@@ -1206,9 +1136,9 @@ fn locate_continuation_report(
             "next"
         } else if reader["progress"]
             .as_str()
-            .and_then(page_number)
+            .and_then(ReaderPosition::parse)
             .zip(hint)
-            .is_some_and(|(at, goal)| at > goal)
+            .is_some_and(|(at, goal)| at.compare(goal) == Some(std::cmp::Ordering::Greater))
         {
             "previous"
         } else {
@@ -1224,7 +1154,7 @@ fn locate_continuation_report(
         if scans >= scan_limit {
             break;
         }
-        if chapter_found.is_none() && !anchored && !reversed && (travelled >= 5 || edge) {
+        if !anchored && !reversed && (travelled >= 5 || edge) {
             d = if d == "next" { "previous" } else { "next" };
             direction = Some(d);
             reversed = true;
@@ -1235,22 +1165,6 @@ fn locate_continuation_report(
         reader = command(
             json!({"type":"navigate","bookId":reader["bookId"],"fingerprint":reader["fingerprint"],"direction":d}),
         )?;
-    }
-    if chapter_found.is_some() {
-        // If chapter metadata was stale, still try the page hint and both neighbors.
-        let previous_nearby = nearby.clone();
-        return locate_continuation_report(command,active,book,view_limit.max(1000),&|mut update| {
-            if update["nearby"].is_null() && update["step"]!="matched" {update["nearby"]=json!(previous_nearby);}
-            let mut combined=trace.clone();
-            if let Some(views)=update["views"].as_array() {combined.extend(views.iter().cloned());}
-            if combined.len()>64 {combined.drain(..combined.len()-64);}
-            update["views"]=json!(combined);
-            report(update);
-        },false).map_err(|error| {
-            if error.starts_with("Could not confidently") {
-                "Found your chapter, but couldn’t verify the exact sentence. Replay from nearby or listen from this page; your saved audio is unchanged.".into()
-            } else {error}
-        });
     }
     report(
         json!({"step":"unresolved","label":"Couldn’t verify the exact sentence","nearby":nearby,"views":trace}),
@@ -1279,7 +1193,6 @@ fn locate_for_job(
                 }
             }
         },
-        true,
     )
 }
 fn heading_from(text: &str, offset: usize) -> Option<String> {
@@ -1615,15 +1528,20 @@ impl Audiobooks {
     }
 
     pub(crate) fn tray(&self, reader: &Value) -> Option<Value> {
+        let context = self.reader_context(reader)?;
+        let k = key(&context["reader"]).ok()?;
+        if self.0.lock().unwrap().dismissed.as_deref() == Some(&k) {
+            return None;
+        }
+        Some(context)
+    }
+    fn reader_context(&self, reader: &Value) -> Option<Value> {
         if reader["connected"] != true {
             return None;
         }
         let r = &reader["reader"];
         let k = key(r).ok()?;
         let l = self.0.lock().unwrap();
-        if l.dismissed.as_deref() == Some(&k) {
-            return None;
-        }
         let book = l.books.values().find(|b| b.key == k);
         Some(
             json!({"reader":r,"differentPage":book.is_some_and(|b|different_page(b,r)),"book":book.map(Book::view),"generating":l.producing.as_ref().is_some_and(|(id,_,_)|book.is_some_and(|b|&b.id==id))}),
@@ -1641,6 +1559,7 @@ impl Audiobooks {
     fn snapshot(&self, app: &AppHandle) -> Value {
         let reader = app.state::<crate::reader_bridge::ReaderBridge>().status();
         let tray = self.tray(&reader);
+        let reader_context = self.reader_context(&reader);
         let warning = self
             .minimized_preparation(&reader)
             .map(|id| json!({"bookId":id,"code":"chrome-minimized"}));
@@ -1657,7 +1576,7 @@ impl Audiobooks {
                     && p.player.snapshot().available
             })
             .map(|p| json!({"bookId":p.book,"audio":p.player.snapshot()}));
-        json!({"readerWarning":warning,"books":l.books.values().map(Book::view).collect::<Vec<_>>(),"tray":tray,"generating":l.producing.as_ref().map(|(id,_,_)|id),"playback":playback})
+        json!({"readerWarning":warning,"books":l.books.values().map(Book::view).collect::<Vec<_>>(),"tray":tray,"readerContext":reader_context,"generating":l.producing.as_ref().map(|(id,_,_)|id),"playback":playback})
     }
 }
 #[tauri::command]
@@ -1971,6 +1890,33 @@ fn generation_active(service: &Audiobooks, id: &str, token: &str) -> bool {
         .as_ref()
         .is_some_and(|(i, t, _)| i == id && t == token)
 }
+#[derive(Clone, Copy)]
+enum ReaderPosition {
+    Page(u64),
+    Location(u64),
+}
+impl ReaderPosition {
+    fn parse(progress: &str) -> Option<Self> {
+        let mut words = progress.split_whitespace();
+        let unit = words.next()?;
+        let number = words.next()?.parse::<u64>().ok()?;
+        if unit.eq_ignore_ascii_case("page") {
+            Some(Self::Page(number))
+        } else if unit.eq_ignore_ascii_case("location") {
+            Some(Self::Location(number))
+        } else {
+            None
+        }
+    }
+    fn compare(self, other: Self) -> Option<std::cmp::Ordering> {
+        match (self, other) {
+            (Self::Page(a), Self::Page(b)) | (Self::Location(a), Self::Location(b)) => {
+                Some(a.cmp(&b))
+            }
+            _ => None,
+        }
+    }
+}
 enum RestorePolicy<'a> {
     Resume,
     Borrow(&'a mut Value),
@@ -2012,8 +1958,8 @@ fn restore_page_with(
         RestorePolicy::Resume => None,
         RestorePolicy::Borrow(r) | RestorePolicy::Return(r) => Some(r),
     };
-    let goal = page_number(&target.progress)
-        .ok_or("A verified page number is required to fill earlier pages")?;
+    let goal = ReaderPosition::parse(&target.progress)
+        .ok_or("A saved page or location is required to fill earlier pages")?;
     let mut r = command(json!({"type":"inspect"}))?;
     if key(&r)? != book.key {
         return Err("Connected book changed".into());
@@ -2026,9 +1972,23 @@ fn restore_page_with(
             "Reader moved while preparing; the app left your selected page unchanged".into(),
         );
     }
-    let initial = page_number(r["progress"].as_str().unwrap_or(""))
-        .ok_or("Reader page number unavailable")?;
-    let direction = if initial < goal { "next" } else { "previous" };
+    let initial = ReaderPosition::parse(r["progress"].as_str().unwrap_or(""))
+        .ok_or("Reader page or location unavailable")?;
+    let direction = match initial.compare(goal) {
+        Some(std::cmp::Ordering::Less) => "next",
+        Some(_) => "previous",
+        // Page and location numbers use different units. Only the actual cover
+        // supplies a reliable direction when Kindle switches between them.
+        None if matches!(goal, ReaderPosition::Location(1)) => "previous",
+        None if matches!(initial, ReaderPosition::Location(1)) && r["startOfBook"] == true => {
+            "next"
+        }
+        None if r["fingerprint"].as_str() == Some(target.fingerprint.as_str()) => "next",
+        None => return Err(
+            "The reader switched between pages and locations. Open the saved passage to continue."
+                .into(),
+        ),
+    };
     let mut visited = std::collections::HashSet::new();
     let mut candidate = false;
     let view_limit = if book.backfill.as_ref().is_some_and(|b| b.whole_book) {
@@ -2040,14 +2000,19 @@ fn restore_page_with(
         if !finishing && !active() {
             return Err("Preparation stopped".into());
         }
-        let at = page_number(r["progress"].as_str().unwrap_or(""))
-            .ok_or("Reader page number unavailable")?;
+        let comparison = ReaderPosition::parse(r["progress"].as_str().unwrap_or(""))
+            .and_then(|at| at.compare(goal));
         // Captured Kindle views can repeat or skip page numbers; labels are not unique identities.
         // Never reverse to chase a number skipped by a turn; verify the passage at the crossing.
         if r["fingerprint"].as_str() == Some(target.fingerprint.as_str())
-            || at == goal
-            || (direction == "next" && at > goal)
-            || (direction == "previous" && at < goal)
+            || comparison == Some(std::cmp::Ordering::Equal)
+            || (direction == "next" && comparison == Some(std::cmp::Ordering::Greater))
+            || (direction == "previous" && comparison == Some(std::cmp::Ordering::Less))
+            || r[if direction == "next" {
+                "endOfBook"
+            } else {
+                "startOfBook"
+            }] == true
         {
             candidate = true;
             break;
@@ -2708,7 +2673,8 @@ fn producer(
                     if needs_earlier(b, full) {
                         b.backfill.get_or_insert_with(Box::default).blocked = Some(error.clone());
                     }
-                    return Err(format!("Chapter preparation needs attention: {error}"));
+                    let scope = if full { "Audiobook" } else { "Chapter" };
+                    return Err(format!("{scope} preparation needs attention: {error}"));
                 }
             }
         }
@@ -3015,6 +2981,22 @@ pub async fn audiobook_complete_chapter(app: AppHandle, id: String) -> Result<St
 mod tests {
     use super::*;
     #[test]
+    fn dismissing_the_floating_suggestion_keeps_library_reader_controls_available() {
+        let service = Audiobooks::default();
+        let b = book();
+        service.0.lock().unwrap().dismissed = Some(b.key.clone());
+        service
+            .0
+            .lock()
+            .unwrap()
+            .books
+            .insert(b.id.clone(), b.clone());
+        let status = json!({"connected":true,"reader":reader(1,"one")});
+        assert!(service.tray(&status).is_none());
+        let context = service.reader_context(&status).unwrap();
+        assert_eq!(context["book"]["id"], b.id);
+    }
+    #[test]
     fn recovery_uses_an_independent_earlier_sentence_group() {
         let mut b = resume_fixture();
         capture(&mut b, &reader(29, "tail"), "The final sentence contains damaged OCR words that are absent from the current capture.").unwrap();
@@ -3023,16 +3005,12 @@ mod tests {
         assert!(sentence + 1 < b.sentences.len());
     }
     #[test]
-    fn recovery_already_at_the_chapter_start_falls_back_to_passage_matching() {
+    fn recovery_at_a_chapter_start_uses_passage_matching() {
         let mut b = resume_fixture();
         b.checkpoints[0].label = "Chapter One".into();
         let command = |request: Value| -> Result<Value, String> {
             let r = reader(28, "current");
             match request["type"].as_str().unwrap() {
-                "chapters" => Ok(json!({"chapters":[{"id":"one","label":"Chapter One"}]})),
-                "chapter-navigate" => {
-                    Err("Chapter selection did not produce a verified reading position.".into())
-                }
                 "ocr" => Ok(json!({"reader":r,"text":ANCHOR})),
                 "inspect" => Ok(r),
                 _ => panic!("Unexpected page turn"),
@@ -3041,7 +3019,7 @@ mod tests {
         assert!(locate_continuation_with(command, || true, &b).is_ok());
     }
     #[test]
-    fn recovery_refuses_another_book_before_opening_its_sidebar() {
+    fn recovery_refuses_another_book_before_pagination() {
         let mut b = resume_fixture();
         b.checkpoints[0].label = "Chapter One".into();
         let command = |request: Value| -> Result<Value, String> {
@@ -3060,31 +3038,23 @@ mod tests {
         );
     }
     #[test]
-    fn recovery_navigates_to_a_unique_sidebar_chapter_before_ocr() {
+    fn recovery_with_a_verified_chapter_never_requests_the_sidebar() {
         let mut b = resume_fixture();
         b.checkpoints[0].label = "Chapter One".into();
+        b.checkpoints[0].verified_start = true;
         let requests = std::cell::RefCell::new(Vec::new());
         let command = |request: Value| -> Result<Value, String> {
             let kind = request["type"].as_str().unwrap();
             requests.borrow_mut().push(kind.to_owned());
-            let mut r = reader(28, "chapter-start");
+            let r = reader(28, "saved-page");
             match kind {
-                "chapters" => Ok(json!({"chapters":[{"id":"one","label":"Chapter One"}]})),
-                "chapter-navigate" => {
-                    r["navigationVerified"] = json!(true);
-                    r["chapter"] = json!({"id":"one"});
-                    Ok(r)
-                }
+                "inspect" => Ok(r),
                 "ocr" => Ok(json!({"reader":r,"text":ANCHOR})),
-                "inspect" => Ok(reader(100, "far-away")),
-                _ => panic!("Unexpected page turn"),
+                _ => panic!("Unexpected command: {kind}"),
             }
         };
         assert!(locate_continuation_with(command, || true, &b).is_ok());
-        assert_eq!(
-            *requests.borrow(),
-            vec!["inspect", "chapters", "chapter-navigate", "ocr"]
-        );
+        assert_eq!(*requests.borrow(), vec!["inspect", "ocr"]);
     }
     #[test]
     fn recovery_nearby_replay_does_not_supply_an_append_offset() {
@@ -3101,15 +3071,12 @@ mod tests {
                 Ok(r)
             }
         };
-        assert!(locate_continuation_report(
-            &command,
-            &|| true,
-            &b,
-            12,
-            &|v| updates.borrow_mut().push(v),
-            true
-        )
-        .is_err());
+        assert!(
+            locate_continuation_report(&command, &|| true, &b, 12, &|v| updates
+                .borrow_mut()
+                .push(v))
+            .is_err()
+        );
         assert!(updates.borrow().last().unwrap()["nearby"]["sentenceId"].is_string());
         assert_eq!(serde_json::to_value(&b).unwrap(), before);
     }
@@ -3118,9 +3085,6 @@ mod tests {
         let b = resume_fixture();
         let at = std::cell::Cell::new(29);
         let command = |request: Value| -> Result<Value, String> {
-            if request["type"] == "chapters" {
-                return Err("Sidebar unavailable".into());
-            }
             if request["type"] == "navigate" {
                 at.set(if request["direction"] == "previous" {
                     at.get() - 1
@@ -4066,6 +4030,48 @@ mod tests {
         assert_eq!(at.get(), 28);
     }
     #[test]
+    fn completion_hint_seek_returns_from_the_cover_before_matching_sentences() {
+        for start_at in [0, 97] {
+            let mut b = resume_fixture();
+            b.reader_hint = Some(ReaderHint {
+                progress: "Page 103 of 134".into(),
+                fingerprint: "saved103".into(),
+            });
+            let before = serde_json::to_value(&b).unwrap();
+            let at = std::cell::Cell::new(start_at);
+            let scans = std::cell::Cell::new(0);
+            let command = |request: Value| -> Result<Value, String> {
+                if request["type"] == "navigate" {
+                    assert_eq!(
+                        request["direction"], "next",
+                        "Should reach the page hint before reversing"
+                    );
+                    at.set(at.get() + 1);
+                }
+                let mut r = reader(at.get(), &format!("view{}", at.get()));
+                if at.get() == 0 {
+                    r["progress"] = json!("Location 1 of 1583 ● 0%");
+                    r["startOfBook"] = json!(true);
+                }
+                if request["type"] == "ocr" {
+                    scans.set(scans.get() + 1);
+                    assert!(at.get() >= 97, "Do not OCR distant captured views");
+                    Ok(
+                        json!({"reader":r,"text":if at.get()==103 {format!("{ANCHOR} {NOVEL}")}else{"Unrelated passage.".into()}}),
+                    )
+                } else {
+                    Ok(r)
+                }
+            };
+            let (found, raw, offset) =
+                locate_continuation_with_limit(command, || true, &b, 10_000).unwrap();
+            assert_eq!(found["progress"], "Page 103");
+            assert_eq!(raw[offset..].trim(), NOVEL);
+            assert!(scans.get() <= 7);
+            assert_eq!(serde_json::to_value(&b).unwrap(), before);
+        }
+    }
+    #[test]
     fn completion_hint_seek_scans_the_crossing_view_instead_of_reversing() {
         let b = resume_fixture();
         let at = std::cell::Cell::new(1);
@@ -4449,6 +4455,86 @@ mod tests {
         let reopened: Book = serde_json::from_value(serde_json::to_value(&b).unwrap()).unwrap();
         assert_eq!(reopened.reader_hint.unwrap().progress, "Page 28");
         assert_eq!(b.sentences.last().unwrap().text, NOVEL);
+    }
+    #[test]
+    fn restore_handles_location_cover_and_page_transitions() {
+        for (start, goal, expected_direction) in [
+            ("Page 1", "Location 1 of 1583", "previous"),
+            ("Location 1 of 1583", "Page 11", "next"),
+            ("Location 42 of 1583", "Location 40 of 1583", "previous"),
+        ] {
+            let b = book();
+            let turned = std::cell::Cell::new(false);
+            let target = Page {
+                heading: None,
+                progress: goal.into(),
+                fingerprint: "saved-layout".into(),
+                text: ANCHOR.into(),
+            };
+            let command = |request: Value| -> Result<Value, String> {
+                if request["type"] == "navigate" {
+                    assert!(!turned.replace(true), "Should restore in one turn");
+                    assert_eq!(request["direction"], expected_direction);
+                }
+                let mut r = reader(
+                    1,
+                    if turned.get() {
+                        "new-layout"
+                    } else {
+                        "initial"
+                    },
+                );
+                r["progress"] = json!(if turned.get() { goal } else { start });
+                r["startOfBook"] = json!(r["progress"] == "Location 1 of 1583");
+                if request["type"] == "ocr" {
+                    Ok(json!({"reader":r,"text":ANCHOR}))
+                } else {
+                    Ok(r)
+                }
+            };
+            let at =
+                restore_page_with(command, || true, &b, &target, RestorePolicy::Resume).unwrap();
+            assert_eq!(at["progress"], goal);
+            assert!(turned.get());
+        }
+    }
+    #[test]
+    fn restore_verifies_an_identical_location_view_without_turning() {
+        let b = book();
+        let target = Page {
+            heading: None,
+            progress: "Location 1 of 1583".into(),
+            fingerprint: "cover".into(),
+            text: ANCHOR.into(),
+        };
+        let command = |request: Value| -> Result<Value, String> {
+            let mut r = reader(1, "cover");
+            r["progress"] = json!("Location 1 of 1583");
+            match request["type"].as_str().unwrap() {
+                "inspect" => Ok(r),
+                "ocr" => Ok(json!({"reader":r,"text":ANCHOR})),
+                other => panic!("Unexpected command: {other}"),
+            }
+        };
+        assert!(restore_page_with(command, || true, &b, &target, RestorePolicy::Resume).is_ok());
+    }
+    #[test]
+    fn restore_never_compares_arbitrary_locations_with_page_numbers() {
+        let b = book();
+        let target = Page {
+            heading: None,
+            progress: "Location 300 of 1583".into(),
+            fingerprint: "saved".into(),
+            text: ANCHOR.into(),
+        };
+        let command = |request: Value| -> Result<Value, String> {
+            assert_eq!(
+                request["type"], "inspect",
+                "Different units cannot guess a direction"
+            );
+            Ok(reader(30, "current"))
+        };
+        assert!(restore_page_with(command, || true, &b, &target, RestorePolicy::Resume).is_err());
     }
     #[test]
     fn restore_does_not_oscillate_when_kindle_skips_the_saved_page_number() {

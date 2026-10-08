@@ -29,7 +29,7 @@ export type Audiobook = {
   fromBeginning: boolean;
   message: string | null;
   recovery?: {
-    step: "chapter" | "searching" | "matched" | "unresolved";
+    step: "searching" | "matched" | "unresolved";
     label: string;
     nearby?: { sentenceId: string; seconds: number; page: string } | null;
   } | null;
@@ -70,6 +70,7 @@ export type AudiobookState = {
     generating: boolean;
     differentPage: boolean;
   } | null;
+  readerContext?: AudiobookState["tray"];
   generating: string | null;
   readerWarning?: { bookId: string; code: "chrome-minimized" } | null;
   playback: { bookId: string; audio: Audio } | null;
@@ -155,7 +156,7 @@ export function preparationLabel(book: Audiobook) {
     return `Preparing selected page…${page}${sentences}`;
   }
   if (!progress) return "Preparing pages ahead of you";
-  const chapter = progress.chapter || "chapter";
+  const chapter = progress.wholeBook ? "audiobook" : progress.chapter || "chapter";
   if (book.activity === "forward") {
     return `Preparing pages ahead · ${progress.pages} earlier pages saved`;
   }
@@ -166,6 +167,8 @@ export function preparationLabel(book: Audiobook) {
   }
   if (progress.phase === "publishing")
     return `Adding earlier audio to ${chapter}`;
+  if (progress.wholeBook && progress.total !== null)
+    return `Generating earlier audio · ${progress.ready}/${progress.total} sentences`;
   return progress.total === null
     ? `Preparing ${chapter} · ${progress.pages} earlier pages captured`
     : `Preparing ${chapter} · ${progress.ready}/${progress.total} sentences`;

@@ -1,6 +1,6 @@
 (() => {
   if (globalThis.__textHaloReader) return;
-  const VERSION = "kindle-dom-0.3";
+  const VERSION = "kindle-dom-0.5";
   const supported = () =>
     ["read.amazon.ca", "read.amazon.com"].includes(location.hostname) &&
     /^[A-Z0-9]{10}$/i.test(
@@ -274,6 +274,15 @@
         disabled: !!el.disabled || el.getAttribute("aria-disabled") === "true",
         role: el.getAttribute("role"),
       }));
+    const navigation = { previous: !!control("previous"), next: !!control("next") };
+    const position = progress.match(/^(?:Page|Location)\s+(\d+)(?:\s+of\s+(\d+))?/i);
+    const current = position ? Number(position[1]) : null;
+    const total = position?.[2] ? Number(position[2]) : null;
+    // At the cover Kindle removes Previous entirely. Absence alone is not
+    // enough: require an edge position and a visible control in the other direction.
+    const visibleControl = (label) => navigationDetails.some(
+      (c) => c.label.toLowerCase() === label && c.visible && !c.disabled,
+    );
     return {
       ...base,
       status: "ready",
@@ -282,16 +291,32 @@
       region,
       fingerprint,
       diagnostics,
-      navigation: { previous: !!control("previous"), next: !!control("next") },
+      navigation,
       navigationDetails,
       startOfBook: navigationDetails.some(
         (c) => c.label.toLowerCase() === "previous page" && c.disabled,
-      ),
+      ) || (current === 1 && !navigation.previous && visibleControl("next page")),
       endOfBook: navigationDetails.some(
         (c) => c.label.toLowerCase() === "next page" && c.disabled,
-      ),
+      ) || (total !== null && total > 0 && current === total && !navigation.next && visibleControl("previous page")),
       text: "",
     };
+  }
+  // Kindle controls can listen for mouse press/release rather than click alone.
+  // Use one activation sequence and let each caller verify its resulting state.
+  function activate(element) {
+    const point = rectangle(element);
+    const mouse = {
+      bubbles: true,
+      cancelable: true,
+      view: window,
+      clientX: point.x + point.width / 2,
+      clientY: point.y + point.height / 2,
+      button: 0,
+    };
+    element.dispatchEvent(new MouseEvent("mousedown", { ...mouse, buttons: 1 }));
+    element.dispatchEvent(new MouseEvent("mouseup", { ...mouse, buttons: 0 }));
+    element.click();
   }
   async function navigate(message) {
     const before = inspect();
@@ -307,20 +332,7 @@
       throw Error("Invalid navigation direction.");
     const button = control(message.direction);
     if (!button) throw Error("The requested page control is unavailable.");
-    // Kindle's chevrons handle mouse press/release rather than click alone.
-    // Send one complete activation sequence, then require a verified transition.
-    const point = rectangle(button);
-    const mouse = {
-      bubbles: true,
-      cancelable: true,
-      view: window,
-      clientX: point.x + point.width / 2,
-      clientY: point.y + point.height / 2,
-      button: 0,
-    };
-    button.dispatchEvent(new MouseEvent("mousedown", { ...mouse, buttons: 1 }));
-    button.dispatchEvent(new MouseEvent("mouseup", { ...mouse, buttons: 0 }));
-    button.click();
+    activate(button);
     const deadline = Date.now() + 7000;
     let last = "",
       stable = 0;
@@ -342,72 +354,7 @@
       "Page control was clicked, but a changed reading position could not be verified.",
     );
   }
-  const chapterLists = () => all('[role="listbox"]').filter(visible);
-  function validateChapterRequest(message) {
-    const before = inspect();
-    if (before.status !== "ready" || before.bookId !== message.bookId ||
-        before.fingerprint !== message.fingerprint)
-      throw Error("The reader changed. Inspect again before selecting a chapter.");
-    return before;
-  }
-  async function openChapters() {
-    if (!chapterLists().length) {
-      const toggle = all('button,[role="button"]').find(el => visible(el) && name(el) === "Table of Contents");
-      if (!toggle) throw Error("Chapter sidebar unavailable.");
-      toggle.click();
-    }
-    for (let i=0;i<8;i++) {
-      const lists = chapterLists();
-      if (lists.length === 1) return lists[0];
-      if (lists.length > 1) throw Error("Chapter sidebar is ambiguous.");
-      await new Promise(resolve => setTimeout(resolve,100));
-    }
-    throw Error("Chapter sidebar unavailable.");
-  }
-  function closeChapters() {
-    if (!chapterLists().length) return;
-    const close = all('button,[role="button"]').filter(el => visible(el) && name(el) === "Close");
-    if (close.length === 1) close[0].click();
-    else throw Error("Close the Kindle sidebar before continuing.");
-  }
-  function chapterEntries(list, bookId) {
-    return Array.from(list.querySelectorAll('button,[role="button"],[role="option"],a'))
-      .filter(el => !el.disabled && el.getAttribute("aria-disabled") !== "true" && name(el))
-      .map((el,index) => ({el,id:hash(`${bookId}:${index}:${name(el)}`),label:name(el)}));
-  }
-  async function chapters(message) {
-    const before = validateChapterRequest(message);
-    try {
-      const list = await openChapters();
-      return {chapters:chapterEntries(list,before.bookId).map(({id,label}) => ({id,label}))};
-    } finally { closeChapters(); }
-  }
-  async function chapterNavigate(message) {
-    const before = validateChapterRequest(message);
-    let entry;
-    try {
-      const list = await openChapters();
-      entry = chapterEntries(list,before.bookId).find(c => c.id === message.chapterId);
-      if (!entry) throw Error("The chapter list changed or this chapter is unavailable.");
-      if (new URL(location.href).searchParams.get("asin") !== before.bookId)
-        throw Error("The opened book changed.");
-      entry.el.scrollIntoView({block:"nearest"});
-      entry.el.click();
-    } finally { closeChapters(); }
-    let last="", stable=0;
-    for (let i=0;i<28;i++) {
-      await new Promise(resolve => setTimeout(resolve,250));
-      const after=inspect();
-      if (after.bookId !== before.bookId) throw Error("The opened book changed.");
-      if (after.status === "ready" && after.fingerprint !== before.fingerprint) {
-        stable=after.fingerprint === last ? stable+1 : 0;
-        last=after.fingerprint;
-        if (stable>=2) return {...after,navigationVerified:true,chapter:{id:entry.id,label:entry.label}};
-      }
-    }
-    throw Error("Chapter selection did not produce a verified reading position.");
-  }
-  const api = { inspect, navigate, chapters, chapterNavigate };
+  const api = { inspect, navigate };
   globalThis.__textHaloReader = api;
   chrome.runtime.onMessage.addListener((message, sender, respond) => {
     if (sender.id !== chrome.runtime.id || message?.protocolVersion !== 1)
@@ -416,9 +363,8 @@
       respond({ ok: true, data: inspect() });
       return;
     }
-    if (["navigate", "chapters", "chapter-navigate"].includes(message.type)) {
-      const operation = message.type === "chapters" ? chapters : message.type === "chapter-navigate" ? chapterNavigate : navigate;
-      operation(message).then(
+    if (message.type === "navigate") {
+      navigate(message).then(
         (data) => respond({ ok: true, data }),
         (error) => respond({ ok: false, error: error.message }),
       );
