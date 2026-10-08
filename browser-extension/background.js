@@ -49,6 +49,7 @@ async function inspect(tab) {
     tabId: tab.id,
     windowId: tab.windowId,
     zoom: await chrome.tabs.getZoom(tab.id),
+    windowState: (await chrome.windows.get(tab.windowId)).state,
   };
 }
 async function run(message) {
@@ -89,10 +90,14 @@ async function run(message) {
     return { connected: true };
   }
   if (message.type === "inspect") return inspect(tab);
-  if (message.type === "navigate") {
+  if (["navigate", "ocr", "chapters", "chapter-navigate"].includes(message.type) &&
+      (await chrome.windows.get(tab.windowId)).state === "minimized")
+    throw Error("CHROME_MINIMIZED");
+  if (["navigate", "chapters", "chapter-navigate"].includes(message.type)) {
     const response = await chrome.tabs.sendMessage(tab.id, {
       protocolVersion: 1,
-      type: "navigate",
+      type: message.type,
+      chapterId: message.chapterId,
       direction: message.direction,
       bookId: message.bookId,
       fingerprint: message.fingerprint,
@@ -116,12 +121,17 @@ async function run(message) {
         format: "png",
       });
     } catch {
+      if ((await chrome.windows.get(tab.windowId)).state === "minimized")
+        throw Error("CHROME_MINIMIZED");
       throw Error(
         "Open the TextHalo Reader extension on this tab and choose Enable page capture.",
       );
     }
     const current = await activeTab(tab.id);
     const after = await inspect(tab);
+    if (after.windowState === "minimized" ||
+        (await chrome.windows.get(tab.windowId)).state === "minimized")
+      throw Error("CHROME_MINIMIZED");
     if (
       current.id !== tab.id ||
       after.fingerprint !== before.fingerprint ||

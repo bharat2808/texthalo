@@ -239,10 +239,33 @@ impl ReaderBridge {
         let inner = self.shared.0.lock().unwrap();
         json!({"connected":inner.relay.is_some()&&inner.seen.is_some_and(|seen|seen.elapsed()<Duration::from_secs(10)),"reader":inner.reader})
     }
+    // Wait before enqueuing, so minimized time does not consume the relay timeout.
+    pub(crate) fn command_while(
+        &self,
+        command: Value,
+        active: impl Fn() -> bool,
+    ) -> Result<Value, String> {
+        loop {
+            if !active() {
+                return Err("Preparation stopped".into());
+            }
+            match self.command(command.clone()) {
+                Err(error) if error == "CHROME_MINIMIZED" => {
+                    let (lock, wake) = &*self.shared;
+                    let inner = lock.lock().unwrap();
+                    drop(
+                        wake.wait_timeout(inner, Duration::from_millis(200))
+                            .unwrap(),
+                    );
+                }
+                result => return result,
+            }
+        }
+    }
     pub(crate) fn command(&self, mut command: Value) -> Result<Value, String> {
         if !matches!(
             command["type"].as_str(),
-            Some("inspect" | "ocr" | "navigate")
+            Some("inspect" | "ocr" | "navigate" | "chapters" | "chapter-navigate")
         ) {
             return Err("Unsupported browser command".into());
         }
@@ -257,6 +280,24 @@ impl ReaderBridge {
                     .is_some_and(|seen| seen.elapsed() < Duration::from_secs(10))
             {
                 return Err("Connect the book from the Chrome extension first.".into());
+            }
+            if command["bookId"].is_string()
+                && inner
+                    .reader
+                    .as_ref()
+                    .is_some_and(|r| r["bookId"] != command["bookId"])
+            {
+                return Err("Connected book changed".into());
+            }
+            if matches!(
+                command["type"].as_str(),
+                Some("navigate" | "ocr" | "chapters" | "chapter-navigate")
+            ) && inner
+                .reader
+                .as_ref()
+                .is_some_and(|r| r["windowState"] == "minimized")
+            {
+                return Err("CHROME_MINIMIZED".into());
             }
             if inner.pending.len() >= 8 {
                 return Err("Too many pending reader commands".into());
@@ -276,6 +317,12 @@ impl ReaderBridge {
         let result =
             result.map_err(|_| "Browser relay did not respond. Reconnect the book.".to_string())?;
         if result["ok"] != true {
+            if result["error"] == "CHROME_MINIMIZED" {
+                let mut inner = lock.lock().unwrap();
+                if let Some(reader) = inner.reader.as_mut() {
+                    reader["windowState"] = json!("minimized");
+                }
+            }
             return Err(result["error"]
                 .as_str()
                 .unwrap_or("Browser command failed")
@@ -318,6 +365,77 @@ mod relay_tests {
     use super::*;
     fn reader() -> Value {
         json!({"status":"ready","url":"https://read.amazon.ca/?asin=B0GY3RKVRZ","bookId":"B0GY3RKVRZ"})
+    }
+    #[test]
+    fn minimized_capture_is_a_recoverable_wait_not_an_enqueued_timeout() {
+        let bridge = ReaderBridge::disabled();
+        let relay = uuid::Uuid::new_v4().to_string();
+        let mut r = reader();
+        r["windowState"] = json!("minimized");
+        bridge
+            .route("/register", json!({"relayId":relay,"reader":r}))
+            .unwrap();
+        let before = Instant::now();
+        assert_eq!(
+            bridge.command(json!({"type":"ocr"})).unwrap_err(),
+            "CHROME_MINIMIZED"
+        );
+        assert!(before.elapsed() < Duration::from_secs(1));
+        assert!(bridge.shared.0.lock().unwrap().queue.is_empty());
+    }
+    #[test]
+    fn minimized_wait_can_be_cancelled_without_queuing_a_page_turn() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let bridge = ReaderBridge::disabled();
+        let relay = uuid::Uuid::new_v4().to_string();
+        let mut r = reader();
+        r["windowState"] = json!("minimized");
+        bridge
+            .route("/register", json!({"relayId":relay,"reader":r}))
+            .unwrap();
+        let active = Arc::new(AtomicBool::new(true));
+        let worker = bridge.clone();
+        let flag = active.clone();
+        let task = std::thread::spawn(move || {
+            worker.command_while(json!({"type":"navigate"}), || flag.load(Ordering::SeqCst))
+        });
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(bridge.shared.0.lock().unwrap().queue.is_empty());
+        active.store(false, Ordering::SeqCst);
+        assert_eq!(task.join().unwrap().unwrap_err(), "Preparation stopped");
+    }
+    #[test]
+    fn restoring_the_window_resumes_the_same_command() {
+        let bridge = ReaderBridge::disabled();
+        let relay = uuid::Uuid::new_v4().to_string();
+        let mut r = reader();
+        r["windowState"] = json!("minimized");
+        bridge
+            .route("/register", json!({"relayId":relay,"reader":r}))
+            .unwrap();
+        let worker = bridge.clone();
+        let task = std::thread::spawn(move || {
+            worker.command_while(
+                json!({"type":"navigate","fingerprint":"saved-view"}),
+                || true,
+            )
+        });
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(bridge.shared.0.lock().unwrap().queue.is_empty());
+        let mut r = reader();
+        r["windowState"] = json!("normal");
+        bridge
+            .route("/register", json!({"relayId":relay,"reader":r.clone()}))
+            .unwrap();
+        let command = bridge.route("/poll", json!({"relayId":relay})).unwrap().1["command"].clone();
+        assert_eq!(command["fingerprint"], "saved-view");
+        bridge
+            .route(
+                "/reply",
+                json!({"relayId":relay,"id":command["id"],"result":{"ok":true,"data":r}}),
+            )
+            .unwrap();
+        assert_eq!(task.join().unwrap().unwrap()["windowState"], "normal");
     }
     #[test]
     fn commands_require_the_registered_relay_and_return_their_reply() {

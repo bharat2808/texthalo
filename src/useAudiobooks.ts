@@ -28,11 +28,17 @@ export type Audiobook = {
   complete: boolean;
   fromBeginning: boolean;
   message: string | null;
+  recovery?: {
+    step: "chapter" | "searching" | "matched" | "unresolved";
+    label: string;
+    nearby?: { sentenceId: string; seconds: number; page: string } | null;
+  } | null;
   activity: "forward" | "backfill" | "selected" | "locating" | null;
   resume: { page: string; chapter: string | null } | null;
   pendingPage: string | null;
   backfillBlocked: string | null;
   backfillProgress: {
+    wholeBook?: boolean;
     chapter: string | null;
     phase: "searching" | "rendering" | "publishing";
     pages: number;
@@ -65,6 +71,7 @@ export type AudiobookState = {
     differentPage: boolean;
   } | null;
   generating: string | null;
+  readerWarning?: { bookId: string; code: "chrome-minimized" } | null;
   playback: { bookId: string; audio: Audio } | null;
 };
 const empty: AudiobookState = {
@@ -135,7 +142,7 @@ export function completeChapter(id: string) {
 
 export function preparationLabel(book: Audiobook) {
   const progress = book.backfillProgress;
-  if (book.activity === "locating") return "Locating your saved sentence…";
+  if (book.activity === "locating") return book.recovery?.label || "Locating your saved sentence…";
   if (book.pendingPage && book.activity === null) {
     return `Selected page saved · ${book.pendingPage}. Resume preparing to listen.`;
   }
@@ -153,7 +160,9 @@ export function preparationLabel(book: Audiobook) {
     return `Preparing pages ahead · ${progress.pages} earlier pages saved`;
   }
   if (progress.phase === "searching") {
-    return `Finding chapter beginning · ${progress.pages} earlier pages captured`;
+    return progress.wholeBook
+      ? `Finding missing earlier passages · ${progress.pages} pages captured`
+      : `Finding chapter beginning · ${progress.pages} earlier pages captured`;
   }
   if (progress.phase === "publishing")
     return `Adding earlier audio to ${chapter}`;

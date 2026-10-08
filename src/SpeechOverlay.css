@@ -618,3 +618,27 @@ body:has(.overlay-root),
   line-height: 1.5;
   color: rgba(255, 255, 255, 0.72);
 }
+
+.reader-window-warning {
+  box-sizing: border-box;
+  height: 100px;
+  flex-shrink: 0;
+  margin: 0 12px 10px;
+  padding: 10px 12px;
+  border: 1px solid rgba(244, 190, 79, .35);
+  border-radius: 10px;
+  background: rgba(244, 190, 79, .09);
+  color: #f4ce84;
+  font-size: 12px;
+  line-height: 1.4;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.reader-window-warning strong { font-weight: 600; }
+.reader-window-warning span { color: #d9c49f; }
+
+.playback-overlay.has-reader-warning { height: 154px; }
+.playback-overlay.controls-expanded.has-reader-warning { height: 222px; }
+.book-tray.book-expanded.has-reader-warning { height: 386px; }
+.playback-overlay.book-playing-expanded.has-reader-warning { height: 454px; }

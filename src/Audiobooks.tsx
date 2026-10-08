@@ -190,6 +190,13 @@ export default function Audiobooks() {
                 </p>
               )}
               <div className="audiobook-actions">
+                {book.message && book.recovery?.nearby && (
+                  <button
+                    disabled={busy || !!state.generating}
+                    title="Replay saved audio from a verified earlier sentence. Preparation stays paused."
+                    onClick={() => run(() => listenBook(book.id, book.recovery!.nearby!.seconds))}
+                  >Replay from nearby</button>
+                )}
                 <button
                   className="primary"
                   disabled={
@@ -215,7 +222,7 @@ export default function Audiobooks() {
                       ? "Continue listening"
                       : "Play"}
                 </button>
-                {open?.book?.id === book.id && open.differentPage && (
+                {open?.book?.id === book.id && (open.differentPage || book.recovery?.step === "unresolved") && (
                   <button
                     disabled={busy}
                     onClick={() =>

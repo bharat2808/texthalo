@@ -32,10 +32,10 @@ function harness() {
       new URL("../browser-extension/background.js", import.meta.url),
       "utf8",
     ) +
-      `\nglobalThis.api={pumpRelay,setBinding(binding){relayState=binding;relayPort={};},stop(){relayState=null;},native(fn){nativeRelay=fn;},reader(fn){activeTab=fn;inspect=async()=>({status:'ready',bookId:'B0GY3RKVRZ'});}};`,
+      `\nglobalThis.api={run,pumpRelay,setBinding(binding){relayState=binding;relayPort={};},stop(){relayState=null;},native(fn){nativeRelay=fn;},reader(fn){activeTab=fn;inspect=async()=>({status:'ready',bookId:'B0GY3RKVRZ'});}};`,
     context,
   );
-  return { api: context.api, listener };
+  return { api: context.api, listener, chrome: context.chrome };
 }
 test("webpage and foreign-extension messages cannot invoke the app relay", () => {
   const { listener } = harness();
@@ -175,4 +175,64 @@ test("popup times out a worker that never responds", async () => {
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(element("supported").textContent, "Unavailable");
   assert.match(element("status").textContent, /timed out/);
+});
+
+function minimizedHarness(state) {
+  const h = harness();
+  const tab = {id:1,windowId:2,url:"https://read.amazon.ca/?asin=B0GY3RKVRZ"};
+  h.chrome.windows = {get:async()=>({state})};
+  h.chrome.tabs.get=async()=>tab;
+  h.chrome.tabs.query=async()=>[tab];
+  let turns=0,captures=0;
+  h.chrome.tabs.sendMessage=async(_id,message)=>{
+    if(message.type==="navigate") turns++;
+    return {ok:true,data:{status:"ready",bookId:"B0GY3RKVRZ",fingerprint:"view",viewport:{visualScale:1}}};
+  };
+  h.chrome.tabs.getZoom=async()=>1;
+  h.chrome.tabs.captureVisibleTab=async()=>{captures++;return "png";};
+  return {...h,counts:()=>({turns,captures})};
+}
+test("a minimized book remains connected and reports its window state",async()=>{
+  const {api}=minimizedHarness("minimized");
+  const reader=await api.run({type:"inspect",tabId:1});
+  assert.equal(reader.status,"ready");
+  assert.equal(reader.windowState,"minimized");
+});
+test("chapter commands are forwarded to the connected book and blocked while minimized",async()=>{
+  const {api,chrome}=minimizedHarness("normal");
+  let forwarded;
+  chrome.tabs.sendMessage=async(_id,message)=>{forwarded=message;return {ok:true,data:{chapters:[]}};};
+  await api.run({type:"chapters",tabId:1,bookId:"B0GY3RKVRZ",fingerprint:"view"});
+  assert.equal(forwarded.type,"chapters");
+  chrome.windows.get=async()=>({state:"minimized"});
+  for(const type of ["chapters","chapter-navigate"])
+    await assert.rejects(api.run({type,tabId:1,bookId:"B0GY3RKVRZ",fingerprint:"view"}),/CHROME_MINIMIZED/);
+});
+test("minimized windows refuse navigation and capture before changing the reader",async()=>{
+  const {api,counts}=minimizedHarness("minimized");
+  for(const type of ["navigate","ocr"]){
+    await assert.rejects(api.run({type,tabId:1,bookId:"B0GY3RKVRZ",fingerprint:"view",direction:"next"}),/CHROME_MINIMIZED/);
+  }
+  assert.deepEqual(counts(),{turns:0,captures:0});
+});
+test("an unfocused normal window still allows pagination",async()=>{
+  const {api,counts}=minimizedHarness("normal");
+  await api.run({type:"navigate",tabId:1,bookId:"B0GY3RKVRZ",fingerprint:"view",direction:"next"});
+  assert.equal(counts().turns,1);
+});
+test("minimizing during a rejected capture waits instead of reporting missing permission",async()=>{
+  const {api,chrome}=minimizedHarness("normal");
+  chrome.tabs.captureVisibleTab=async()=>{
+    chrome.windows.get=async()=>({state:"minimized"});
+    throw Error("Capture unavailable");
+  };
+  await assert.rejects(api.run({type:"ocr",tabId:1,bookId:"B0GY3RKVRZ",fingerprint:"view"}),/CHROME_MINIMIZED/);
+});
+test("minimizing during a successful capture discards that capture and waits",async()=>{
+  const {api,chrome}=minimizedHarness("normal");
+  chrome.tabs.captureVisibleTab=async()=>{
+    chrome.windows.get=async()=>({state:"minimized"});
+    return "png";
+  };
+  await assert.rejects(api.run({type:"ocr",tabId:1,bookId:"B0GY3RKVRZ",fingerprint:"view"}),/CHROME_MINIMIZED/);
 });

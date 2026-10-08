@@ -1,6 +1,6 @@
 (() => {
   if (globalThis.__textHaloReader) return;
-  const VERSION = "kindle-dom-0.2";
+  const VERSION = "kindle-dom-0.3";
   const supported = () =>
     ["read.amazon.ca", "read.amazon.com"].includes(location.hostname) &&
     /^[A-Z0-9]{10}$/i.test(
@@ -342,7 +342,72 @@
       "Page control was clicked, but a changed reading position could not be verified.",
     );
   }
-  const api = { inspect, navigate };
+  const chapterLists = () => all('[role="listbox"]').filter(visible);
+  function validateChapterRequest(message) {
+    const before = inspect();
+    if (before.status !== "ready" || before.bookId !== message.bookId ||
+        before.fingerprint !== message.fingerprint)
+      throw Error("The reader changed. Inspect again before selecting a chapter.");
+    return before;
+  }
+  async function openChapters() {
+    if (!chapterLists().length) {
+      const toggle = all('button,[role="button"]').find(el => visible(el) && name(el) === "Table of Contents");
+      if (!toggle) throw Error("Chapter sidebar unavailable.");
+      toggle.click();
+    }
+    for (let i=0;i<8;i++) {
+      const lists = chapterLists();
+      if (lists.length === 1) return lists[0];
+      if (lists.length > 1) throw Error("Chapter sidebar is ambiguous.");
+      await new Promise(resolve => setTimeout(resolve,100));
+    }
+    throw Error("Chapter sidebar unavailable.");
+  }
+  function closeChapters() {
+    if (!chapterLists().length) return;
+    const close = all('button,[role="button"]').filter(el => visible(el) && name(el) === "Close");
+    if (close.length === 1) close[0].click();
+    else throw Error("Close the Kindle sidebar before continuing.");
+  }
+  function chapterEntries(list, bookId) {
+    return Array.from(list.querySelectorAll('button,[role="button"],[role="option"],a'))
+      .filter(el => !el.disabled && el.getAttribute("aria-disabled") !== "true" && name(el))
+      .map((el,index) => ({el,id:hash(`${bookId}:${index}:${name(el)}`),label:name(el)}));
+  }
+  async function chapters(message) {
+    const before = validateChapterRequest(message);
+    try {
+      const list = await openChapters();
+      return {chapters:chapterEntries(list,before.bookId).map(({id,label}) => ({id,label}))};
+    } finally { closeChapters(); }
+  }
+  async function chapterNavigate(message) {
+    const before = validateChapterRequest(message);
+    let entry;
+    try {
+      const list = await openChapters();
+      entry = chapterEntries(list,before.bookId).find(c => c.id === message.chapterId);
+      if (!entry) throw Error("The chapter list changed or this chapter is unavailable.");
+      if (new URL(location.href).searchParams.get("asin") !== before.bookId)
+        throw Error("The opened book changed.");
+      entry.el.scrollIntoView({block:"nearest"});
+      entry.el.click();
+    } finally { closeChapters(); }
+    let last="", stable=0;
+    for (let i=0;i<28;i++) {
+      await new Promise(resolve => setTimeout(resolve,250));
+      const after=inspect();
+      if (after.bookId !== before.bookId) throw Error("The opened book changed.");
+      if (after.status === "ready" && after.fingerprint !== before.fingerprint) {
+        stable=after.fingerprint === last ? stable+1 : 0;
+        last=after.fingerprint;
+        if (stable>=2) return {...after,navigationVerified:true,chapter:{id:entry.id,label:entry.label}};
+      }
+    }
+    throw Error("Chapter selection did not produce a verified reading position.");
+  }
+  const api = { inspect, navigate, chapters, chapterNavigate };
   globalThis.__textHaloReader = api;
   chrome.runtime.onMessage.addListener((message, sender, respond) => {
     if (sender.id !== chrome.runtime.id || message?.protocolVersion !== 1)
@@ -351,8 +416,9 @@
       respond({ ok: true, data: inspect() });
       return;
     }
-    if (message.type === "navigate") {
-      navigate(message).then(
+    if (["navigate", "chapters", "chapter-navigate"].includes(message.type)) {
+      const operation = message.type === "chapters" ? chapters : message.type === "chapter-navigate" ? chapterNavigate : navigate;
+      operation(message).then(
         (data) => respond({ ok: true, data }),
         (error) => respond({ ok: false, error: error.message }),
       );

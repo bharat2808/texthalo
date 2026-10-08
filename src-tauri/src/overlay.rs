@@ -124,6 +124,11 @@ fn tick(app: &AppHandle) {
     let owned = crate::assistant::sync_speech(app);
     let assistant_error = crate::assistant::assistant_error_overlay_height(app);
     let reader = app.state::<crate::reader_bridge::ReaderBridge>().status();
+    let minimized = app
+        .state::<crate::audiobooks::Audiobooks>()
+        .minimized_preparation(&reader)
+        .is_some();
+    let notice_height = if minimized { 110.0 } else { 0.0 };
     let book = app
         .state::<crate::audiobooks::Audiobooks>()
         .tray(&reader)
@@ -142,10 +147,12 @@ fn tick(app: &AppHandle) {
                 position_sized(
                     &window,
                     350.0,
-                    if playback.available { 344.0 } else { 276.0 },
+                    (if playback.available { 344.0 } else { 276.0 }) + notice_height,
                 );
             } else if !error && (expanded || hovered || playback.paused) {
-                position_sized(&window, 350.0, 112.0);
+                position_sized(&window, 350.0, 112.0 + notice_height);
+            } else if minimized && !error {
+                position_sized(&window, 350.0, 44.0 + notice_height);
             } else {
                 position(&window, error);
             }

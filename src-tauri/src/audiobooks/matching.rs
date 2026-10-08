@@ -361,6 +361,26 @@ pub(super) fn continuation_offset(book: &Book, text: &str) -> Result<Option<usiz
     }
     Ok(None)
 }
+// Earlier groups establish location only; their offsets are never append offsets.
+pub(super) fn earlier_anchor(book: &Book, text: &str) -> Result<Option<(usize, usize)>, String> {
+    let index = Index::new(text);
+    let count = book.sentences.len();
+    for end in (count.saturating_sub(24)..count.saturating_sub(1)).rev() {
+        for length in (1..=5.min(end + 1)).rev() {
+            let text = book.sentences[end + 1 - length..=end]
+                .iter()
+                .map(|s| s.text.as_str())
+                .collect::<Vec<_>>()
+                .join(" ");
+            let words = text_words(&text);
+            let context = &words[words.len().saturating_sub(96)..];
+            if let Some(found) = index.align(context, Boundary::End)? {
+                return Ok(Some((end, found.end)));
+            }
+        }
+    }
+    Ok(None)
+}
 pub(super) fn head_offset(book: &Book, text: &str) -> Result<Option<usize>, String> {
     let index = Index::new(text);
     for context in contexts(book, true) {

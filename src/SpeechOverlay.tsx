@@ -285,6 +285,16 @@ export default function SpeechOverlay() {
   const bookOnly = status.phase === "idle" && !playback.available && !!bookTray;
   const currentBook =
     books.books.find((b) => b.id === books.playback?.bookId) ?? bookTray?.book;
+  const minimizedReader = books.readerWarning?.bookId === currentBook?.id && !!books.readerWarning;
+  const waitingForChrome = minimizedReader && playback.available && playback.buffered - playback.position < 0.25;
+  const readerNotice = minimizedReader ? (
+    <div className="reader-window-warning" role="status" aria-live="polite">
+      <strong>{waitingForChrome ? "Waiting for Chrome to be restored" : "Chrome is minimized"}</strong>
+      <span>{waitingForChrome
+        ? "Restore the Kindle window to resume preparing and listening."
+        : "Restore the Kindle window to prepare more audio. Buffered audio will keep playing."}</span>
+    </div>
+  ) : null;
   const playingDetectedBook =
     playback.available && books.playback?.bookId === bookTray?.book?.id;
   const preparingDetectedBook =
@@ -309,6 +319,16 @@ export default function SpeechOverlay() {
           )}
         </div>
         <div className="book-tray-actions">
+          {bookTray.book?.message && bookTray.book.recovery?.nearby && (
+            <button
+              disabled={busy || !!books.generating}
+              title="Replay saved audio from a verified earlier sentence. Preparation stays paused."
+              onClick={() => void bookAction(() => listenBook(
+                bookTray.book!.id,
+                bookTray.book!.recovery!.nearby!.seconds,
+              ))}
+            >Replay from nearby</button>
+          )}
           {!playingDetectedBook && (
             <button
               disabled={
@@ -330,7 +350,7 @@ export default function SpeechOverlay() {
                 : "Create audiobook"}
             </button>
           )}
-          {bookTray.book && bookTray.differentPage && (
+          {bookTray.book && (bookTray.differentPage || bookTray.book.recovery?.step === "unresolved") && (
             <button
               disabled={busy}
               onClick={() => {
@@ -413,7 +433,7 @@ export default function SpeechOverlay() {
   if (bookOnly)
     return (
       <div
-        className={`overlay-root speech-overlay playback-overlay book-tray ${showControls ? "book-expanded" : ""}`}
+        className={`overlay-root speech-overlay playback-overlay book-tray ${showControls ? "book-expanded" : ""} ${minimizedReader ? "has-reader-warning" : ""}`}
         onMouseEnter={() => {
           pointerInside.current = true;
           interaction();
@@ -470,6 +490,7 @@ export default function SpeechOverlay() {
             ×
           </button>
         </div>
+        {readerNotice}
         {bookPanel}
       </div>
     );
@@ -487,7 +508,7 @@ export default function SpeechOverlay() {
           : t("Speaking");
   return (
     <div
-      className={`overlay-root speech-overlay playback-overlay ${status.phase} ${showControls ? "controls-expanded" : ""} ${bookPanel ? "book-playing-expanded" : ""} ${playback.paused ? "paused" : ""}`}
+      className={`overlay-root speech-overlay playback-overlay ${status.phase} ${showControls ? "controls-expanded" : ""} ${bookPanel ? "book-playing-expanded" : ""} ${playback.paused ? "paused" : ""} ${minimizedReader ? "has-reader-warning" : ""}`}
       onMouseEnter={() => {
         pointerInside.current = true;
         interaction();
@@ -641,6 +662,7 @@ export default function SpeechOverlay() {
           </div>
         </div>
       ) : null}
+      {readerNotice}
       {bookPanel}
     </div>
   );
