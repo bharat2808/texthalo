@@ -9,7 +9,7 @@
     <header>
       <img src="icons/32.png" width="24" height="24" alt="" /><strong
         >TextHalo Reader</strong
-      ><span>Browser relay</span>
+      ><span>Reader controls</span>
     </header>
     <div class="support">
       <span>Supported website</span><strong id="supported">Checking…</strong>
@@ -36,10 +36,20 @@
       <p id="position"></p>
     </section>
     <p id="status" role="status">Looking for an open book…</p>
-    <button id="connect" hidden>Enable page capture</button>
+    <button id="connect" hidden>Connect to TextHalo</button>
+    <section id="controls" hidden aria-label="Audiobook controls">
+      <p id="preparation" role="status"></p>
+      <div class="actions">
+        <button id="page">Listen from this page</button>
+        <button id="full">Build complete audiobook</button>
+      </div>
+      <p id="control-error" role="alert"></p>
+      <button id="disconnect">Disconnect</button>
+    </section>
     <footer>
-      Create, listen and manage your audiobooks in TextHalo. Page capture is
-      enabled for this tab when you click the extension.
+      Requires the running TextHalo Mac app and reader helper. Connecting shares this
+      book's title and position with the app. Audiobook controls capture visible pages
+      and turn pages as needed; OCR, narration and saved audio stay on your Mac.
     </footer>
     <script src="popup.js"></script>
   </body>

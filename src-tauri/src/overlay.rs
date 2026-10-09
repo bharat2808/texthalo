@@ -133,7 +133,14 @@ fn tick(app: &AppHandle) {
         .state::<crate::audiobooks::Audiobooks>()
         .tray(&reader)
         .is_some();
-    let visible = ((visible || book) && !owned) || assistant_error.is_some();
+    let audiobook_playing = !crate::audiobooks::audiobook_state(app.clone())["playback"].is_null();
+    let reader_connected = reader["connected"] == true;
+    let visible = ((if audiobook_playing {
+        reader_connected && (visible || book)
+    } else {
+        visible || book
+    }) && !owned)
+        || assistant_error.is_some();
     let Some(window) = app.get_webview_window("speech-overlay") else {
         return;
     };

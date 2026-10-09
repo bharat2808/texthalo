@@ -75,3 +75,12 @@ button:focus-visible {
 [hidden] {
   display: none !important;
 }
+
+body { width: 340px; }
+.actions { display: grid; gap: 8px; }
+#disconnect { margin-top: 12px; background: #303744; color: #edf1f7; }
+#control-error { color: #ffaca5; }
+
+
+body { max-height: 560px; overflow-y: auto; }
+.actions button:not(#page) { background: #303744; color: #edf1f7; }

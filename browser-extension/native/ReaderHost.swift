@@ -76,7 +76,7 @@ import UniformTypeIdentifiers
         return response
     }
     static func relay(_ request: Request) async throws -> [String:Any] {
-        let routes=["relay-register":"register","relay-poll":"poll","relay-reply":"reply","relay-disconnect":"disconnect"]
+        let routes=["relay-register":"register","relay-poll":"poll","relay-reply":"reply","relay-disconnect":"disconnect","relay-controls":"controls","relay-control":"control"]
         guard let route=routes[request.type],let payload=request.payload,payload.utf8.count<900_000,
               let body=payload.data(using:.utf8), (try JSONSerialization.jsonObject(with:body)) is [String:Any] else {throw failure("Invalid app relay request")}
         let config=FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/kiegen/reader-bridge.json")
@@ -87,8 +87,11 @@ import UniformTypeIdentifiers
         call.setValue("Bearer \(token)",forHTTPHeaderField:"Authorization");call.setValue("application/json",forHTTPHeaderField:"Content-Type")
         call.httpBody=body;call.timeoutInterval=8
         let (data,response)=try await URLSession.shared.data(for:call)
-        guard (response as? HTTPURLResponse)?.statusCode==200,data.count<950_000,
-              let result=try JSONSerialization.jsonObject(with:data) as? [String:Any] else {throw failure("The TextHalo app relay refused the request.")}
+        guard data.count<950_000,
+              let result=try JSONSerialization.jsonObject(with:data) as? [String:Any] else {throw failure("Invalid TextHalo app reply.")}
+        guard (response as? HTTPURLResponse)?.statusCode==200 else {
+            throw failure(result["error"] as? String ?? "The TextHalo app relay refused the request.")
+        }
         return ["ok":true,"protocolVersion":1,"requestId":request.requestId,"data":result]
     }
     static func main() async {

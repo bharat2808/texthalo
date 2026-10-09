@@ -53,6 +53,22 @@ async function inspect(tab) {
   };
 }
 async function run(message) {
+  if (["reader-controls", "reader-control"].includes(message.type)) {
+    const tab = await activeTab();
+    const reader = await inspect(tab);
+    if (!relayState || relayState.tabId !== tab.id || relayState.bookId !== reader.bookId)
+      throw Error("Connect this book to TextHalo first.");
+    // Use a separate native process: control actions can need the persistent relay pump.
+    const response = await chrome.runtime.sendNativeMessage(HOST, {
+      protocolVersion: 1,
+      requestId: crypto.randomUUID(),
+      type: message.type === "reader-controls" ? "relay-controls" : "relay-control",
+      payload: JSON.stringify({relayId: relayState.id, bookId: reader.bookId,
+        action: message.action, fingerprint: message.fingerprint}),
+    });
+    if (!response?.ok) throw Error(response?.error || "Cannot reach TextHalo.");
+    return response.data;
+  }
   if (message.type === "reader-status") {
     const [tab] = await chrome.tabs.query({
       active: true,
@@ -71,7 +87,7 @@ async function run(message) {
       ...state,
       supported: true,
       platform: "kindle",
-      connected: relayState?.tabId === tab.id,
+      connected: relayState?.tabId === tab.id && relayState.bookId === state.bookId,
     };
   }
   if (message.type === "bridge-status")
@@ -322,7 +338,7 @@ async function discover(tabId) {
     if (reader.status !== "ready") return;
     if (relayState?.tabId === tab.id && relayState.bookId === reader.bookId)
       return;
-    await connectRelay(tab);
+    // Presence may refresh an existing connection, but never starts one.
   } finally {
     discovering = false;
   }

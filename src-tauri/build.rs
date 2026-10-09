@@ -110,7 +110,41 @@ fn build_assistant() {
     );
 }
 
+fn build_reader_zip() {
+    let root = std::path::Path::new("../browser-extension");
+    let files = [
+        "manifest.json",
+        "background.js",
+        "kindle.js",
+        "popup.html",
+        "popup.js",
+        "popup.css",
+        "icons/16.png",
+        "icons/32.png",
+        "icons/48.png",
+        "icons/128.png",
+    ];
+    for file in files {
+        println!("cargo:rerun-if-changed=../browser-extension/{file}");
+    }
+    let destination =
+        std::path::Path::new(&std::env::var("OUT_DIR").unwrap()).join("texthalo-reader.zip");
+    // Recreate the allowlisted archive; never carry stale entries between builds.
+    if destination.exists() {
+        std::fs::remove_file(&destination).expect("remove old reader archive");
+    }
+    let status = std::process::Command::new("/usr/bin/zip")
+        .arg("-q")
+        .arg(&destination)
+        .args(files)
+        .current_dir(root)
+        .status()
+        .expect("zip is required to package TextHalo Reader");
+    assert!(status.success(), "package TextHalo Reader");
+}
+
 fn main() {
+    build_reader_zip();
     build_assistant();
     println!("cargo:rerun-if-env-changed=VITE_TEXTHALO_API_URL");
     println!("cargo:rerun-if-env-changed=VITE_TEXTHALO_WEBSITE_URL");

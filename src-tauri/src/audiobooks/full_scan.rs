@@ -300,7 +300,6 @@ impl FullScan {
                 let mut b = b.clone();
                 b.saved_ranges.clear();
                 b.full_scan = None;
-                b.backfill = None;
                 b
             })
             .collect();
@@ -309,7 +308,6 @@ impl FullScan {
         draft.audio_file = default_audio();
         draft.saved_ranges.clear();
         draft.full_scan = None;
-        draft.backfill = None;
         draft.pages.clear();
         draft.sentences.clear();
         draft.checkpoints.clear();
@@ -409,9 +407,14 @@ impl FullScan {
             }
             self.reuse_policy = 1;
         }
-        if !self.draft.pages.is_empty() && self.phase == "finding-start" {
-            self.phase = "rendering".into();
+        self.phase = if self.transcript_ready() {
+            "rendering"
+        } else if self.draft.pages.is_empty() {
+            "finding-start"
+        } else {
+            "scanning"
         }
+        .into();
         self.index();
         self.reused = self
             .draft
@@ -429,8 +432,41 @@ impl FullScan {
             .count();
         Ok(())
     }
+    pub(super) fn transcript_ready(&self) -> bool {
+        self.draft.from_beginning
+            && self.draft.end_verified
+            && self.draft.pending.is_empty()
+            && !self.draft.pages.is_empty()
+    }
+    fn save_transcript(&self, root: &Path) -> Result<(), String> {
+        if !self.transcript_ready() {
+            return Err("The complete transcript has not been captured".into());
+        }
+        let chapters = self
+            .draft
+            .checkpoints
+            .iter()
+            .enumerate()
+            .map(|(i, chapter)| {
+                json!({"id":chapter.id,"label":chapter.label,"verifiedStart":chapter.verified_start,
+                "startSentence":chapter.sentence,"endSentence":self.draft.checkpoints.get(i+1)
+                    .map_or(self.draft.sentences.len(), |next| next.sentence)})
+            })
+            .collect::<Vec<_>>();
+        let transcript = json!({"version":1,"bookId":self.draft.book_id,"title":self.draft.title,
+            "complete":true,"pages":self.draft.pages,"chapters":chapters,
+            "text":self.draft.pages.iter().map(|p|p.text.as_str()).collect::<Vec<_>>().join("\n\n")});
+        let folder = self.folder(root)?;
+        let temporary = folder.join("transcript.tmp");
+        let mut output = fs::File::create(&temporary).map_err(|e| e.to_string())?;
+        output
+            .write_all(transcript.to_string().as_bytes())
+            .map_err(|e| e.to_string())?;
+        output.sync_all().map_err(|e| e.to_string())?;
+        fs::rename(temporary, folder.join("transcript.json")).map_err(|e| e.to_string())
+    }
     pub(super) fn view(&self) -> Value {
-        json!({"phase":self.phase,"pages":self.draft.pages.len(),"page":self.draft.pages.last().map(|p|&p.progress),"generated":self.draft.generated,"reused":self.reused,"pageReady":self.draft.generated,"pageTotal":self.draft.sentences.len()})
+        json!({"chapters":self.draft.checkpoints.len(),"completedChapters":self.draft.checkpoints.iter().enumerate().filter(|(i,c)|chapter_view(&self.draft,*i,c)["complete"]==true).count(),"transcriptReady":self.transcript_ready(),"total":self.draft.sentences.len(),"phase":self.phase,"pages":self.draft.pages.len(),"page":self.draft.pages.last().map(|p|&p.progress),"generated":self.draft.generated,"reused":self.reused,"pageReady":self.draft.generated,"pageTotal":self.draft.sentences.len()})
     }
     fn capture(&mut self, reader: &Value, text: &str, verified_turn: bool) -> Result<(), String> {
         if key(reader)? != self.draft.key {
@@ -484,7 +520,12 @@ impl FullScan {
             assemble(&mut self.draft, true)?;
             self.draft.end_verified = true;
         }
-        self.phase = "rendering".into();
+        self.phase = if self.transcript_ready() {
+            "rendering"
+        } else {
+            "scanning"
+        }
+        .into();
         Ok(())
     }
     fn reuse(&mut self, root: &Path) -> Result<bool, String> {
@@ -623,6 +664,100 @@ fn persist(
     *book = next;
     Ok(())
 }
+fn prepare_transcript_with(
+    scan: &mut FullScan,
+    root: &Path,
+    command: impl Fn(Value) -> Result<Value, String>,
+    active: impl Fn() -> bool,
+    mut checkpoint: impl FnMut(&FullScan) -> Result<(), String>,
+) -> Result<(), String> {
+    // A verified transcript makes all later rendering independent of Chrome.
+    if scan.transcript_ready() {
+        scan.save_transcript(root)?;
+        return Ok(());
+    }
+    let mut reader = command(json!({"type":"inspect"}))?;
+    if key(&reader)? != scan.draft.key {
+        return Err("Connected book changed".into());
+    }
+    if scan.draft.pages.is_empty() {
+        let mut visited = std::collections::HashSet::new();
+        for _ in 0..10_000 {
+            if !active() {
+                return Err("Preparation stopped".into());
+            }
+            if reader["startOfBook"] == true {
+                break;
+            }
+            if !visited.insert(reader["fingerprint"].to_string()) {
+                return Err("Reader repeated a view while finding the book beginning".into());
+            }
+            reader = command(json!({"type":"navigate","bookId":reader["bookId"],
+                "fingerprint":reader["fingerprint"],"direction":"previous"}))?;
+            if key(&reader)? != scan.draft.key {
+                return Err("Connected book changed".into());
+            }
+        }
+        if reader["startOfBook"] != true {
+            return Err("The beginning of the book could not be verified".into());
+        }
+    } else {
+        reader = restore_scan_view_with(
+            |request| {
+                if request["type"] == "ocr" {
+                    read_view_with(&command, request)
+                } else {
+                    command(request)
+                }
+            },
+            &active,
+            &scan.draft,
+            scan.draft.pages.last().unwrap(),
+        )?;
+    }
+    let mut need_capture = scan.draft.pages.is_empty();
+    let mut verified_turn = false;
+    while !scan.transcript_ready() {
+        if !active() {
+            return Err("Preparation stopped".into());
+        }
+        if !need_capture {
+            scan.phase = "scanning".into();
+            checkpoint(scan)?;
+            reader = command(json!({"type":"navigate","bookId":reader["bookId"],
+                "fingerprint":reader["fingerprint"],"direction":"next"}))?;
+            verified_turn = reader["navigationVerified"] == true;
+        }
+        if scan.draft.pages.len() >= 10_000 {
+            return Err("This recording reached the 10,000-page safety limit".into());
+        }
+        let result = read_fresh_view_with(
+            &command,
+            &active,
+            &scan.draft,
+            reader.clone(),
+            verified_turn,
+        )?;
+        if result["reader"]["fingerprint"] != reader["fingerprint"]
+            || key(&result["reader"])? != scan.draft.key
+        {
+            return Err("Reader moved while verifying full audiobook coverage".into());
+        }
+        let text = result["text"].as_str().ok_or("Page text unavailable")?;
+        if (text.trim().is_empty() && result["emptyConfirmed"] != true)
+            || text.chars().count() > 20_000
+        {
+            return Err("Page has no supported passage".into());
+        }
+        scan.capture(&result["reader"], text, verified_turn)?;
+        reader = result["reader"].clone();
+        need_capture = false;
+        checkpoint(scan)?;
+    }
+    scan.save_transcript(root)?;
+    checkpoint(scan)
+}
+
 pub(super) fn producer(app: &AppHandle, id: &str, token: &str) -> Result<(), String> {
     let service = app.state::<Audiobooks>();
     let bridge = app.state::<crate::reader_bridge::ReaderBridge>();
@@ -642,47 +777,13 @@ pub(super) fn producer(app: &AppHandle, id: &str, token: &str) -> Result<(), Str
         .unwrap_or_else(|| FullScan::new(&book));
     scan.recover(&root)?;
     persist(&service, id, token, &root, &scan)?;
-    let mut reader = bridge.command_while(json!({"type":"inspect"}), || {
-        generation_active(&service, id, token)
-    })?;
-    if key(&reader)? != book.key {
-        return Err("Connected book changed".into());
-    }
-    if scan.draft.pages.is_empty() {
-        let mut visited = std::collections::HashSet::new();
-        for _ in 0..10_000 {
-            if reader["startOfBook"] == true {
-                break;
-            }
-            if !visited.insert(reader["fingerprint"].to_string()) {
-                return Err("Reader repeated a view while finding the book beginning".into());
-            }
-            reader = navigate(&bridge, &service, id, token, &reader, "previous")?;
-            if key(&reader)? != book.key {
-                return Err("Connected book changed".into());
-            }
-        }
-        if reader["startOfBook"] != true {
-            return Err("The beginning of the book could not be verified".into());
-        }
-    } else if !scan.draft.end_verified {
-        let target = scan.draft.pages.last().unwrap();
-        reader = restore_scan_view_with(
-            |request| {
-                if request["type"] == "ocr" {
-                    read_view_with(
-                        |r| bridge.command_while(r, || generation_active(&service, id, token)),
-                        request,
-                    )
-                } else {
-                    bridge.command_while(request, || generation_active(&service, id, token))
-                }
-            },
-            || generation_active(&service, id, token),
-            &scan.draft,
-            target,
-        )?;
-    }
+    prepare_transcript_with(
+        &mut scan,
+        &root,
+        |request| bridge.command_while(request, || generation_active(&service, id, token)),
+        || generation_active(&service, id, token),
+        |scan| persist(&service, id, token, &root, scan),
+    )?;
     let mut settings = app
         .state::<crate::AppState>()
         .settings
@@ -691,8 +792,6 @@ pub(super) fn producer(app: &AppHandle, id: &str, token: &str) -> Result<(), Str
         .clone();
     settings.engine = crate::config::Engine::Kokoro;
     settings.kokoro = scan.draft.voice.clone();
-    let mut need_capture = scan.draft.pages.is_empty();
-    let mut verified_turn = false;
     loop {
         if !generation_active(&service, id, token) {
             return Ok(());
@@ -754,37 +853,7 @@ pub(super) fn producer(app: &AppHandle, id: &str, token: &str) -> Result<(), Str
             refresh_chapter_files(&root, current)?;
             return Ok(());
         }
-        if !need_capture {
-            scan.phase = "scanning".into();
-            persist(&service, id, token, &root, &scan)?;
-            reader = navigate(&bridge, &service, id, token, &reader, "next")?;
-            verified_turn = reader["navigationVerified"] == true;
-        }
-        if scan.draft.pages.len() >= 10_000 {
-            return Err("This recording reached the 10,000-page safety limit".into());
-        }
-        let result = read_fresh_view_with(
-            |request| bridge.command_while(request, || generation_active(&service, id, token)),
-            || generation_active(&service, id, token),
-            &scan.draft,
-            reader.clone(),
-            verified_turn,
-        )?;
-        if result["reader"]["fingerprint"] != reader["fingerprint"]
-            || key(&result["reader"])? != book.key
-        {
-            return Err("Reader moved while verifying full audiobook coverage".into());
-        }
-        let text = result["text"].as_str().ok_or("Page text unavailable")?;
-        if (text.trim().is_empty() && result["emptyConfirmed"] != true)
-            || text.chars().count() > 20_000
-        {
-            return Err("Page has no supported passage".into());
-        }
-        scan.capture(&result["reader"], text, verified_turn)?;
-        reader = result["reader"].clone();
-        need_capture = false;
-        persist(&service, id, token, &root, &scan)?;
+        return Err("The complete transcript is required before generating audio".into());
     }
 }
 
@@ -973,6 +1042,114 @@ mod recovery_tests {
     use super::tests::{fixture, scan_view};
     use super::*;
     use crate::audiobooks::tests::{book, reader};
+    #[test]
+    fn capture_finishes_and_saves_the_transcript_before_any_audio_generation() {
+        let root = std::env::temp_dir().join(format!("texthalo-transcript-{}", identity()));
+        fs::create_dir_all(&root).unwrap();
+        let mut scan = FullScan::new(&book());
+        scan.recover(&root).unwrap();
+        let at = std::cell::Cell::new(1u64);
+        let view = || {
+            let mut r = scan_view(at.get(), at.get() == 3);
+            r["navigationVerified"] = json!(true);
+            r
+        };
+        let command = |request: Value| -> Result<Value, String> {
+            match request["type"].as_str().unwrap() {
+                "inspect" => Ok(view()),
+                "navigate" => {
+                    assert_eq!(request["direction"], "next");
+                    at.set(at.get() + 1);
+                    Ok(view())
+                }
+                "ocr" => Ok(
+                    json!({"reader":view(),"text":format!("CHAPTER {}\nThe verified passage on this page is number {} and contains the complete chapter narration.",at.get(),at.get())}),
+                ),
+                other => panic!("Unexpected capture command: {other}"),
+            }
+        };
+        prepare_transcript_with(
+            &mut scan,
+            &root,
+            command,
+            || true,
+            |scan| {
+                assert_eq!(scan.draft.generated, 0);
+                assert_eq!(scan.draft.committed_samples, 0);
+                save(&scan.folder(&root)?, &scan.draft)
+            },
+        )
+        .unwrap();
+        assert!(scan.transcript_ready());
+        assert_eq!(scan.phase, "rendering");
+        let transcript: Value = serde_json::from_slice(
+            &fs::read(scan.folder(&root).unwrap().join("transcript.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(transcript["pages"].as_array().unwrap().len(), 3);
+        assert_eq!(transcript["chapters"].as_array().unwrap().len(), 3);
+        assert!(transcript["text"].as_str().unwrap().contains("number 3"));
+        // Reopening a captured transcript never inspects or navigates the browser.
+        let mut reopened: FullScan =
+            serde_json::from_value(serde_json::to_value(&scan).unwrap()).unwrap();
+        reopened.recover(&root).unwrap();
+        prepare_transcript_with(
+            &mut reopened,
+            &root,
+            |_| panic!("Chrome must not be required after capture"),
+            || true,
+            |_| Ok(()),
+        )
+        .unwrap();
+        assert_eq!(reopened.draft.generated, 0);
+        let mut offline = book();
+        offline.full_scan = Some(Box::new(reopened));
+        assert_eq!(
+            key(&captured_reader(&offline, true).unwrap()).unwrap(),
+            offline.key
+        );
+        assert!(captured_reader(&offline, false).is_none());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn interrupted_capture_preserves_pages_without_claiming_a_complete_transcript() {
+        let root = std::env::temp_dir().join(format!("texthalo-transcript-stop-{}", identity()));
+        fs::create_dir_all(&root).unwrap();
+        let mut scan = FullScan::new(&book());
+        scan.recover(&root).unwrap();
+        let active = std::cell::Cell::new(true);
+        let command = |request: Value| -> Result<Value, String> {
+            let reader = scan_view(1, false);
+            match request["type"].as_str().unwrap() {
+                "inspect" => Ok(reader),
+                "ocr" => Ok(
+                    json!({"reader":reader,"text":"CHAPTER ONE\nThis first passage is captured safely before the reader session is interrupted."}),
+                ),
+                _ => panic!("Cancellation must prevent any more page turns"),
+            }
+        };
+        let result = prepare_transcript_with(
+            &mut scan,
+            &root,
+            command,
+            || active.get(),
+            |scan| {
+                save(&scan.folder(&root)?, &scan.draft)?;
+                active.set(false);
+                Ok(())
+            },
+        );
+        assert_eq!(result.unwrap_err(), "Preparation stopped");
+        assert!(!scan.transcript_ready());
+        assert!(!scan.folder(&root).unwrap().join("transcript.json").exists());
+        scan.recover(&root).unwrap();
+        assert_eq!(scan.draft.pages.len(), 1);
+        assert_eq!(scan.draft.generated, 0);
+        assert_eq!(scan.phase, "scanning");
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn cache_identity_stays_with_the_original_occurrence_in_a_repeated_view() {
         let root = std::env::temp_dir().join(format!("texthalo-full-repeat-{}", identity()));

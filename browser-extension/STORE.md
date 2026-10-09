@@ -1,6 +1,6 @@
 # Chrome Web Store preparation
 
-This is TextHalo's macOS browser relay, version 0.3.0. It has not been submitted or published. Narration, page buffering, audio files and listening bookmarks belong to the TextHalo desktop app. The extension does not contain a player or audiobook library.
+This is TextHalo's macOS browser relay, version 0.4.0. It has not been submitted or published. Narration, page buffering, audio files and listening bookmarks belong to the TextHalo desktop app. The extension provides two connected-book actions: Listen from this page and Build complete audiobook; generation, audio storage and the saved library remain in the desktop app.
 
 ## Draft listing
 
@@ -8,7 +8,7 @@ Name: TextHalo Reader
 
 Single purpose: Connect the user's selected Kindle web book to the TextHalo desktop app by identifying reading content and relaying verified page capture and navigation requests.
 
-Description: Connect a supported Kindle web reader tab to TextHalo. The extension identifies the displayed book, reading position and page-image bounds, captures the selected tab when requested, and verifies requested page turns. TextHalo performs local OCR and manages narration, buffering, playback and saved listening progress. Requires macOS, the updated TextHalo app and its separately installed native relay helper. Supported hosts: read.amazon.ca and read.amazon.com. This is an experimental Kindle adapter; OCR and reader-layout compatibility are still being tested.
+Description: Connect a supported Kindle web reader tab to TextHalo. After the user chooses Connect to TextHalo, the extension identifies the displayed book, reading position and page-image bounds, captures the selected tab when requested, and verifies requested page turns. Choose Listen from this page or Build complete audiobook in the extension popup. Use the connected desktop overlay for playback controls. TextHalo performs local OCR and manages narration, audio files and saved listening progress. Requires macOS, the updated TextHalo app and its separately installed native relay helper. Supported hosts: read.amazon.ca and read.amazon.com. This is an experimental Kindle adapter; OCR and reader-layout compatibility are still being tested.
 
 No affiliation with or endorsement by Amazon. Kindle is a trademark of its respective owner.
 
@@ -33,7 +33,21 @@ Run `node browser-extension/package.mjs`. The allowlisted ZIP in `output/store/`
 
 Before submitting: validate the actual Store-assigned extension ID and update the helper origin check, native host allowed origin and setup ID together if needed. Finish signed app/helper installation, listing screenshots, public privacy/support URLs and broader live testing. Submit the finished extension for review when publication is requested. Add the actual Store URL to TextHalo after an item exists; do not create a placeholder installation link.
 
-Official references (checked October 6, 2026):
+Official references (checked October 9, 2026):
 - https://developer.chrome.com/docs/webstore/publish
 - https://developer.chrome.com/docs/webstore/cws-dashboard-privacy
 - https://developer.chrome.com/docs/extensions/develop/concepts/native-messaging
+
+
+## Readiness audit — October 9, 2026
+
+The MV3 package has narrow Kindle host access, bundled executable code, icons and an allowlisted archive. Native messaging is supported by Chrome; requiring a Mac desktop companion is not itself a publishing blocker. Store acceptance remains subject to review.
+
+Still required before submission:
+- Distribute the updated, signed app and signed reader helper with a user installation flow. Current app packaging does not install/register the helper; `native/setup.mjs --install` is a development setup, requiring source and a Swift compiler.
+- Create a Store draft, verify its assigned ID against `extension-id.txt`, manifest key and helper origin/registration, and test the Store-installed extension with the distributed app.
+- Publish the extension’s privacy disclosures and Limited Use statement; the current website privacy page does not describe this reader integration. Complete the Store privacy and permission fields.
+- Prepare listing screenshots, support details, and reviewer instructions/test content. Verify capture, page turns, connection loss, app restarts and audiobook playback with a real supported Kindle book.
+- Configure `VITE_READER_EXTENSION_URL` only after a real listing exists. Until then the app downloads its bundled ZIP for manual unpacked installation and links to setup instructions.
+
+No Store submission or public publication has been performed. The development ZIP is suitable for local testing, not a claim that review requirements are complete.

@@ -33,23 +33,15 @@ export type Audiobook = {
     label: string;
     nearby?: { sentenceId: string; seconds: number; page: string } | null;
   } | null;
-  activity: "forward" | "backfill" | "selected" | "locating" | "full-scan" | null;
-  fullPreparation?: {phase: string; pages: number; page: string | null; generated: number; reused: number} | null;
-  resume: { page: string; chapter: string | null } | null;
+  activity: "forward" | "selected" | "locating" | "full-scan" | null;
+  fullPreparation?: {chapters: number; completedChapters: number; transcriptReady: boolean; total: number; phase: string; pages: number; page: string | null; generated: number; reused: number} | null;
+  resume: { page: string; chapter: string | null; seconds: number; rangeId: string } | null;
   pendingPage: string | null;
-  backfillBlocked: string | null;
-  backfillProgress: {
-    wholeBook?: boolean;
-    chapter: string | null;
-    phase: "searching" | "rendering" | "publishing";
-    pages: number;
-    ready: number;
-    total: number | null;
-  } | null;
   checkpoints: Checkpoint[];
   passage: { text: string; page: string } | null;
 };
 export type Audio = {
+  start: number;
   position: number;
   buffered: number;
   duration: number | null;
@@ -138,45 +130,15 @@ export function generateBook(id?: string, full = false) {
   return invoke<string>("audiobook_generate", { id: id ?? null, full });
 }
 
-export function completeChapter(id: string) {
-  return invoke<string>("audiobook_complete_chapter", { id });
-}
-
 export function preparationLabel(book: Audiobook) {
-  const progress = book.backfillProgress;
   const full = book.fullPreparation;
   if (full && book.activity === "full-scan") {
     if (full.phase === "finding-start") return "Finding the beginning of the book…";
     if (full.phase === "publishing") return "Saving the complete audiobook…";
-    return `Creating full audiobook · ${full.page || "starting"} · ${full.generated} sentences ready · ${full.reused} reused`;
+    if (!full.transcriptReady) return `Capturing transcript · ${full.pages} pages saved · ${full.page || "starting"}`;
+    return `Generating audiobook · ${full.completedChapters}/${full.chapters} chapters ready`;
   }
-  if (book.activity === "locating") return book.recovery?.label || "Locating your saved sentence…";
-  if (book.pendingPage && book.activity === null) {
-    return `Selected page saved · ${book.pendingPage}. Resume preparing to listen.`;
-  }
-  if (book.pendingPage || book.activity === "selected") {
-    const page = book.pendingPage ? ` · ${book.pendingPage}` : "";
-    const sentences =
-      progress?.total != null
-        ? ` · ${progress.ready}/${progress.total} sentences`
-        : "";
-    return `Preparing selected page…${page}${sentences}`;
-  }
-  if (!progress) return "Preparing pages ahead of you";
-  const chapter = progress.wholeBook ? "audiobook" : progress.chapter || "chapter";
-  if (book.activity === "forward") {
-    return `Preparing pages ahead · ${progress.pages} earlier pages saved`;
-  }
-  if (progress.phase === "searching") {
-    return progress.wholeBook
-      ? `Finding missing earlier passages · ${progress.pages} pages captured`
-      : `Finding chapter beginning · ${progress.pages} earlier pages captured`;
-  }
-  if (progress.phase === "publishing")
-    return `Adding earlier audio to ${chapter}`;
-  if (progress.wholeBook && progress.total !== null)
-    return `Generating earlier audio · ${progress.ready}/${progress.total} sentences`;
-  return progress.total === null
-    ? `Preparing ${chapter} · ${progress.pages} earlier pages captured`
-    : `Preparing ${chapter} · ${progress.ready}/${progress.total} sentences`;
+  if (book.activity === "locating") return book.recovery?.label || "Locating the selected passage…";
+  if (book.pendingPage) return `Preparing selected page · ${book.pendingPage}`;
+  return "Preparing the current chapter…";
 }

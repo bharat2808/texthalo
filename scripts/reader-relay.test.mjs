@@ -32,7 +32,7 @@ function harness() {
       new URL("../browser-extension/background.js", import.meta.url),
       "utf8",
     ) +
-      `\nglobalThis.api={run,pumpRelay,setBinding(binding){relayState=binding;relayPort={};},stop(){relayState=null;},native(fn){nativeRelay=fn;},reader(fn){activeTab=fn;inspect=async()=>({status:'ready',bookId:'B0GY3RKVRZ'});}};`,
+      `\nglobalThis.api={run,pumpRelay,discover,setBinding(binding){relayState=binding;relayPort={};},stop(){relayState=null;},native(fn){nativeRelay=fn;},reader(fn){activeTab=fn;inspect=async()=>({status:'ready',bookId:'B0GY3RKVRZ'});}};`,
     context,
   );
   return { api: context.api, listener, chrome: context.chrome };
@@ -247,4 +247,99 @@ test("the app relay pump rejects removed sidebar commands", async () => {
     assert.match(reply.error,/Expired or unsupported app command/);
     assert.equal(forwarded,undefined);
   }
+});
+
+
+test("detecting a ready Kindle book never opens a native connection automatically", async () => {
+  const {api, chrome} = minimizedHarness("normal");
+  let connections = 0;
+  chrome.runtime.connectNative = () => { connections++; throw Error("Unexpected automatic connection"); };
+  await api.discover(1);
+  assert.equal(connections, 0);
+});
+
+test("reader controls require the selected book's relay and use a separate native request", async () => {
+  const {api, chrome} = minimizedHarness("normal");
+  await assert.rejects(api.run({type:"reader-control",action:"generate"}), /Connect this book/);
+  api.setBinding({id:"session",tabId:2,bookId:"B0GY3RKVRZ"});
+  await assert.rejects(api.run({type:"reader-control",action:"generate"}), /Connect this book/);
+  api.setBinding({id:"session",tabId:1,bookId:"B0GY3RKVRZ"});
+  let sent;
+  chrome.runtime.sendNativeMessage = async (host, message) => {
+    sent = {host,message};
+    return {ok:true,data:{accepted:true}};
+  };
+  const result = await api.run({type:"reader-control",action:"page",fingerprint:"view"});
+  assert.equal(result.accepted, true);
+  assert.equal(sent.host, "com.texthalo.reader");
+  assert.equal(sent.message.type, "relay-control");
+  const payload = JSON.parse(sent.message.payload);
+  assert.equal(payload.bookId, "B0GY3RKVRZ");
+  assert.equal(payload.relayId, "session");
+  assert.equal(payload.fingerprint, "view");
+});
+
+test("reader controls display native app failures", async () => {
+  const {api, chrome} = minimizedHarness("normal");
+  api.setBinding({id:"session",tabId:1,bookId:"B0GY3RKVRZ"});
+  chrome.runtime.sendNativeMessage = async () => ({ok:false,error:"Open TextHalo"});
+  await assert.rejects(api.run({type:"reader-controls"}), /Open TextHalo/);
+});
+
+
+test("the connected popup offers both simple actions before any book or playback exists", async () => {
+  const elements = new Map();
+  const element = id => {
+    if (!elements.has(id)) elements.set(id, {textContent:"",hidden:false,replaceChildren(){}});
+    return elements.get(id);
+  };
+  const sent=[];
+  const context={document:{getElementById:element},setTimeout,clearTimeout,
+    chrome:{runtime:{sendMessage:async message=>{
+      sent.push(message);
+      if(message.type==="reader-status") return {ok:true,data:{supported:true,status:"ready",connected:true}};
+      if(message.type==="reader-controls") return {ok:true,data:{context:{book:null,reader:{fingerprint:"view"}},playback:null,generating:null,busy:false}};
+      return {ok:true,data:{accepted:true}};
+    }}}};
+  vm.runInNewContext(readFileSync(new URL("../browser-extension/popup.js",import.meta.url),"utf8"),context);
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(element("controls").hidden,false);
+  assert.equal(element("page").disabled,false);
+  assert.equal(element("full").disabled,false);
+  element("page").onclick();
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.ok(sent.some(message=>message.type==="reader-control"&&message.action==="page"));
+});
+
+test("connected polling preserves visible controls and disables duplicate full builds", async () => {
+  const elements = new Map(), hiddenWrites = [];
+  const element = id => {
+    if (!elements.has(id)) {
+      let hidden = true;
+      elements.set(id, {textContent:"",value:"",replaceChildren(){},
+        get hidden(){return hidden;},set hidden(value){hidden=value;if(id==="controls")hiddenWrites.push(value);}});
+    }
+    return elements.get(id);
+  };
+  let generating = null;
+  const document = {getElementById:element,activeElement:null};
+  const context={document,setTimeout,clearTimeout,chrome:{runtime:{sendMessage:async message=>
+    message.type==="reader-status" ? {ok:true,data:{supported:true,status:"ready",connected:true}} :
+    {ok:true,data:{context:{book:{id:"book",checkpoints:[],generated:1},reader:{fingerprint:"view"}},
+      playback:{bookId:"book",audio:{paused:true,speed:1,position:0,buffered:60}},busy:false,generating}}
+  }}};
+  vm.runInNewContext(readFileSync(new URL("../browser-extension/popup.js",import.meta.url),"utf8")+
+    "\nglobalThis.refreshPopup=refresh;",context);
+  await new Promise(resolve=>setImmediate(resolve));
+
+  hiddenWrites.length=0;
+  await context.refreshPopup();
+  assert.equal(element("page").disabled,false);
+  assert.equal(element("full").disabled,false);
+  assert.equal(element("controls").hidden,false);
+  assert.ok(!hiddenWrites.includes(true));
+  generating = "book";
+  await context.refreshPopup();
+  assert.equal(element("full").disabled,true);
+  assert.equal(element("page").disabled,false);
 });

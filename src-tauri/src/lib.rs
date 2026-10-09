@@ -1502,7 +1502,7 @@ pub fn run() {
                 playback_hover: Mutex::new(false),
             });
             app.manage(
-                reader_bridge::ReaderBridge::start().unwrap_or_else(|error| {
+                reader_bridge::ReaderBridge::start(handle.clone()).unwrap_or_else(|error| {
                     eprintln!("[TextHalo] reader relay unavailable: {error}");
                     reader_bridge::ReaderBridge::disabled()
                 }),
@@ -1560,11 +1560,11 @@ pub fn run() {
             preview_voice,
             audiobooks::audiobook_state,
             audiobooks::audiobook_generate,
-            audiobooks::audiobook_complete_chapter,
             audiobooks::audiobook_play,
             audiobooks::audiobook_listen_page,
             audiobooks::audiobook_dismiss,
             audiobooks::audiobook_stop_generation,
+            reader_bridge::reader_extension_download,
             reader_bridge::reader_bridge_status,
             reader_bridge::reader_bridge_command,
             get_audio_history,

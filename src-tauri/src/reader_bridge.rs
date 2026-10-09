@@ -16,6 +16,8 @@ struct Inner {
     seen: Option<Instant>,
     queue: VecDeque<Value>,
     pending: HashMap<String, mpsc::Sender<Value>>,
+    control_busy: bool,
+    control_error: Option<String>,
 }
 #[derive(Clone)]
 pub struct ReaderBridge {
@@ -48,7 +50,7 @@ impl ReaderBridge {
             shared: Arc::new((Mutex::new(Inner::default()), Condvar::new())),
         }
     }
-    pub fn start() -> Result<Self, String> {
+    pub fn start(app: AppHandle) -> Result<Self, String> {
         let listener = TcpListener::bind(("127.0.0.1", 0)).map_err(|e| e.to_string())?;
         let port = listener.local_addr().map_err(|e| e.to_string())?.port();
         let token = uuid::Uuid::new_v4().to_string();
@@ -84,11 +86,12 @@ impl ReaderBridge {
                 }
                 let server = server.clone();
                 let token = token.clone();
+                let app = app.clone();
                 let concurrent = concurrent.clone();
                 std::thread::spawn(move || {
-                    let response = server.http(&mut stream, &token);
+                    let response = server.http(&mut stream, &token, Some(&app));
                     let (code, body) =
-                        response.unwrap_or((400, json!({"error":"Invalid relay request"})));
+                        response.unwrap_or_else(|error| (400, json!({"error":error})));
                     let body = body.to_string();
                     let _=write!(stream,"HTTP/1.1 {code} Reply\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len());
                     concurrent.fetch_sub(1, Ordering::SeqCst);
@@ -97,7 +100,12 @@ impl ReaderBridge {
         });
         Ok(bridge)
     }
-    fn http(&self, stream: &mut TcpStream, token: &str) -> Result<(u16, Value), String> {
+    fn http(
+        &self,
+        stream: &mut TcpStream,
+        token: &str,
+        app: Option<&AppHandle>,
+    ) -> Result<(u16, Value), String> {
         stream
             .set_read_timeout(Some(Duration::from_secs(5)))
             .map_err(|e| e.to_string())?;
@@ -158,7 +166,85 @@ impl ReaderBridge {
         }
         let body: Value = serde_json::from_slice(&bytes[boundary..boundary + length])
             .map_err(|e| e.to_string())?;
-        self.route(&route, body)
+        if matches!(route.as_str(), "/controls" | "/control") {
+            self.controls(app.ok_or("App controls unavailable")?, &route, body)
+        } else {
+            self.route(&route, body)
+        }
+    }
+    fn controls(&self, app: &AppHandle, route: &str, body: Value) -> Result<(u16, Value), String> {
+        {
+            let inner = self.shared.0.lock().unwrap();
+            if inner.relay.as_deref() != body["relayId"].as_str()
+                || inner.relay.is_none()
+                || !inner
+                    .seen
+                    .is_some_and(|s| s.elapsed() < Duration::from_secs(10))
+            {
+                return Err("Connect the extension to TextHalo first.".into());
+            }
+        }
+        let state = crate::audiobooks::audiobook_state(app.clone());
+        let context = &state["readerContext"];
+        if context.is_null() || context["reader"]["bookId"] != body["bookId"] {
+            return Err("The connected book changed. Reconnect the extension.".into());
+        }
+        if route == "/controls" {
+            let inner = self.shared.0.lock().unwrap();
+            let mut context = context.clone();
+            // Only the connected book's controls are sent to Chrome; no saved passage text.
+            if let Some(book) = context["book"].as_object_mut() {
+                book.remove("passage");
+            }
+            return Ok((
+                200,
+                json!({"context":context,"playback":state["playback"],
+                "generating":state["generating"],"busy":inner.control_busy,"error":inner.control_error,
+                "readerWarning":state["readerWarning"]}),
+            ));
+        }
+        let action = body["action"]
+            .as_str()
+            .ok_or("Missing reader action")?
+            .to_owned();
+        if !matches!(action.as_str(), "full" | "page") {
+            return Err("Unsupported reader action".into());
+        }
+        let id = context["book"]["id"].as_str().map(str::to_owned);
+        let fingerprint = body["fingerprint"].as_str().unwrap_or("").to_owned();
+        if action == "page" && context["reader"]["fingerprint"] != fingerprint {
+            return Err("The open page changed. Select it again.".into());
+        }
+        {
+            let mut inner = self.shared.0.lock().unwrap();
+            if inner.control_busy {
+                return Err("A reader action is already running.".into());
+            }
+            inner.control_busy = true;
+            inner.control_error = None;
+        }
+        let app = app.clone();
+        let bridge = self.clone();
+        // Return immediately so the native host remains available for browser capture commands.
+        tauri::async_runtime::spawn(async move {
+            let result = if action == "full" {
+                crate::audiobooks::audiobook_generate(app, id, true)
+                    .await
+                    .map(|_| ())
+            } else if let Some(id) = id {
+                crate::audiobooks::audiobook_listen_page(app, id, fingerprint)
+                    .await
+                    .map(|_| ())
+            } else {
+                crate::audiobooks::audiobook_generate(app, None, false)
+                    .await
+                    .map(|_| ())
+            };
+            let mut inner = bridge.shared.0.lock().unwrap();
+            inner.control_busy = false;
+            inner.control_error = result.err();
+        });
+        Ok((200, json!({"accepted":true})))
     }
     fn route(&self, route: &str, body: Value) -> Result<(u16, Value), String> {
         let (lock, wake) = &*self.shared;
@@ -482,7 +568,7 @@ mod relay_tests {
         let task = std::thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
             ReaderBridge::disabled()
-                .http(&mut stream, "test-token")
+                .http(&mut stream, "test-token", None)
                 .unwrap()
                 .0
         });
@@ -492,4 +578,13 @@ mod relay_tests {
             .unwrap();
         assert_eq!(task.join().unwrap(), 401);
     }
+}
+
+#[tauri::command]
+pub fn reader_extension_download(path: String) -> Result<(), String> {
+    std::fs::write(
+        path,
+        include_bytes!(concat!(env!("OUT_DIR"), "/texthalo-reader.zip")),
+    )
+    .map_err(|e| e.to_string())
 }

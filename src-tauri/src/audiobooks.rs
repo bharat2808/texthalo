@@ -84,8 +84,6 @@ struct Book {
     #[serde(default = "default_audio")]
     audio_file: String,
     #[serde(default)]
-    backfill: Option<Box<Backfill>>,
-    #[serde(default)]
     end_verified: bool,
     #[serde(default)]
     activity: Option<String>,
@@ -112,20 +110,6 @@ struct Book {
     #[serde(default)]
     voice: crate::config::KokoroSettings,
 }
-#[derive(Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct Backfill {
-    #[serde(default)]
-    whole_book: bool,
-    pages: Vec<Page>,
-    verified: bool,
-    from_beginning: bool,
-    label: Option<String>,
-    blocked: Option<String>,
-    prefix: Option<Box<Book>>,
-    #[serde(default)]
-    seed: Option<Box<Book>>,
-}
 impl Book {
     fn seconds(&self) -> f64 {
         self.committed_samples as f64 / RATE as f64
@@ -137,17 +121,6 @@ impl Book {
             .iter()
             .take(self.generated)
             .find(|s| s.end_sample > at);
-        let backfill_progress = self.backfill.as_ref().map(|b| {
-            let prefix = b.prefix.as_ref();
-            json!({
-                "chapter": b.label,
-                "wholeBook": b.whole_book,
-                "phase": if !b.verified { "searching" } else if prefix.is_some_and(|p| p.generated == p.sentences.len()) { "publishing" } else { "rendering" },
-                "pages": b.pages.len(),
-                "ready": prefix.map_or(0, |p| p.generated),
-                "total": prefix.map(|p| p.sentences.len()),
-            })
-        });
         let mut checkpoints = std::iter::once(self)
             .chain(self.saved_ranges.iter().map(|b| b.as_ref()))
             .flat_map(|b| {
@@ -158,34 +131,80 @@ impl Book {
             })
             .collect::<Vec<_>>();
         checkpoints.sort_by_key(|c| c["page"].as_str().and_then(page_number).unwrap_or(u64::MAX));
-        json!({"fullPreparation":self.full_scan.as_ref().map(|s|s.view()),"backfillProgress":backfill_progress,"id":self.id,"key":self.key,"title":self.title,"platform":"kindle","pages":self.pages.len(),"generated":self.generated,"seconds":self.seconds(),"totalPages":self.pages.len()+self.saved_ranges.iter().map(|b|b.pages.len()).sum::<usize>(),"totalGenerated":self.generated+self.saved_ranges.iter().map(|b|b.generated).sum::<usize>(),"totalSeconds":self.seconds()+self.saved_ranges.iter().map(|b|b.seconds()).sum::<f64>(),"position":self.position,"speed":self.speed,"complete":self.complete && coverage_intact(self),"fromBeginning":self.from_beginning,"message":self.message,"activity":self.activity,"backfillBlocked":self.backfill.as_ref().and_then(|b|b.blocked.as_ref()),
+        json!({"fullPreparation":self.full_scan.as_ref().map(|s|s.view()),"id":self.id,"key":self.key,"title":self.title,"platform":"kindle","pages":self.pages.len(),"generated":self.generated,"seconds":self.seconds(),"totalPages":self.pages.len()+self.saved_ranges.iter().map(|b|b.pages.len()).sum::<usize>(),"totalGenerated":self.generated+self.saved_ranges.iter().map(|b|b.generated).sum::<usize>(),"totalSeconds":self.seconds()+self.saved_ranges.iter().map(|b|b.seconds()).sum::<f64>(),"position":self.position,"speed":self.speed,"complete":self.complete && coverage_intact(self),"fromBeginning":self.from_beginning,"message":self.message,"activity":self.activity,
             "recovery": self.recovery, "resume": resume(self), "pendingPage": self.pending_start.as_ref().and_then(|f| self.pages.iter().find(|p| &p.fingerprint == f)).map(|p| &p.progress),
             "checkpoints": checkpoints,
             "passage":current.map(|s|json!({"text":s.text,"page":s.sources.first().and_then(|p|self.pages.get(p.page)).map(|p|&p.progress)}))})
     }
 }
+// Session audio can play immediately. Only a closed, fully rendered chapter is resumable.
+fn saved_playback(book: &Book, position: Option<f64>) -> Option<(f64, u64, usize)> {
+    let chapters = book
+        .checkpoints
+        .iter()
+        .enumerate()
+        .filter(|(i, c)| chapter_view(book, *i, c)["complete"] == true)
+        .collect::<Vec<_>>();
+    let bounds = |i: usize, c: &Checkpoint| {
+        let start = book.sentences.get(c.sentence)?.start_sample;
+        let end_index = book
+            .checkpoints
+            .get(i + 1)
+            .map_or(book.generated, |c| c.sentence);
+        let end = book.sentences.get(end_index.checked_sub(1)?)?.end_sample;
+        (end > start).then_some((start, end))
+    };
+    let wanted = position.unwrap_or(book.position);
+    if wanted.is_finite() && wanted >= 0. {
+        let sample = (wanted * RATE as f64).round() as u64;
+        for (i, c) in &chapters {
+            if let Some((start, end)) = bounds(*i, c) {
+                if sample >= start && sample < end {
+                    return Some((wanted, end, *i));
+                }
+            }
+        }
+    }
+    if position.is_some() {
+        return None;
+    }
+    let (i, c) = chapters.first()?;
+    let (start, end) = bounds(*i, c)?;
+    Some((start as f64 / RATE as f64, end, *i))
+}
 fn resume(book: &Book) -> Option<Value> {
-    let at = (book.position * RATE as f64) as u64;
-    let (index, sentence) = book
+    std::iter::once(book)
+        .chain(book.saved_ranges.iter().map(|b| b.as_ref()))
+        .find_map(|range| {
+            let (seconds, _, index) = saved_playback(range, None)?;
+            let sample = (seconds * RATE as f64).round() as u64;
+            let sentence = range
+                .sentences
+                .iter()
+                .take(range.generated)
+                .find(|s| s.end_sample > sample)?;
+            let page = range.pages.get(sentence.sources.first()?.page)?;
+            Some(
+                json!({"page":page.progress,"chapter":range.checkpoints[index].label,
+                "seconds":seconds,"rangeId":range.range_id}),
+            )
+        })
+}
+fn different_page(book: &Book, reader: &Value) -> bool {
+    let sample = (book.position * RATE as f64) as u64;
+    let saved = book
         .sentences
         .iter()
         .take(book.generated)
-        .enumerate()
-        .find(|(_, s)| s.end_sample > at)
+        .find(|s| s.end_sample > sample)
         .or_else(|| {
             book.generated
                 .checked_sub(1)
-                .and_then(|i| book.sentences.get(i).map(|s| (i, s)))
-        })?;
-    let page = book.pages.get(sentence.sources.first()?.page)?;
-    let chapter = book.checkpoints.iter().rev().find(|c| c.sentence <= index);
-    Some(json!({"page":page.progress,"chapter":chapter.map(|c|&c.label)}))
-}
-fn different_page(book: &Book, reader: &Value) -> bool {
-    if book.activity.as_deref() == Some("backfill") {
-        return false;
-    }
-    let saved = resume(book).and_then(|r| r["page"].as_str().map(str::to_owned));
+                .and_then(|i| book.sentences.get(i))
+        })
+        .and_then(|s| s.sources.first())
+        .and_then(|s| book.pages.get(s.page))
+        .map(|p| p.progress.clone());
     match (
         saved.as_deref().and_then(page_number),
         reader["progress"].as_str().and_then(page_number),
@@ -263,10 +282,7 @@ fn select_page(
                 .map(|i| (b.range_id.clone(), i, b.pages[i].text.clone()))
         });
     let mut next = book.clone();
-    if let Some((range, index, saved)) = found {
-        if saved != normalized {
-            return Err("Reader layout or saved passage changed. Restore the original layout before retrying.".into());
-        }
+    if let Some((range, index, _)) = found.filter(|(_, _, saved)| saved == &normalized) {
         activate_range(&mut next, &range)?;
         next.pending_start = Some(next.pages[index].fingerprint.clone());
     } else {
@@ -276,7 +292,6 @@ fn select_page(
         next.saved_ranges = ranges;
         next.range_id = identity();
         next.audio_file = format!("{}.wav", identity());
-        next.backfill = None;
         next.full_scan = None;
         next.continuous = false;
         next.reader_hint = None;
@@ -314,11 +329,8 @@ fn select_page(
     save_bookmark(dir, book)?;
     Ok(position)
 }
-fn backfill_directory(dir: &Path, book: &Book) -> Result<PathBuf, String> {
-    uuid::Uuid::parse_str(&book.range_id).map_err(|_| "Invalid passage identity")?;
-    Ok(dir.join("ranges").join(&book.range_id).join("backfill"))
-}
 struct Playing {
+    saved_chapter: bool,
     book: String,
     job: u64,
     player: Arc<crate::pcm::Player>,
@@ -687,107 +699,6 @@ fn commit_pcm(dir: &Path, book: &mut Book, bytes: &[u8]) -> Result<(), String> {
         *book = next;
     }
     result
-}
-fn publish_prefix(dir: &Path, book: &mut Book, prefix: &Book) -> Result<(), String> {
-    if prefix.generated != prefix.sentences.len() || !prefix.pending.is_empty() {
-        return Err("Earlier chapter audio is not fully prepared".into());
-    }
-    if prefix.pages.is_empty() {
-        return Err("No earlier pages were captured".into());
-    }
-    let mut next = book.clone();
-    remember_position(&mut next);
-    let added = prefix.committed_samples;
-    let page_count = prefix.pages.len();
-    let sentence_count = prefix.sentences.len();
-    for sentence in &mut next.sentences {
-        sentence.start_sample += if sentence.end_sample > 0 { added } else { 0 };
-        sentence.end_sample += if sentence.end_sample > 0 { added } else { 0 };
-        for source in &mut sentence.sources {
-            source.page += page_count;
-        }
-    }
-    for source in &mut next.pending {
-        source.page += page_count;
-    }
-    for checkpoint in &mut next.checkpoints {
-        checkpoint.sentence += sentence_count;
-        checkpoint.page += page_count;
-    }
-    let mut checkpoints = prefix.checkpoints.clone();
-    if next.checkpoints.first().is_some_and(|c| !c.verified_start) {
-        let previous = next.checkpoints.remove(0);
-        if book.backfill.as_ref().is_none_or(|b| b.seed.is_none()) {
-            if let Some(last) = checkpoints.last_mut() {
-                last.id = previous.id;
-            }
-        }
-    }
-    next.checkpoints.splice(0..0, checkpoints);
-    if let Some(seed) = book.backfill.as_ref().and_then(|b| b.seed.as_ref()) {
-        next.saved_ranges.retain(|r| r.range_id != seed.range_id);
-    }
-    next.pages.splice(0..0, prefix.pages.clone());
-    next.sentences.splice(0..0, prefix.sentences.clone());
-    next.generated += sentence_count;
-    next.committed_samples += added;
-    next.from_beginning = prefix.from_beginning;
-    next.complete = coverage_intact(&next)
-        && next.from_beginning
-        && next.saved_ranges.is_empty()
-        && next.checkpoints.iter().all(|c| c.verified_start)
-        && next.end_verified
-        && next.generated == next.sentences.len()
-        && next.pending.is_empty();
-    next.message = None;
-    next.position = stable_position(&next).unwrap_or(book.position + added as f64 / RATE as f64);
-    next.backfill = None;
-    next.audio_file = format!("{}.wav", identity());
-    next.activity = None;
-    let target = audio_path(dir, &next)?;
-    let result = (|| {
-        let mut output = OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(&target)
-            .map_err(|e| e.to_string())?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            output
-                .set_permissions(fs::Permissions::from_mode(0o600))
-                .map_err(|e| e.to_string())?;
-        }
-        output
-            .write_all(&header(next.committed_samples)?)
-            .map_err(|e| e.to_string())?;
-        for (path, samples) in [
-            (audio_path(&backfill_directory(dir, book)?, prefix)?, added),
-            (audio_path(dir, book)?, book.committed_samples),
-        ] {
-            let mut input = fs::File::open(path).map_err(|e| e.to_string())?;
-            input.seek(SeekFrom::Start(44)).map_err(|e| e.to_string())?;
-            let count = std::io::copy(&mut input.take(samples * 2), &mut output)
-                .map_err(|e| e.to_string())?;
-            if count != samples * 2 {
-                return Err("Recording is shorter than its committed audio".into());
-            }
-        }
-        output.sync_all().map_err(|e| e.to_string())?;
-        save(dir, &next)
-    })();
-    let published = fs::read(dir.join("book.json"))
-        .ok()
-        .and_then(|v| serde_json::from_slice::<Book>(&v).ok())
-        .is_some_and(|b| b.audio_file == next.audio_file);
-    if published {
-        *book = next;
-        let _ = save_bookmark(dir, book);
-        Ok(())
-    } else {
-        let _ = fs::remove_file(&target);
-        result.and(Err("Earlier audio was not published".into()))
-    }
 }
 #[cfg(test)]
 fn cached_suffix(book: &Book, reader: &Value, text: &str) -> Option<Box<Book>> {
@@ -1412,13 +1323,21 @@ fn capture_from(book: &mut Book, reader: &Value, text: &str, offset: usize) -> R
 fn repeated_capture(book: &Book, reader: &Value, normal: &str, verified_forward: bool) -> bool {
     book.pages.iter().any(|p| {
         p.fingerprint == reader["fingerprint"].as_str().unwrap_or("")
-            || (!normal.is_empty() && p.text == normal
-                && !(verified_forward && ReaderPosition::parse(&p.progress)
-                    .zip(reader["progress"].as_str().and_then(ReaderPosition::parse))
-                    .is_some_and(|(a,b)| a.compare(b) == Some(std::cmp::Ordering::Less))))
+            || (!normal.is_empty()
+                && p.text == normal
+                && !(verified_forward
+                    && ReaderPosition::parse(&p.progress)
+                        .zip(reader["progress"].as_str().and_then(ReaderPosition::parse))
+                        .is_some_and(|(a, b)| a.compare(b) == Some(std::cmp::Ordering::Less))))
     })
 }
-fn capture_from_mode(book: &mut Book, reader: &Value, text: &str, offset: usize, verified_forward: bool) -> Result<(), String> {
+fn capture_from_mode(
+    book: &mut Book,
+    reader: &Value,
+    text: &str,
+    offset: usize,
+    verified_forward: bool,
+) -> Result<(), String> {
     let fingerprint = reader["fingerprint"]
         .as_str()
         .ok_or("Missing page fingerprint")?;
@@ -1534,17 +1453,15 @@ impl Audiobooks {
                                 save(&dir, &b)?;
                                 save_bookmark(&dir, &b)?;
                             }
-                            if b.schema_version < 3 {
-                                // Persist the new identity before moving its old backfill folder.
-                                save(&dir, &b)?;
-                                let old = dir.join("backfill");
-                                let new = backfill_directory(&dir, &b)?;
-                                if old.exists() && !new.exists() {
-                                    fs::create_dir_all(new.parent().unwrap())
-                                        .map_err(|e| e.to_string())?;
-                                    fs::rename(old, new).map_err(|e| e.to_string())?;
+                            if b.schema_version < 4 {
+                                // Preserve recordings, but discard obsolete backward-preparation errors.
+                                if b.message
+                                    .as_deref()
+                                    .is_some_and(|m| m.starts_with("Chapter preparation"))
+                                {
+                                    b.message = None;
                                 }
-                                b.schema_version = 3;
+                                b.schema_version = 4;
                                 save(&dir, &b)?;
                             }
                             for range in &b.saved_ranges {
@@ -1662,7 +1579,10 @@ impl Audiobooks {
         let k = key(&reader["reader"]).ok()?;
         let l = self.0.lock().unwrap();
         let (id, _, _) = l.producing.as_ref()?;
-        l.books.get(id).filter(|b| b.key == k).map(|b| b.id.clone())
+        l.books
+            .get(id)
+            .filter(|b| b.key == k && !b.full_scan.as_ref().is_some_and(|s| s.transcript_ready()))
+            .map(|b| b.id.clone())
     }
     fn snapshot(&self, app: &AppHandle) -> Value {
         let reader = app.state::<crate::reader_bridge::ReaderBridge>().status();
@@ -1692,7 +1612,7 @@ pub fn audiobook_state(app: AppHandle) -> Value {
     app.state::<Audiobooks>().snapshot(&app)
 }
 fn play(app: &AppHandle, id: &str, position: Option<f64>) -> Result<(), String> {
-    play_selected(app, id, position, None)
+    play_selected(app, id, position, None, false)
 }
 fn check_selection(library: &Library, revision: Option<u64>) -> Result<(), String> {
     if revision.is_some_and(|r| r != library.selection_revision) {
@@ -1705,6 +1625,7 @@ fn play_selected(
     id: &str,
     position: Option<f64>,
     revision: Option<u64>,
+    saved_chapter: bool,
 ) -> Result<(), String> {
     let service = app.state::<Audiobooks>();
     let mut l = service.0.lock().unwrap();
@@ -1719,17 +1640,24 @@ fn play_selected(
     if b.generated == 0 {
         return Err("Preparing the first sentence…".into());
     }
-    let seconds = position.unwrap_or(if b.complete && b.position >= b.seconds() - 0.05 {
-        0.0
+    let saved = if saved_chapter {
+        Some(saved_playback(b, position).ok_or("Only completed chapters can be continued. Choose Listen from this page to start a new session.")?)
     } else {
-        stable_position(b).unwrap_or(b.position)
+        None
+    };
+    let seconds = saved.map(|(seconds, _, _)| seconds).unwrap_or_else(|| {
+        position.unwrap_or(if b.complete && b.position >= b.seconds() - 0.05 {
+            0.0
+        } else {
+            stable_position(b).unwrap_or(b.position)
+        })
     });
     if !seconds.is_finite() || seconds < 0. || seconds > b.seconds() {
         return Err("Choose a position within generated audio".into());
     }
-    let samples = b.committed_samples;
+    let samples = saved.map_or(b.committed_samples, |(_, end, _)| end);
     let speed = b.speed;
-    let finished = !l.producing.as_ref().is_some_and(|(i, _, _)| i == id);
+    let finished = saved_chapter || !l.producing.as_ref().is_some_and(|(i, _, _)| i == id);
     let audio = audio_path(&directory(id)?, b)?;
     let job = crate::begin_speech(app, crate::Phase::Preparing);
     let state = app.state::<crate::AppState>();
@@ -1739,14 +1667,18 @@ fn play_selected(
     }
     let player = Arc::new(crate::pcm::Player::new()?);
     player.update_file(&audio, samples, finished)?;
-    player.start()?;
+    if let Some((_, _, index)) = saved {
+        let start = b.sentences[b.checkpoints[index].sentence].start_sample;
+        player.set_playback_start(start)?;
+    }
     state.spoken.activate_pcm(player.clone());
-    player.seek(seconds)?;
     player.set_speed(speed)?;
+    player.seek(seconds)?;
     active.set(crate::Phase::Speaking, None, None);
     let _ = app.emit("kiegen:status", &active.status);
     drop(active);
     l.playing = Some(Playing {
+        saved_chapter,
         book: id.into(),
         job,
         player,
@@ -1877,11 +1809,11 @@ pub async fn audiobook_listen_page(
     .await
     .map_err(|e| e.to_string())??;
     if let Some(seconds) = position {
-        launch_playback(app, id.clone(), Some(seconds), revision).await?;
+        launch_playback(app, id.clone(), Some(seconds), revision, false).await?;
     } else {
         let book_id = id.clone();
         tauri::async_runtime::spawn_blocking(move || {
-            generate_mode(&app, Some(book_id), false, false, Some(revision))
+            generate_mode(&app, Some(book_id), false, Some(revision))
         })
         .await
         .map_err(|e| e.to_string())??;
@@ -1895,17 +1827,32 @@ pub async fn audiobook_play(
     seconds: Option<f64>,
     range_id: Option<String>,
 ) -> Result<(), String> {
-    let range_id = range_id.or_else(|| {
-        if seconds.is_none() {
-            return None;
-        }
+    // Validate before switching ranges or interrupting an active listening session.
+    let (range_id, seconds) = {
         let service = app.state::<Audiobooks>();
         let l = service.0.lock().unwrap();
-        l.books
-            .get(&id)
-            .filter(|b| b.pending_start.is_some())
-            .map(|b| b.range_id.clone())
-    });
+        let book = l.books.get(&id).ok_or("Audiobook not found")?;
+        let target = if let Some(range) = range_id.as_deref() {
+            std::iter::once(book)
+                .chain(book.saved_ranges.iter().map(|r| r.as_ref()))
+                .find(|b| b.range_id == range)
+                .ok_or("Saved chapter not found")?
+        } else if seconds.is_none() {
+            let resume = resume(book).ok_or(
+                "No completed chapters yet. Choose Listen from this page to start listening.",
+            )?;
+            let range = resume["rangeId"].as_str().unwrap();
+            std::iter::once(book)
+                .chain(book.saved_ranges.iter().map(|r| r.as_ref()))
+                .find(|b| b.range_id == range)
+                .unwrap()
+        } else {
+            book
+        };
+        let (seconds, _, _) =
+            saved_playback(target, seconds).ok_or("Only completed chapters can be continued.")?;
+        (Some(target.range_id.clone()), Some(seconds))
+    };
     let revision = if let Some(range) = range_id {
         switch_range(&app, &id, &range).await?
     } else {
@@ -1915,28 +1862,29 @@ pub async fn audiobook_play(
             .unwrap()
             .selection_revision
     };
-    launch_playback(app, id, seconds, revision).await
+    launch_playback(app, id, seconds, revision, true).await
 }
 async fn launch_playback(
     app: AppHandle,
     id: String,
     seconds: Option<f64>,
     revision: u64,
+    saved_chapter: bool,
 ) -> Result<(), String> {
     let handle = app.clone();
     let book_id = id.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        play_selected(&handle, &book_id, seconds, Some(revision))
+        play_selected(&handle, &book_id, seconds, Some(revision), saved_chapter)
     })
     .await
     .map_err(|e| e.to_string())??;
-    // Continue resumes page preparation too, when this book is still connected.
-    // Cached playback remains usable without the browser or native helper.
+    // Saved chapters play locally; page sessions may keep preparing forward.
     let reader = app.state::<crate::reader_bridge::ReaderBridge>().status();
     let should_buffer = {
         let service = app.state::<Audiobooks>();
         let l = service.0.lock().unwrap();
-        !l.worker
+        !saved_chapter
+            && !l.worker
             && reader["connected"] == true
             && l.books.get(&id).is_some_and(|b| {
                 !b.complete && key(&reader["reader"]).ok().as_deref() == Some(&b.key)
@@ -1946,7 +1894,7 @@ async fn launch_playback(
         let handle = app.clone();
         let book_id = id.clone();
         let preparation = tauri::async_runtime::spawn_blocking(move || {
-            generate_mode(&handle, Some(book_id), false, false, Some(revision))
+            generate_mode(&handle, Some(book_id), false, Some(revision))
         })
         .await
         .map_err(|e| e.to_string())?;
@@ -2025,596 +1973,11 @@ impl ReaderPosition {
         }
     }
 }
-enum RestorePolicy<'a> {
-    Resume,
-    Borrow(&'a mut Value),
-    Return(&'a mut Value),
-}
-fn restore_page(
-    bridge: &crate::reader_bridge::ReaderBridge,
-    service: &Audiobooks,
-    id: &str,
-    token: &str,
-    book: &Book,
-    target: &Page,
-    policy: RestorePolicy<'_>,
-) -> Result<Value, String> {
-    let finishing = matches!(&policy, RestorePolicy::Return(_));
-    restore_page_with(
-        |request| {
-            if finishing {
-                bridge.command(request)
-            } else {
-                bridge.command_while(request, || generation_active(service, id, token))
-            }
-        },
-        || generation_active(service, id, token),
-        book,
-        target,
-        policy,
-    )
-}
-fn restore_page_with(
-    command: impl Fn(Value) -> Result<Value, String>,
-    active: impl Fn() -> bool,
-    book: &Book,
-    target: &Page,
-    policy: RestorePolicy<'_>,
-) -> Result<Value, String> {
-    let finishing = matches!(&policy, RestorePolicy::Return(_));
-    let mut tracker = match policy {
-        RestorePolicy::Resume => None,
-        RestorePolicy::Borrow(r) | RestorePolicy::Return(r) => Some(r),
-    };
-    let goal = ReaderPosition::parse(&target.progress)
-        .ok_or("A saved page or location is required to fill earlier pages")?;
-    let mut r = command(json!({"type":"inspect"}))?;
-    if key(&r)? != book.key {
-        return Err("Connected book changed".into());
-    }
-    if tracker
-        .as_ref()
-        .is_some_and(|owned| owned["fingerprint"] != r["fingerprint"])
-    {
-        return Err(
-            "Reader moved while preparing; the app left your selected page unchanged".into(),
-        );
-    }
-    let initial = ReaderPosition::parse(r["progress"].as_str().unwrap_or(""))
-        .ok_or("Reader page or location unavailable")?;
-    let direction = match initial.compare(goal) {
-        Some(std::cmp::Ordering::Less) => "next",
-        Some(_) => "previous",
-        // Page and location numbers use different units. Only the actual cover
-        // supplies a reliable direction when Kindle switches between them.
-        None if matches!(goal, ReaderPosition::Location(1)) => "previous",
-        None if matches!(initial, ReaderPosition::Location(1)) && r["startOfBook"] == true => {
-            "next"
-        }
-        None if r["fingerprint"].as_str() == Some(target.fingerprint.as_str()) => "next",
-        None => return Err(
-            "The reader switched between pages and locations. Open the saved passage to continue."
-                .into(),
-        ),
-    };
-    let mut visited = std::collections::HashSet::new();
-    let mut candidate = false;
-    let view_limit = if book.backfill.as_ref().is_some_and(|b| b.whole_book) {
-        10_000
-    } else {
-        100
-    };
-    for _ in 0..view_limit {
-        if !finishing && !active() {
-            return Err("Preparation stopped".into());
-        }
-        let comparison = ReaderPosition::parse(r["progress"].as_str().unwrap_or(""))
-            .and_then(|at| at.compare(goal));
-        // Captured Kindle views can repeat or skip page numbers; labels are not unique identities.
-        // Never reverse to chase a number skipped by a turn; verify the passage at the crossing.
-        if r["fingerprint"].as_str() == Some(target.fingerprint.as_str())
-            || comparison == Some(std::cmp::Ordering::Equal)
-            || (direction == "next" && comparison == Some(std::cmp::Ordering::Greater))
-            || (direction == "previous" && comparison == Some(std::cmp::Ordering::Less))
-            || r[if direction == "next" {
-                "endOfBook"
-            } else {
-                "startOfBook"
-            }] == true
-        {
-            candidate = true;
-            break;
-        }
-        if !visited.insert((r["progress"].to_string(), r["fingerprint"].to_string())) {
-            return Err("Reader navigation repeated a page. Restore the saved passage or choose Listen from this page.".into());
-        }
-        r = command(
-            json!({"type":"navigate", "bookId":r["bookId"], "fingerprint":r["fingerprint"], "direction":direction}),
-        )?;
-        if let Some(owned) = tracker.as_deref_mut() {
-            *owned = r.clone();
-        }
-    }
-    if !candidate {
-        return Err("Open the saved page manually to continue".into());
-    }
-    if !finishing && !active() {
-        return Err("Preparation stopped".into());
-    }
-    let result =
-        command(json!({"type":"ocr","bookId":r["bookId"],"fingerprint":r["fingerprint"]}))?;
-    if let Some(owned) = tracker.as_deref_mut() {
-        *owned = result["reader"].clone();
-    }
-    let text = result["text"]
-        .as_str()
-        .ok_or("No text returned for the saved page")?
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
-    let same_prefix = r["fingerprint"].as_str() == Some(target.fingerprint.as_str())
-        && text
-            .strip_prefix(&target.text)
-            .is_some_and(|tail| tail.is_empty() || tail.starts_with(char::is_whitespace));
-    if !same_prefix && !page_matches(&target.text, &text)? {
-        return Err(
-            "Reader layout or saved passage changed. Restore the original layout before retrying."
-                .into(),
-        );
-    }
-    Ok(result["reader"].clone())
-}
-fn prefix_book(book: &Book, backfill: &Backfill) -> Result<Book, String> {
-    let mut prefix = backfill.seed.as_deref().unwrap_or(book).clone();
-    prefix.id = identity();
-    prefix.audio_file = default_audio();
-    prefix.backfill = None;
-    prefix.full_scan = None;
-    prefix.continuous = false;
-    prefix.saved_ranges.clear();
-    prefix.pending_start = None;
-    prefix.reader_hint = None;
-    if backfill.seed.is_none() {
-        prefix.pages.clear();
-        prefix.sentences.clear();
-        prefix.checkpoints.clear();
-        prefix.pending.clear();
-        prefix.generated = 0;
-        prefix.committed_samples = 0;
-    }
-    prefix.position = 0.;
-    prefix.bookmark_sentence = None;
-    prefix.bookmark_offset = 0;
-    prefix.complete = false;
-    prefix.end_verified = false;
-    prefix.from_beginning = backfill.from_beginning;
-    for page in backfill.pages.iter().rev() {
-        // Raw OCR headings were preserved separately before whitespace normalization.
-        let text = if let Some(heading) = &page.heading {
-            format!(
-                "{}\n{}",
-                heading,
-                page.text.strip_prefix(heading).unwrap_or(&page.text).trim()
-            )
-        } else {
-            page.text.clone()
-        };
-        capture(
-            &mut prefix,
-            &json!({"fingerprint":page.fingerprint,"progress":page.progress}),
-            &text,
-        )?;
-        prefix.pages.last_mut().unwrap().heading = page.heading.clone();
-    }
-    if !prefix.pending.is_empty() {
-        let last_sources = prefix.pending.clone();
-        let tail = last_sources
-            .iter()
-            .map(|s| s.text.as_str())
-            .collect::<Vec<_>>()
-            .join(" ");
-        prefix.sentences.push(Sentence {
-            id: identity(),
-            continuation_of: book.sentences.first().map(|s| s.id.clone()),
-            text: tail,
-            sources: last_sources,
-            start_sample: 0,
-            end_sample: 0,
-        });
-        prefix.pending.clear();
-    }
-    Ok(prefix)
-}
-fn earlier_slice(book: &Book, reader: &Value, raw: &str) -> Result<Option<Page>, String> {
-    let normal = raw.split_whitespace().collect::<Vec<_>>().join(" ");
-    let offset = head_offset(book, &normal)?.or_else(|| {
-        book.pages.first().filter(|p|p.text == normal).map(|_| {
-            book.sentences.first().and_then(|s|s.sources.first()).or_else(||book.pending.first()).map_or(0,|source|source.start)
-        })
-    }).ok_or("Could not confidently locate the beginning of the saved range. Your saved audio is unchanged.")?;
-    if offset == 0 {
-        return Ok(None);
-    }
-    if !normal.is_char_boundary(offset) {
-        return Err("Invalid saved passage boundary".into());
-    }
-    Ok(Some(Page {
-        heading: chapter(raw),
-        text: normal[..offset].trim().into(),
-        progress: reader["progress"].as_str().unwrap_or("").into(),
-        fingerprint: reader["fingerprint"]
-            .as_str()
-            .ok_or("Missing page identity")?
-            .into(),
-    }))
-}
-fn stage_earlier_page(
-    book: &mut Book,
-    mut page: Page,
-    start_of_book: bool,
-    full: bool,
-) -> Result<(), String> {
-    if page.text.is_empty() || page.text.len() > 20_000 {
-        return Err("Earlier page has no reliable passage".into());
-    }
-    if book
-        .backfill
-        .as_ref()
-        .is_some_and(|b| b.pages.iter().any(|p| p.fingerprint == page.fingerprint))
-    {
-        return Err("Repeated page while finding missing passages".into());
-    }
-    let mut seed = None;
-    for range in &book.saved_ranges {
-        if let Some(offset) = continuation_offset(range, &page.text)? {
-            if seed.is_some() {
-                return Err("More than one earlier range matches this passage".into());
-            }
-            seed = Some((range.clone(), offset));
-        }
-    }
-    let bf = book.backfill.get_or_insert_with(Box::default);
-    bf.whole_book = full;
-    if let Some((range, offset)) = seed {
-        bf.verified = true;
-        bf.from_beginning = range.from_beginning;
-        bf.label = range.checkpoints.last().map(|c| c.label.clone());
-        bf.seed = Some(range);
-        page.text = page.text[offset..].trim().into();
-        page.heading = None;
-    } else {
-        bf.verified = start_of_book || (!full && page.heading.is_some());
-        bf.from_beginning = start_of_book;
-        bf.label = page.heading.clone();
-    }
-    if !page.text.is_empty() {
-        bf.pages.push(page);
-    }
-    Ok(())
-}
-fn needs_earlier(book: &Book, full: bool) -> bool {
-    if full {
-        !book.from_beginning
-    } else {
-        book.checkpoints.first().is_some_and(|c| !c.verified_start)
-    }
-}
-fn backfill_step(
-    app: &AppHandle,
-    id: &str,
-    token: &str,
-    reader: &mut Value,
-    settings: &crate::config::Settings,
-    full: bool,
-) -> Result<bool, String> {
-    let service = app.state::<Audiobooks>();
-    let result = backfill_step_inner(app, id, token, reader, settings, full);
-    if !full && (result.is_err() || !generation_active(&service, id, token)) {
-        let book = service
-            .0
-            .lock()
-            .unwrap()
-            .books
-            .get(id)
-            .cloned()
-            .ok_or("Audiobook removed")?;
-        if let Some(forward) = book.pages.last() {
-            let bridge = app.state::<crate::reader_bridge::ReaderBridge>();
-            *reader = restore_page(
-                &bridge,
-                &service,
-                id,
-                token,
-                &book,
-                forward,
-                RestorePolicy::Return(reader),
-            )
-            .map_err(|e| format!("Chapter preparation stopped. {e}"))?;
-        }
-    }
-    if !generation_active(&service, id, token) {
-        Ok(false)
-    } else {
-        result
-    }
-}
-fn backfill_step_inner(
-    app: &AppHandle,
-    id: &str,
-    token: &str,
-    reader: &mut Value,
-    settings: &crate::config::Settings,
-    full: bool,
-) -> Result<bool, String> {
-    let service = app.state::<Audiobooks>();
-    let bridge = app.state::<crate::reader_bridge::ReaderBridge>();
-    let book = {
-        let mut l = service.0.lock().unwrap();
-        let b = l.books.get_mut(id).ok_or("Audiobook removed")?;
-        if !needs_earlier(b, full) {
-            return Ok(false);
-        }
-        if b.backfill.is_none() {
-            b.backfill = Some(Box::default());
-        }
-        b.backfill.as_mut().unwrap().whole_book = full;
-        if b.backfill.as_ref().is_some_and(|b| b.blocked.is_some()) {
-            return Ok(false);
-        }
-        b.activity = Some("backfill".into());
-        b.clone()
-    };
-    let state = book.backfill.as_ref().unwrap();
-    if !state.verified {
-        if state.pages.len() >= if full { 10_000 } else { 100 } {
-            return Err("The earlier passage exceeded the reader search limit".into());
-        }
-        let forward = book.pages.last().ok_or("No imported page")?;
-        // Never override manual page changes while borrowing the reader for backfill.
-        let current = bridge.command_while(json!({"type":"inspect"}), || {
-            generation_active(&service, id, token)
-        })?;
-        if current["fingerprint"] != reader["fingerprint"] || key(&current)? != book.key {
-            return Err("Reader moved while preparing. Retry from the saved layout.".into());
-        }
-        let target = state.pages.last().unwrap_or(&book.pages[0]);
-        let mut at = if reader["fingerprint"].as_str() == Some(target.fingerprint.as_str()) {
-            current
-        } else {
-            restore_page(
-                &bridge,
-                &service,
-                id,
-                token,
-                &book,
-                target,
-                RestorePolicy::Borrow(reader),
-            )?
-        };
-        *reader = at.clone();
-        let mut staged_initial = false;
-        if state.pages.is_empty() {
-            let result = bridge.command_while(
-                json!({"type":"ocr","bookId":at["bookId"],"fingerprint":at["fingerprint"]}),
-                || generation_active(&service, id, token),
-            )?;
-            if !generation_active(&service, id, token) {
-                return Ok(false);
-            }
-            if result["reader"]["fingerprint"] != at["fingerprint"]
-                || key(&result["reader"])? != book.key
-            {
-                return Err("Reader moved while verifying the saved range beginning".into());
-            }
-            let text = result["text"]
-                .as_str()
-                .ok_or("Saved range beginning text unavailable")?;
-            if let Some(page) = earlier_slice(&book, &at, text)? {
-                let mut l = service.0.lock().unwrap();
-                if !l.producing.as_ref().is_some_and(|(_, t, _)| t == token) {
-                    return Ok(false);
-                }
-                let b = l.books.get_mut(id).ok_or("Audiobook removed")?;
-                let mut next = b.clone();
-                stage_earlier_page(&mut next, page, at["startOfBook"] == true, full)?;
-                save(&directory(id)?, &next)?;
-                *b = next;
-                staged_initial = true;
-            }
-        }
-        if !staged_initial {
-            if at["startOfBook"] == true {
-                let mut l = service.0.lock().unwrap();
-                if !l.producing.as_ref().is_some_and(|(_, t, _)| t == token) {
-                    return Ok(false);
-                }
-                let b = l.books.get_mut(id).unwrap();
-                let bf = b.backfill.as_mut().unwrap();
-                bf.verified = true;
-                bf.from_beginning = true;
-                save(&directory(id)?, b)?;
-            } else {
-                if !generation_active(&service, id, token) {
-                    return Ok(false);
-                }
-                at = navigate(&bridge, &service, id, token, &at, "previous")?;
-                *reader = at.clone();
-                if !generation_active(&service, id, token) {
-                    return Ok(false);
-                }
-                let result = bridge.command_while(
-                    json!({"type":"ocr","bookId":at["bookId"],"fingerprint":at["fingerprint"]}),
-                    || generation_active(&service, id, token),
-                )?;
-                if !generation_active(&service, id, token) {
-                    return Ok(false);
-                }
-                if result["reader"]["fingerprint"] != at["fingerprint"]
-                    || key(&result["reader"])? != book.key
-                {
-                    return Err("Reader moved while capturing an earlier passage".into());
-                }
-                let text = result["text"]
-                    .as_str()
-                    .ok_or("Earlier page text unavailable")?;
-                let page = Page {
-                    heading: chapter(text),
-                    text: text.split_whitespace().collect::<Vec<_>>().join(" "),
-                    progress: at["progress"].as_str().unwrap_or("").into(),
-                    fingerprint: at["fingerprint"]
-                        .as_str()
-                        .ok_or("Missing page identity")?
-                        .into(),
-                };
-                let mut l = service.0.lock().unwrap();
-                if !l.producing.as_ref().is_some_and(|(_, t, _)| t == token) {
-                    return Ok(false);
-                }
-                let b = l.books.get_mut(id).ok_or("Audiobook removed")?;
-                let mut next = b.clone();
-                stage_earlier_page(&mut next, page, at["startOfBook"] == true, full)?;
-                save(&directory(id)?, &next)?;
-                *b = next;
-            }
-        }
-        // Full creation scans earlier views consecutively. Listening mode still
-        // returns after each page to keep forward buffering the priority.
-        if !full {
-            *reader = restore_page(
-                &bridge,
-                &service,
-                id,
-                token,
-                &book,
-                forward,
-                RestorePolicy::Borrow(reader),
-            )?;
-        }
-        return Ok(true);
-    }
-    let prefix_dir = backfill_directory(&directory(id)?, &book)?;
-    fs::create_dir_all(&prefix_dir).map_err(|e| e.to_string())?;
-    let mut prefix = if let Some(prefix) = &state.prefix {
-        (**prefix).clone()
-    } else {
-        prefix_book(&book, state)?
-    };
-    if prefix.pages.is_empty() {
-        let mut l = service.0.lock().unwrap();
-        let b = l.books.get_mut(id).unwrap();
-        b.checkpoints[0].verified_start = true;
-        b.from_beginning = state.from_beginning;
-        b.backfill = None;
-        save(&directory(id)?, b)?;
-        return Ok(true);
-    }
-    if let Ok(bytes) = fs::read(prefix_dir.join("book.json")) {
-        let saved: Book = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
-        if state.prefix.as_ref().is_some_and(|p| p.id == saved.id) {
-            prefix = saved;
-        }
-    }
-    if state.prefix.is_none() {
-        if let Some(seed) = &state.seed {
-            fs::copy(
-                audio_path(&directory(id)?, seed)?,
-                audio_path(&prefix_dir, &prefix)?,
-            )
-            .map_err(|e| e.to_string())?;
-        }
-        recover(&prefix_dir, &prefix)?;
-        save(&prefix_dir, &prefix)?;
-        let mut l = service.0.lock().unwrap();
-        let b = l.books.get_mut(id).ok_or("Audiobook removed")?;
-        b.backfill.as_mut().ok_or("Preparation stopped")?.prefix = Some(Box::new(prefix.clone()));
-        save(&directory(id)?, b)?;
-    }
-    recover(&prefix_dir, &prefix)?;
-    save(&prefix_dir, &prefix)?;
-    if let Some(sentence) = prefix.sentences.get(prefix.generated).cloned() {
-        let scratch = prefix_dir.join("sentence.tmp.wav");
-        let app_state = app.state::<crate::AppState>();
-        let samples = {
-            let _guard = app_state
-                .synthesis
-                .for_engine(settings.engine)
-                .lock()
-                .unwrap();
-            let result = app_state
-                .spoken
-                .render(settings, &sentence.text, &scratch)
-                .and_then(|_| crate::spoken::Spoken::load_audio(&scratch));
-            let _ = fs::remove_file(&scratch);
-            result?
-        };
-        if !generation_active(&service, id, token) {
-            return Ok(false);
-        }
-        commit(&prefix_dir, &mut prefix, &samples)?;
-        let mut l = service.0.lock().unwrap();
-        let b = l.books.get_mut(id).unwrap();
-        b.backfill.as_mut().unwrap().prefix = Some(Box::new(prefix));
-        save(&directory(id)?, b)?;
-        return Ok(true);
-    }
-    let mut l = service.0.lock().unwrap();
-    if !l.producing.as_ref().is_some_and(|(_, t, _)| t == token) {
-        return Ok(false);
-    }
-    let playing = l
-        .playing
-        .as_ref()
-        .filter(|p| {
-            p.book == id
-                && app
-                    .state::<crate::AppState>()
-                    .job
-                    .lock()
-                    .unwrap()
-                    .is_current(p.job)
-        })
-        .map(|p| p.player.clone());
-    let b = l.books.get_mut(id).ok_or("Audiobook removed")?;
-    if let Some(p) = &playing {
-        b.position = p.snapshot().position.min(b.seconds());
-        remember_position(b);
-    }
-    let added = prefix.committed_samples;
-    publish_prefix(&directory(id)?, b, &prefix)?;
-    let path = audio_path(&directory(id)?, b)?;
-    let samples = b.committed_samples;
-    if let Some(p) = playing {
-        if let Err(error) = p.update_file_rebased(&path, samples, added) {
-            p.stop();
-            l.playing = None;
-            return Err(error);
-        }
-    }
-    let b = l.books.get(id).ok_or("Audiobook removed")?;
-    refresh_chapter_files(&directory(id)?, b)?;
-    let merged = b.clone();
-    drop(l);
-    if full && !needs_earlier(&merged, true) && generation_active(&service, id, token) {
-        let (at, raw, offset) = locate_for_job(&bridge, &service, id, token, &merged, 10_000)?;
-        *reader = at;
-        let mut l = service.0.lock().unwrap();
-        if !l.producing.as_ref().is_some_and(|(_, t, _)| t == token) {
-            return Ok(false);
-        }
-        let b = l.books.get_mut(id).ok_or("Audiobook removed")?;
-        let mut next = b.clone();
-        capture_from(&mut next, reader, &raw, offset)?;
-        save(&directory(id)?, &next)?;
-        *b = next;
-    }
-    Ok(true)
-}
 fn producer(
     app: &AppHandle,
     id: &str,
     token: &str,
     full: bool,
-    chapter_only: bool,
     autoplay: bool,
 ) -> Result<(), String> {
     if full {
@@ -2636,15 +1999,7 @@ fn producer(
         play(app, id, None)?;
         auto = false;
     }
-    let mut reader = if full && book.backfill.is_some() {
-        let reader = bridge.command_while(json!({"type":"inspect"}), || {
-            generation_active(&service, id, token)
-        })?;
-        if key(&reader)? != book.key {
-            return Err("Connected book changed".into());
-        }
-        reader
-    } else if !book.pages.is_empty() {
+    let mut reader = if !book.pages.is_empty() {
         {
             let mut l = service.0.lock().unwrap();
             if let Some(b) = l.books.get_mut(id) {
@@ -2740,11 +2095,9 @@ fn producer(
             let ready = b.pending_start.is_none();
             let committed = b.committed_samples;
             let audio = audio_path(&directory(id)?, b)?;
-            if let Some(p) = l
-                .playing
-                .as_ref()
-                .filter(|p| p.book == id && state.job.lock().unwrap().is_current(p.job))
-            {
+            if let Some(p) = l.playing.as_ref().filter(|p| {
+                p.book == id && !p.saved_chapter && state.job.lock().unwrap().is_current(p.job)
+            }) {
                 p.player.update_file(&audio, committed, false)?;
             }
             drop(l);
@@ -2756,43 +2109,9 @@ fn producer(
         }
         {
             let l = service.0.lock().unwrap();
-            let b = &l.books[id];
-            refresh_chapter_files(&directory(id)?, b)?;
-            if chapter_only
-                && b.checkpoints
-                    .first()
-                    .is_some_and(|c| chapter_view(b, 0, c)["complete"] == true)
-            {
-                return Ok(());
-            }
+            refresh_chapter_files(&directory(id)?, &l.books[id])?;
         }
-        let earlier = {
-            let l = service.0.lock().unwrap();
-            let b = &l.books[id];
-            b.pending_start.is_none()
-                && needs_earlier(b, full)
-                && b.backfill.as_ref().is_none_or(|bf| bf.blocked.is_none())
-                && (full
-                    || buffer >= 120.
-                    || reader["endOfBook"] == true
-                    || (chapter_only && b.checkpoints.len() > 1))
-        };
-        if earlier {
-            match backfill_step(app, id, token, &mut reader, &settings, full) {
-                Ok(true) => continue,
-                Ok(false) => {}
-                Err(error) => {
-                    let mut l = service.0.lock().unwrap();
-                    let b = l.books.get_mut(id).ok_or("Audiobook removed")?;
-                    if needs_earlier(b, full) {
-                        b.backfill.get_or_insert_with(Box::default).blocked = Some(error.clone());
-                    }
-                    let scope = if full { "Audiobook" } else { "Chapter" };
-                    return Err(format!("{scope} preparation needs attention: {error}"));
-                }
-            }
-        }
-        if !full && !chapter_only && buffer >= 120. {
+        if !full && buffer >= 120. {
             std::thread::sleep(Duration::from_millis(250));
             continue;
         }
@@ -2811,15 +2130,17 @@ fn producer(
                     && b.saved_ranges.is_empty()
                     && b.checkpoints.iter().all(|c| c.verified_start);
                 refresh_chapter_files(&directory(id)?, b)?;
-                b.message = if b.backfill.as_ref().is_some_and(|bf| bf.blocked.is_some()) {
-                    b.message.clone()
-                } else if b.complete {
+                b.message = if b.complete {
                     None
                 } else {
                     Some("Generated through the end, starting from your imported page.".into())
                 };
                 save(&directory(id)?, b)?;
-                if let Some(p) = l.playing.as_ref().filter(|p| p.book == id) {
+                if let Some(p) = l
+                    .playing
+                    .as_ref()
+                    .filter(|p| p.book == id && !p.saved_chapter)
+                {
                     p.player.push(Vec::new(), true);
                 }
                 return Ok(());
@@ -2869,7 +2190,11 @@ fn producer(
             }
             publish_suffix(&directory(id)?, b, &suffix)?;
             let merged = b.clone();
-            if let Some(p) = l.playing.as_ref().filter(|p| p.book == id) {
+            if let Some(p) = l
+                .playing
+                .as_ref()
+                .filter(|p| p.book == id && !p.saved_chapter)
+            {
                 p.player.update_file(
                     &audio_path(&directory(id)?, &merged)?,
                     merged.committed_samples,
@@ -2908,18 +2233,37 @@ fn producer(
     }
 }
 fn generate(app: &AppHandle, id: Option<String>, full: bool) -> Result<String, String> {
-    generate_mode(app, id, full, false, None)
+    generate_mode(app, id, full, None)
+}
+fn captured_reader(book: &Book, full: bool) -> Option<Value> {
+    (full
+        && book
+            .full_scan
+            .as_ref()
+            .is_some_and(|s| s.transcript_ready()))
+    .then(|| json!({"status":"ready","url":book.url,"bookId":book.book_id,"title":book.title}))
 }
 fn generate_mode(
     app: &AppHandle,
     id: Option<String>,
     full: bool,
-    chapter_only: bool,
     revision: Option<u64>,
 ) -> Result<String, String> {
     let service = app.state::<Audiobooks>();
     let bridge = app.state::<crate::reader_bridge::ReaderBridge>();
-    let reader = bridge.command(json!({"type":"inspect"}))?;
+    let captured = if full {
+        let library = service.0.lock().unwrap();
+        id.as_ref()
+            .and_then(|id| library.books.get(id))
+            .and_then(|b| captured_reader(b, full))
+    } else {
+        None
+    };
+    let reader = if let Some(reader) = captured {
+        reader
+    } else {
+        bridge.command(json!({"type":"inspect"}))?
+    };
     let book_key = key(&reader)?;
     let mut library = service.0.lock().unwrap();
     check_selection(&library, revision)?;
@@ -2946,7 +2290,7 @@ fn generate_mode(
         }
     } else {
         let book = Book {
-            schema_version: 3,
+            schema_version: 4,
             range_id: identity(),
             saved_ranges: Vec::new(),
             pending_start: None,
@@ -2955,7 +2299,6 @@ fn generate_mode(
             full_scan: None,
             continuous: false,
             audio_file: default_audio(),
-            backfill: None,
             end_verified: false,
             activity: None,
             bookmark_sentence: None,
@@ -2996,7 +2339,7 @@ fn generate_mode(
     let playback = library
         .playing
         .as_ref()
-        .filter(|p| p.book == id)
+        .filter(|p| p.book == id && !p.saved_chapter)
         .map(|p| p.player.snapshot());
     let restart = playback.is_some();
     if let Some(snapshot) = &playback {
@@ -3005,7 +2348,7 @@ fn generate_mode(
         b.speed = snapshot.speed;
         remember_position(b);
     }
-    let autoplay = !full && !chapter_only && !restart;
+    let autoplay = !full && !restart;
     let token = uuid::Uuid::new_v4().to_string();
     let book = library.books.get_mut(&id).unwrap();
     book.message = None;
@@ -3013,12 +2356,9 @@ fn generate_mode(
     if book.pending_start.is_some() {
         book.activity = Some("selected".into());
     }
-    if let Some(backfill) = &mut book.backfill {
-        backfill.blocked = None;
-    }
     save(&directory(&id)?, book)?;
     library.worker = true;
-    library.producing = Some((id.clone(), token.clone(), full || chapter_only));
+    library.producing = Some((id.clone(), token.clone(), full));
     drop(library);
     if restart && !full {
         let result = (|| {
@@ -3040,7 +2380,7 @@ fn generate_mode(
     let handle = app.clone();
     let book_id = id.clone();
     std::thread::spawn(move || {
-        let mut result = producer(&handle, &book_id, &token, full, chapter_only, autoplay);
+        let mut result = producer(&handle, &book_id, &token, full, autoplay);
         if !generation_active(&handle.state::<Audiobooks>(), &book_id, &token) {
             result = Ok(());
         }
@@ -3083,13 +2423,6 @@ pub async fn audiobook_generate(
     full: bool,
 ) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || generate(&app, id, full))
-        .await
-        .map_err(|e| e.to_string())?
-}
-
-#[tauri::command]
-pub async fn audiobook_complete_chapter(app: AppHandle, id: String) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || generate_mode(&app, Some(id), false, true, None))
         .await
         .map_err(|e| e.to_string())?
 }
@@ -3273,7 +2606,7 @@ mod tests {
     }
     pub(super) fn book() -> Book {
         Book {
-            schema_version: 3,
+            schema_version: 4,
             range_id: identity(),
             saved_ranges: Vec::new(),
             pending_start: None,
@@ -3282,7 +2615,6 @@ mod tests {
             full_scan: None,
             continuous: false,
             audio_file: default_audio(),
-            backfill: None,
             end_verified: false,
             activity: None,
             bookmark_sentence: None,
@@ -3364,7 +2696,7 @@ mod tests {
         fs::remove_dir_all(dir).unwrap();
     }
     #[test]
-    fn cached_page_selection_reuses_audio_and_rejects_changed_page_text() {
+    fn cached_page_selection_reuses_audio_and_starts_a_new_session_after_reflow() {
         let dir = std::env::temp_dir().join(format!("texthalo-page-choice-{}", identity()));
         fs::create_dir(&dir).unwrap();
         let mut b = book();
@@ -3383,65 +2715,19 @@ mod tests {
         assert!(b.saved_ranges.is_empty());
         assert_eq!(b.position, 1.);
         assert_eq!(fs::read(audio_path(&dir, &b).unwrap()).unwrap(), audio);
-        assert!(select_page(&dir, &mut b, &reader(2, "p2"), "Different layout.").is_err());
-        assert_eq!(b.position, 1.);
+        assert_eq!(
+            select_page(&dir, &mut b, &reader(2, "new-view"), "Different layout.").unwrap(),
+            None
+        );
+        assert_eq!(b.position, 0.);
+        assert_eq!(b.saved_ranges.len(), 1);
+        assert_eq!(
+            fs::read(audio_path(&dir, &b.saved_ranges[0]).unwrap()).unwrap(),
+            audio
+        );
         fs::remove_dir_all(dir).unwrap();
     }
-    #[test]
-    fn filling_a_gap_reuses_the_saved_prefix_and_keeps_sentence_bookmarks() {
-        let dir = std::env::temp_dir().join(format!("texthalo-gap-{}", identity()));
-        fs::create_dir_all(&dir).unwrap();
-        let mut b = book();
-        capture(&mut b, &reader(1, "p1"), "CHAPTER ONE\nFirst.").unwrap();
-        recover(&dir, &b).unwrap();
-        save(&dir, &b).unwrap();
-        commit(&dir, &mut b, &[0.25; 24]).unwrap();
-        let old_sentence = b.sentences[0].id.clone();
-        let chapter_id = b.checkpoints[0].id.clone();
-        select_page(&dir, &mut b, &reader(3, "p3"), "Third.").unwrap();
-        commit(&dir, &mut b, &[0.75; 24]).unwrap();
-        b.pending_start = None;
-        b.position = 0.0005;
-        remember_position(&mut b);
-        let selected_id = b.sentences[0].id.clone();
-        let bf = Backfill {
-            seed: Some(b.saved_ranges[0].clone()),
-            verified: true,
-            from_beginning: true,
-            pages: vec![Page {
-                heading: None,
-                progress: "Page 2".into(),
-                fingerprint: "p2".into(),
-                text: "Second.".into(),
-            }],
-            ..Default::default()
-        };
-        let mut prefix = prefix_book(&b, &bf).unwrap();
-        assert_eq!(prefix.generated, 1);
-        assert_eq!(prefix.sentences[0].id, old_sentence);
-        let pd = backfill_directory(&dir, &b).unwrap();
-        fs::create_dir_all(&pd).unwrap();
-        fs::copy(
-            audio_path(&dir, bf.seed.as_ref().unwrap()).unwrap(),
-            audio_path(&pd, &prefix).unwrap(),
-        )
-        .unwrap();
-        recover(&pd, &prefix).unwrap();
-        save(&pd, &prefix).unwrap();
-        commit(&pd, &mut prefix, &[0.5; 24]).unwrap();
-        b.backfill = Some(Box::new(bf));
-        publish_prefix(&dir, &mut b, &prefix).unwrap();
-        assert!(b.saved_ranges.is_empty());
-        assert_eq!(b.generated, 3);
-        assert_eq!(b.checkpoints.len(), 1);
-        assert_eq!(b.checkpoints[0].id, chapter_id);
-        assert_eq!(b.sentences[2].id, selected_id);
-        assert!((stable_position(&b).unwrap() - 0.0025).abs() < 1e-9);
-        let audio = crate::spoken::Spoken::load_audio(&audio_path(&dir, &b).unwrap()).unwrap();
-        assert_eq!(audio.len(), 72);
-        assert!(audio[0] < audio[24] && audio[24] < audio[48]);
-        fs::remove_dir_all(dir).unwrap();
-    }
+
     #[test]
     fn a_backward_jump_joins_cached_later_audio_without_rendering_it_again() {
         let dir = std::env::temp_dir().join(format!("texthalo-suffix-{}", identity()));
@@ -3542,57 +2828,6 @@ mod tests {
         assert!(check_selection(&library, Some(previous)).is_err());
         assert!(check_selection(&library, Some(2)).is_ok());
     }
-    #[test]
-    fn backfill_progress_reports_search_rendering_and_publication_separately() {
-        let mut b = book();
-        b.from_beginning = false;
-        capture(
-            &mut b,
-            &json!({"fingerprint":"a","progress":"Page 13"}),
-            "Middle.",
-        )
-        .unwrap();
-        let earlier = Page {
-            heading: None,
-            progress: "Page 12".into(),
-            fingerprint: "b".into(),
-            text: "Earlier.".into(),
-        };
-        b.backfill = Some(Box::new(Backfill {
-            pages: vec![earlier],
-            ..Default::default()
-        }));
-        let searching = b.view()["backfillProgress"].clone();
-        assert_eq!(searching["phase"], "searching");
-        assert_eq!(searching["pages"], 1);
-        let mut prefix = book();
-        capture(
-            &mut prefix,
-            &json!({"fingerprint":"c","progress":"Page 11"}),
-            "First. Second.",
-        )
-        .unwrap();
-        prefix.generated = 1;
-        let bf = b.backfill.as_mut().unwrap();
-        bf.verified = true;
-        bf.label = Some("Chapter One".into());
-        bf.prefix = Some(Box::new(prefix));
-        let rendering = b.view()["backfillProgress"].clone();
-        assert_eq!(rendering["phase"], "rendering");
-        assert_eq!(rendering["chapter"], "Chapter One");
-        assert_eq!(rendering["ready"], 1);
-        assert_eq!(rendering["total"], 2);
-        b.backfill
-            .as_mut()
-            .unwrap()
-            .prefix
-            .as_mut()
-            .unwrap()
-            .generated = 2;
-        assert_eq!(b.view()["backfillProgress"]["phase"], "publishing");
-        b.backfill = None;
-        assert!(b.view()["backfillProgress"].is_null());
-    }
 
     #[test]
     fn bookmark_identifies_the_sentence_instead_of_only_absolute_time() {
@@ -3618,6 +2853,50 @@ mod tests {
         fs::remove_dir_all(dir).unwrap();
     }
     #[test]
+    fn continue_requires_both_chapter_boundaries_and_all_audio() {
+        let mut b = book();
+        b.from_beginning = false;
+        capture(&mut b, &reader(5, "p5"), "A middle passage.").unwrap();
+        capture(&mut b, &reader(6, "p6"), "CHAPTER TWO\nA new chapter.").unwrap();
+        capture(&mut b, &reader(7, "p7"), "CHAPTER THREE\nThe next chapter.").unwrap();
+        for (i, sentence) in b.sentences.iter_mut().enumerate() {
+            sentence.start_sample = i as u64 * RATE;
+            sentence.end_sample = (i as u64 + 1) * RATE;
+        }
+        b.generated = b.sentences.len();
+        b.committed_samples = b.generated as u64 * RATE;
+        let middle = b.checkpoints[1].sentence as f64;
+        let end = b.checkpoints[2].sentence as f64;
+        assert!(saved_playback(&b, Some(0.)).is_none()); // The imported fragment never becomes resumable.
+        assert!(saved_playback(&b, Some(end)).is_none()); // The next chapter is still open.
+        assert_eq!(
+            saved_playback(&b, Some(middle)),
+            Some((middle, (end * RATE as f64) as u64, 1))
+        );
+        assert_eq!(resume(&b).unwrap()["chapter"], "CHAPTER TWO");
+        b.generated = b.checkpoints[2].sentence;
+        b.sentences[b.generated].start_sample = 0; // The next chapter has not rendered yet.
+        assert!(saved_playback(&b, Some(middle)).is_some());
+        b.generated -= 1;
+        assert!(resume(&b).is_none()); // A detected end is insufficient until rendering finishes.
+    }
+
+    #[test]
+    fn completing_only_the_end_of_an_imported_chapter_does_not_enable_continue() {
+        let mut b = book();
+        b.from_beginning = false;
+        capture(&mut b, &reader(5, "p5"), "A middle passage.").unwrap();
+        b.generated = b.sentences.len();
+        b.sentences[0].end_sample = RATE;
+        b.committed_samples = RATE;
+        b.end_verified = true;
+        assert!(resume(&b).is_none());
+        let reopened: Book = serde_json::from_value(serde_json::to_value(&b).unwrap()).unwrap();
+        assert!(resume(&reopened).is_none());
+        assert!(saved_playback(&reopened, Some(0.)).is_none());
+    }
+
+    #[test]
     fn a_midchapter_import_stays_available_but_is_not_labeled_complete() {
         let mut b = book();
         b.from_beginning = false;
@@ -3633,95 +2912,7 @@ mod tests {
         assert_eq!(b.view()["checkpoints"][0]["status"], "partial");
         assert_eq!(b.view()["checkpoints"][0]["seconds"], 0.0);
     }
-    #[test]
-    fn adding_earlier_audio_keeps_the_same_sentence_and_intra_sentence_offset() {
-        let dir = std::env::temp_dir().join(format!("texthalo-prefix-{}", identity()));
-        fs::create_dir(&dir).unwrap();
-        let mut b = book();
-        b.from_beginning = false;
-        capture(
-            &mut b,
-            &json!({"fingerprint":"middle","progress":"Page 5"}),
-            "The middle sentence.",
-        )
-        .unwrap();
-        recover(&dir, &b).unwrap();
-        save(&dir, &b).unwrap();
-        commit(&dir, &mut b, &vec![0.5; 48000]).unwrap();
-        b.position = 0.5;
-        remember_position(&mut b);
-        save_bookmark(&dir, &b).unwrap();
-        let id = b.sentences[0].id.clone();
-        let mut prefix = book();
-        prefix.from_beginning = false;
-        capture(
-            &mut prefix,
-            &json!({"fingerprint":"start","progress":"Page 4"}),
-            "CHAPTER TWO\nEarlier text.",
-        )
-        .unwrap();
-        let prefix_dir = backfill_directory(&dir, &b).unwrap();
-        fs::create_dir_all(&prefix_dir).unwrap();
-        recover(&prefix_dir, &prefix).unwrap();
-        save(&prefix_dir, &prefix).unwrap();
-        commit(&prefix_dir, &mut prefix, &vec![0.25; 24000]).unwrap();
-        publish_prefix(&dir, &mut b, &prefix).unwrap();
-        assert_eq!(b.sentences[1].id, id);
-        assert_eq!(b.position, 1.5);
-        assert_eq!(stable_position(&b), Some(1.5));
-        assert_eq!(b.generated, 2);
-        assert!(b.checkpoints[0].verified_start);
-        assert_eq!(b.checkpoints[0].label, "CHAPTER TWO");
-        assert!(!b.from_beginning);
-        assert!(!b.complete);
-        let mut restored: Book =
-            serde_json::from_slice(&fs::read(dir.join("book.json")).unwrap()).unwrap();
-        load_bookmark(&dir, &mut restored);
-        assert_eq!(restored.position, 1.5);
-        assert_eq!(restored.bookmark_offset, 12000);
-        recover(&dir, &restored).unwrap();
-        assert_eq!(
-            crate::spoken::Spoken::load_audio(&audio_path(&dir, &restored).unwrap())
-                .unwrap()
-                .len(),
-            72000
-        );
-        fs::remove_dir_all(dir).unwrap();
-    }
-    #[test]
-    fn failed_prefix_publication_preserves_original_recording_and_bookmark() {
-        let dir = std::env::temp_dir().join(format!("texthalo-prefix-{}", identity()));
-        fs::create_dir(&dir).unwrap();
-        let mut b = book();
-        capture(
-            &mut b,
-            &json!({"fingerprint":"middle","progress":"Page 5"}),
-            "Original.",
-        )
-        .unwrap();
-        recover(&dir, &b).unwrap();
-        save(&dir, &b).unwrap();
-        commit(&dir, &mut b, &[0.5; 48]).unwrap();
-        let mut prefix = book();
-        capture(
-            &mut prefix,
-            &json!({"fingerprint":"start","progress":"Page 4"}),
-            "Earlier.",
-        )
-        .unwrap();
-        let pd = backfill_directory(&dir, &b).unwrap();
-        fs::create_dir_all(&pd).unwrap();
-        recover(&pd, &prefix).unwrap();
-        save(&pd, &prefix).unwrap();
-        commit(&pd, &mut prefix, &[0.25; 24]).unwrap();
-        fs::create_dir(dir.join("book.tmp")).unwrap();
-        assert!(publish_prefix(&dir, &mut b, &prefix).is_err());
-        assert_eq!(b.committed_samples, 48);
-        assert_eq!(b.audio_file, "audio.wav");
-        recover(&dir, &b).unwrap();
-        assert_eq!(fs::metadata(dir.join("audio.wav")).unwrap().len(), 140);
-        fs::remove_dir_all(dir).unwrap();
-    }
+
     #[test]
     fn chapter_files_grow_without_duplication_and_keep_their_identity() {
         let dir = std::env::temp_dir().join(format!("texthalo-chapters-{}", identity()));
@@ -3804,46 +2995,7 @@ mod tests {
         assert_eq!(reopened.bookmark_offset, 12000);
         fs::remove_dir_all(dir).unwrap();
     }
-    #[test]
-    fn backfill_orders_pages_and_tracks_an_unfinished_sentence_seam() {
-        let mut b = book();
-        b.from_beginning = false;
-        capture(
-            &mut b,
-            &json!({"fingerprint":"middle","progress":"Page 5"}),
-            "on the imported page.",
-        )
-        .unwrap();
-        let bf = Backfill {
-            pages: vec![
-                Page {
-                    heading: None,
-                    progress: "Page 4".into(),
-                    fingerprint: "p4".into(),
-                    text: "A sentence ends here. This continues".into(),
-                },
-                Page {
-                    heading: Some("CHAPTER TWO".into()),
-                    progress: "Page 3".into(),
-                    fingerprint: "p3".into(),
-                    text: "CHAPTER TWO Earlier.".into(),
-                },
-            ],
-            verified: true,
-            ..Default::default()
-        };
-        let prefix = prefix_book(&b, &bf).unwrap();
-        assert_eq!(prefix.pages[0].progress, "Page 3");
-        assert_eq!(prefix.pages[1].progress, "Page 4");
-        assert!(prefix.pending.is_empty());
-        let last = prefix.sentences.last().unwrap();
-        assert_eq!(last.text, "This continues");
-        assert_eq!(
-            last.continuation_of.as_deref(),
-            Some(b.sentences[0].id.as_str())
-        );
-        assert_eq!(last.sources[0].page, 1);
-    }
+
     const ANCHOR: &str = "The family walked along the river together while discussing their plans for the coming summer. They returned home before sunset and prepared a quiet meal with the fresh vegetables from their garden.";
     const NOVEL: &str = "The next morning brought unexpected visitors who carried important news from the distant village.";
     fn resume_fixture() -> Book {
@@ -4043,88 +3195,7 @@ mod tests {
             "New words at the capture boundary must not be swallowed as OCR substitutions"
         );
     }
-    #[test]
-    fn completion_backfill_reuses_an_earlier_range_and_only_stages_the_gap() {
-        let mut b = book();
-        b.from_beginning = false;
-        capture(&mut b, &reader(40, "current"), NOVEL).unwrap();
-        let seed = resume_fixture();
-        let seed_id = seed.sentences[0].id.clone();
-        b.saved_ranges.push(Box::new(seed));
-        b.backfill = Some(Box::default());
-        let gap = "A missing passage belongs between these two recordings.";
-        stage_earlier_page(
-            &mut b,
-            Page {
-                heading: None,
-                text: format!("{ANCHOR} {gap}"),
-                progress: "Page 26".into(),
-                fingerprint: "wide26".into(),
-            },
-            false,
-            true,
-        )
-        .unwrap();
-        let bf = b.backfill.as_ref().unwrap();
-        assert!(bf.verified && bf.from_beginning);
-        assert_eq!(bf.pages[0].text, gap);
-        assert_eq!(bf.seed.as_ref().unwrap().sentences[0].id, seed_id);
-    }
-    #[test]
-    fn completion_backfill_continues_past_chapter_boundaries() {
-        let mut b = book();
-        b.from_beginning = false;
-        capture(
-            &mut b,
-            &reader(40, "current"),
-            "CHAPTER THREE\nExisting chapter.",
-        )
-        .unwrap();
-        assert!(needs_earlier(&b, true));
-        assert!(!needs_earlier(&b, false));
-        b.backfill = Some(Box::default());
-        stage_earlier_page(
-            &mut b,
-            Page {
-                heading: Some("CHAPTER TWO".into()),
-                text: "CHAPTER TWO Earlier chapter.".into(),
-                progress: "Page 10".into(),
-                fingerprint: "p10".into(),
-            },
-            false,
-            true,
-        )
-        .unwrap();
-        assert!(!b.backfill.as_ref().unwrap().verified);
-        stage_earlier_page(
-            &mut b,
-            Page {
-                heading: Some("CHAPTER ONE".into()),
-                text: "CHAPTER ONE Opening chapter.".into(),
-                progress: "Page 1".into(),
-                fingerprint: "p1".into(),
-            },
-            true,
-            true,
-        )
-        .unwrap();
-        let bf = b.backfill.as_ref().unwrap();
-        assert!(bf.verified && bf.from_beginning);
-        assert_eq!(prefix_book(&b, bf).unwrap().checkpoints.len(), 2);
-    }
-    #[test]
-    fn completion_finds_missing_text_before_a_saved_start_in_the_same_view() {
-        let b = resume_fixture();
-        let gap = "A previously uncaptured introductory sentence appears here.";
-        let raw = format!("{gap}\n{ANCHOR}");
-        let page = earlier_slice(&b, &reader(26, "wide26"), &raw)
-            .unwrap()
-            .unwrap();
-        assert_eq!(page.text, gap);
-        assert!(earlier_slice(&b, &reader(26, "wide26"), ANCHOR)
-            .unwrap()
-            .is_none());
-    }
+
     #[test]
     fn completion_suffix_without_gap_proceeds_to_join() {
         let b = resume_fixture();
@@ -4145,28 +3216,7 @@ mod tests {
             Some("CHAPTER TWO")
         );
     }
-    #[test]
-    fn completion_restore_crosses_a_long_cached_range() {
-        let mut b = resume_fixture();
-        b.backfill = Some(Box::default());
-        b.backfill.as_mut().unwrap().whole_book = true;
-        let target = b.pages.last().unwrap().clone();
-        let at = std::cell::Cell::new(250);
-        let command = |request: Value| -> Result<Value, String> {
-            if request["type"] == "navigate" {
-                assert_eq!(request["direction"], "previous");
-                at.set(at.get() - 1);
-            }
-            let r = reader(at.get(), &format!("p{}", at.get()));
-            if request["type"] == "ocr" {
-                Ok(json!({"reader":r,"text":ANCHOR}))
-            } else {
-                Ok(r)
-            }
-        };
-        restore_page_with(command, || true, &b, &target, RestorePolicy::Resume).unwrap();
-        assert_eq!(at.get(), 28);
-    }
+
     #[test]
     fn completion_hint_seek_returns_from_the_cover_before_matching_sentences() {
         for start_at in [0, 97] {
@@ -4252,125 +3302,7 @@ mod tests {
         assert!(locate_continuation_with_limit(command, || true, &b, 100).is_ok());
         assert_eq!(scans.get(), 1);
     }
-    #[test]
-    fn completion_staged_gap_and_saved_audio_survive_restart_without_regeneration() {
-        let dir = std::env::temp_dir().join(format!("texthalo-fill-all-{}", identity()));
-        fs::create_dir_all(&dir).unwrap();
-        let mut opening = book();
-        capture(
-            &mut opening,
-            &reader(1, "p1"),
-            &format!("CHAPTER ONE\n{ANCHOR}"),
-        )
-        .unwrap();
-        recover(&dir, &opening).unwrap();
-        save(&dir, &opening).unwrap();
-        for _ in 0..opening.sentences.len() {
-            commit(&dir, &mut opening, &[0.25; 24]).unwrap();
-        }
-        let mut middle = book();
-        middle.from_beginning = false;
-        middle.audio_file = format!("{}.wav", identity());
-        let middle_text="The patient investigator checked every locked doorway before recording the evidence in a blue notebook. Her colleague examined the eastern staircase and found a copper key beneath the lowest step.";
-        capture(
-            &mut middle,
-            &reader(3, "p3"),
-            &format!("CHAPTER TWO\n{middle_text}"),
-        )
-        .unwrap();
-        recover(&dir, &middle).unwrap();
-        save(&dir, &middle).unwrap();
-        for _ in 0..middle.sentences.len() {
-            commit(&dir, &mut middle, &[0.5; 24]).unwrap();
-        }
-        let mut b = book();
-        b.from_beginning = false;
-        b.audio_file = format!("{}.wav", identity());
-        let last_text="Several village elders gathered around the old stone fountain to discuss the news arriving from the mountains. They agreed to send an experienced guide along the northern road before the next sunrise.";
-        capture(
-            &mut b,
-            &reader(5, "p5"),
-            &format!("CHAPTER THREE\n{last_text}"),
-        )
-        .unwrap();
-        recover(&dir, &b).unwrap();
-        save(&dir, &b).unwrap();
-        for _ in 0..b.sentences.len() {
-            commit(&dir, &mut b, &[0.75; 24]).unwrap();
-        }
-        b.end_verified = true;
-        b.position = 0.0005;
-        remember_position(&mut b);
-        let bookmark = b.bookmark_sentence.clone();
-        let original = b
-            .sentences
-            .iter()
-            .chain(opening.sentences.iter())
-            .chain(middle.sentences.iter())
-            .map(|s| s.id.clone())
-            .collect::<Vec<_>>();
-        b.saved_ranges = vec![Box::new(opening.clone()), Box::new(middle.clone())];
-        for (seed, gap, sample, gap_page) in [
-            (
-                &middle,
-                "The missing fourth page connects the middle and final recorded chapters.",
-                0.625,
-                "Page 4",
-            ),
-            (
-                &opening,
-                "The missing second page connects the opening and middle recorded chapters.",
-                0.375,
-                "Page 2",
-            ),
-        ] {
-            b.backfill = Some(Box::default());
-            let text = format!("{} {gap}", seed.pages.last().unwrap().text);
-            stage_earlier_page(
-                &mut b,
-                Page {
-                    heading: None,
-                    text,
-                    progress: gap_page.into(),
-                    fingerprint: identity(),
-                },
-                false,
-                true,
-            )
-            .unwrap();
-            let mut prefix = prefix_book(&b, b.backfill.as_ref().unwrap()).unwrap();
-            let existing = prefix.generated;
-            let pd = backfill_directory(&dir, &b).unwrap();
-            fs::create_dir_all(&pd).unwrap();
-            fs::copy(
-                audio_path(&dir, seed).unwrap(),
-                audio_path(&pd, &prefix).unwrap(),
-            )
-            .unwrap();
-            recover(&pd, &prefix).unwrap();
-            save(&pd, &prefix).unwrap();
-            b.backfill.as_mut().unwrap().prefix = Some(Box::new(prefix.clone()));
-            save(&dir, &b).unwrap();
-            b = serde_json::from_slice(&fs::read(dir.join("book.json")).unwrap()).unwrap();
-            prefix = serde_json::from_slice(&fs::read(pd.join("book.json")).unwrap()).unwrap();
-            assert_eq!(prefix.generated, existing);
-            while prefix.generated < prefix.sentences.len() {
-                commit(&pd, &mut prefix, &[sample; 24]).unwrap();
-            }
-            publish_prefix(&dir, &mut b, &prefix).unwrap();
-        }
-        assert!(b.complete);
-        assert!(b.saved_ranges.is_empty());
-        assert_eq!(b.checkpoints.len(), 3);
-        assert_eq!(b.bookmark_sentence, bookmark);
-        for id in original {
-            assert_eq!(b.sentences.iter().filter(|s| s.id == id).count(), 1);
-        }
-        let pcm = crate::spoken::Spoken::load_audio(&audio_path(&dir, &b).unwrap()).unwrap();
-        assert!(pcm.windows(2).all(|w| w[0] <= w[1]));
-        assert_eq!(pcm.len(), b.sentences.len() * 24);
-        fs::remove_dir_all(dir).unwrap();
-    }
+
     #[test]
     fn retrieval_earlier_guard_is_bounded_for_a_large_history() {
         let mut b = book();
@@ -4381,38 +3313,7 @@ mod tests {
         assert!(!contains_earlier_context(&b,"The archivist opened the garden door and watched sunlight spread across the empty courtyard. Several unfamiliar travelers waited quietly by a stone fountain while distant bells announced the start of another day."));
         assert!(start.elapsed() < Duration::from_secs(2));
     }
-    #[test]
-    fn completion_prefix_restores_headings_from_normalized_saved_pages() {
-        let b = book();
-        let bf = Backfill {
-            verified: true,
-            from_beginning: true,
-            pages: vec![
-                Page {
-                    heading: Some("CHAPTER TWO".into()),
-                    text: "CHAPTER TWO Second chapter.".into(),
-                    progress: "Page 10".into(),
-                    fingerprint: "p10".into(),
-                },
-                Page {
-                    heading: Some("CHAPTER ONE".into()),
-                    text: "CHAPTER ONE First chapter.".into(),
-                    progress: "Page 1".into(),
-                    fingerprint: "p1".into(),
-                },
-            ],
-            ..Default::default()
-        };
-        let prefix = prefix_book(&b, &bf).unwrap();
-        assert_eq!(
-            prefix
-                .checkpoints
-                .iter()
-                .map(|c| c.label.as_str())
-                .collect::<Vec<_>>(),
-            ["CHAPTER ONE", "CHAPTER TWO"]
-        );
-    }
+
     #[test]
     fn retrieval_resume_uses_broader_sentence_context_when_the_tail_has_multiple_ocr_errors() {
         let mut b = book();
@@ -4430,55 +3331,7 @@ mod tests {
         assert_eq!(text[offset..].trim(), NOVEL);
         assert!(continuation_offset(&b, &format!("{changed} {changed}")).is_err());
     }
-    #[test]
-    fn completion_prefix_keeps_all_chapters_and_the_existing_chapter_identity() {
-        let dir = std::env::temp_dir().join(format!("texthalo-full-prefix-{}", identity()));
-        fs::create_dir_all(&dir).unwrap();
-        let mut b = book();
-        b.from_beginning = false;
-        capture(
-            &mut b,
-            &reader(20, "later"),
-            "CHAPTER THREE\nExisting third chapter.",
-        )
-        .unwrap();
-        let original = b.sentences[0].id.clone();
-        let chapter = b.checkpoints[0].id.clone();
-        recover(&dir, &b).unwrap();
-        save(&dir, &b).unwrap();
-        commit(&dir, &mut b, &[0.75; 24]).unwrap();
-        let mut prefix = book();
-        capture(
-            &mut prefix,
-            &reader(1, "start"),
-            "CHAPTER ONE\nFirst chapter.",
-        )
-        .unwrap();
-        capture(
-            &mut prefix,
-            &reader(10, "second"),
-            "CHAPTER TWO\nSecond chapter.",
-        )
-        .unwrap();
-        let pd = backfill_directory(&dir, &b).unwrap();
-        fs::create_dir_all(&pd).unwrap();
-        recover(&pd, &prefix).unwrap();
-        save(&pd, &prefix).unwrap();
-        commit(&pd, &mut prefix, &[0.25; 24]).unwrap();
-        commit(&pd, &mut prefix, &[0.5; 24]).unwrap();
-        publish_prefix(&dir, &mut b, &prefix).unwrap();
-        assert_eq!(
-            b.checkpoints
-                .iter()
-                .map(|c| c.label.as_str())
-                .collect::<Vec<_>>(),
-            ["CHAPTER ONE", "CHAPTER TWO", "CHAPTER THREE"]
-        );
-        assert_eq!(b.checkpoints[2].id, chapter);
-        assert_eq!(b.sentences[2].id, original);
-        assert!(b.from_beginning);
-        fs::remove_dir_all(dir).unwrap();
-    }
+
     #[test]
     fn completion_finds_saved_later_audio_inside_a_reflowed_page() {
         let mut b = resume_fixture();
@@ -4596,221 +3449,7 @@ mod tests {
         assert_eq!(reopened.reader_hint.unwrap().progress, "Page 28");
         assert_eq!(b.sentences.last().unwrap().text, NOVEL);
     }
-    #[test]
-    fn restore_handles_location_cover_and_page_transitions() {
-        for (start, goal, expected_direction) in [
-            ("Page 1", "Location 1 of 1583", "previous"),
-            ("Location 1 of 1583", "Page 11", "next"),
-            ("Location 42 of 1583", "Location 40 of 1583", "previous"),
-        ] {
-            let b = book();
-            let turned = std::cell::Cell::new(false);
-            let target = Page {
-                heading: None,
-                progress: goal.into(),
-                fingerprint: "saved-layout".into(),
-                text: ANCHOR.into(),
-            };
-            let command = |request: Value| -> Result<Value, String> {
-                if request["type"] == "navigate" {
-                    assert!(!turned.replace(true), "Should restore in one turn");
-                    assert_eq!(request["direction"], expected_direction);
-                }
-                let mut r = reader(
-                    1,
-                    if turned.get() {
-                        "new-layout"
-                    } else {
-                        "initial"
-                    },
-                );
-                r["progress"] = json!(if turned.get() { goal } else { start });
-                r["startOfBook"] = json!(r["progress"] == "Location 1 of 1583");
-                if request["type"] == "ocr" {
-                    Ok(json!({"reader":r,"text":ANCHOR}))
-                } else {
-                    Ok(r)
-                }
-            };
-            let at =
-                restore_page_with(command, || true, &b, &target, RestorePolicy::Resume).unwrap();
-            assert_eq!(at["progress"], goal);
-            assert!(turned.get());
-        }
-    }
-    #[test]
-    fn restore_verifies_an_identical_location_view_without_turning() {
-        let b = book();
-        let target = Page {
-            heading: None,
-            progress: "Location 1 of 1583".into(),
-            fingerprint: "cover".into(),
-            text: ANCHOR.into(),
-        };
-        let command = |request: Value| -> Result<Value, String> {
-            let mut r = reader(1, "cover");
-            r["progress"] = json!("Location 1 of 1583");
-            match request["type"].as_str().unwrap() {
-                "inspect" => Ok(r),
-                "ocr" => Ok(json!({"reader":r,"text":ANCHOR})),
-                other => panic!("Unexpected command: {other}"),
-            }
-        };
-        assert!(restore_page_with(command, || true, &b, &target, RestorePolicy::Resume).is_ok());
-    }
-    #[test]
-    fn restore_never_compares_arbitrary_locations_with_page_numbers() {
-        let b = book();
-        let target = Page {
-            heading: None,
-            progress: "Location 300 of 1583".into(),
-            fingerprint: "saved".into(),
-            text: ANCHOR.into(),
-        };
-        let command = |request: Value| -> Result<Value, String> {
-            assert_eq!(
-                request["type"], "inspect",
-                "Different units cannot guess a direction"
-            );
-            Ok(reader(30, "current"))
-        };
-        assert!(restore_page_with(command, || true, &b, &target, RestorePolicy::Resume).is_err());
-    }
-    #[test]
-    fn restore_does_not_oscillate_when_kindle_skips_the_saved_page_number() {
-        use std::cell::Cell;
-        let b = book();
-        let at = Cell::new(29);
-        let turns = Cell::new(0);
-        let target = Page {
-            heading: None,
-            progress: "Page 28".into(),
-            fingerprint: "p28".into(),
-            text: "Saved passage.".into(),
-        };
-        let command = |request: Value| -> Result<Value, String> {
-            if request["type"] == "navigate" {
-                at.set(if request["direction"] == "previous" {
-                    26
-                } else {
-                    29
-                });
-                turns.set(turns.get() + 1);
-            }
-            let r = reader(at.get(), &format!("p{}", at.get()));
-            if request["type"] == "ocr" {
-                Ok(json!({"reader":r,"text":"Different passage."}))
-            } else {
-                Ok(r)
-            }
-        };
-        assert!(restore_page_with(command, || true, &b, &target, RestorePolicy::Resume).is_err());
-        assert!(
-            turns.get() <= 1,
-            "Skipped page numbers must not reverse and repeat: {} turns",
-            turns.get()
-        );
-    }
-    #[test]
-    fn restore_accepts_verified_passage_after_a_page_number_jump() {
-        use std::cell::Cell;
-        let b = book();
-        let at = Cell::new(29);
-        let turns = Cell::new(0);
-        let target = Page {
-            heading: None,
-            progress: "Page 28".into(),
-            fingerprint: "old-layout".into(),
-            text: "Saved passage.".into(),
-        };
-        let command = |request: Value| -> Result<Value, String> {
-            if request["type"] == "navigate" {
-                at.set(26);
-                turns.set(turns.get() + 1);
-            }
-            let r = reader(at.get(), &format!("p{}", at.get()));
-            if request["type"] == "ocr" {
-                Ok(json!({"reader":r,"text":"Saved passage."}))
-            } else {
-                Ok(r)
-            }
-        };
-        let restored =
-            restore_page_with(command, || true, &b, &target, RestorePolicy::Resume).unwrap();
-        assert_eq!(restored["progress"], "Page 26");
-        assert_eq!(turns.get(), 1);
-    }
-    #[test]
-    fn cancelling_a_borrow_returns_the_owned_reader_to_the_forward_page() {
-        use std::cell::Cell;
-        let b = book();
-        let at = Cell::new(3usize);
-        let turns = Cell::new(0usize);
-        let view = || json!({"status":"ready","url":b.url,"bookId":b.book_id,"progress":format!("Page {}",at.get()),"fingerprint":format!("p{}",at.get())});
-        let command = |r: Value| -> Result<Value, String> {
-            match r["type"].as_str().unwrap() {
-                "inspect" => Ok(view()),
-                "navigate" => {
-                    assert_eq!(r["fingerprint"], view()["fingerprint"]);
-                    at.set(if r["direction"] == "previous" {
-                        at.get() - 1
-                    } else {
-                        at.get() + 1
-                    });
-                    turns.set(turns.get() + 1);
-                    Ok(view())
-                }
-                "ocr" => Ok(json!({"reader":view(),"text":format!("Passage {}.",at.get())})),
-                _ => panic!("Unexpected command"),
-            }
-        };
-        let target = Page {
-            heading: None,
-            progress: "Page 1".into(),
-            fingerprint: "p1".into(),
-            text: "Passage 1.".into(),
-        };
-        let forward = Page {
-            progress: "Page 3".into(),
-            fingerprint: "p3".into(),
-            text: "Passage 3.".into(),
-            ..target.clone()
-        };
-        let mut owned = view();
-        assert!(restore_page_with(
-            &command,
-            || turns.get() < 1,
-            &b,
-            &target,
-            RestorePolicy::Borrow(&mut owned)
-        )
-        .is_err());
-        assert_eq!(at.get(), 2);
-        assert_eq!(owned["fingerprint"], "p2");
-        let restored = restore_page_with(
-            &command,
-            || false,
-            &b,
-            &forward,
-            RestorePolicy::Return(&mut owned),
-        )
-        .unwrap();
-        assert_eq!(restored["progress"], "Page 3");
-        assert_eq!(at.get(), 3);
-        // A manual page change invalidates ownership even during cancellation cleanup.
-        at.set(1);
-        let previous_turns = turns.get();
-        assert!(restore_page_with(
-            &command,
-            || false,
-            &b,
-            &forward,
-            RestorePolicy::Return(&mut owned)
-        )
-        .is_err());
-        assert_eq!(at.get(), 1);
-        assert_eq!(turns.get(), previous_turns);
-    }
+
     #[test]
     fn sentences_cross_pages_without_losing_source_offsets() {
         let mut b = book();

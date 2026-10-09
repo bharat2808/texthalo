@@ -1,14 +1,16 @@
 # TextHalo Reader
 
-A relay for TextHalo's desktop audiobook library. Currently supports Kindle web on `read.amazon.ca` and `read.amazon.com`. The popup shows supported website true/false, Kindle, book title, page position and app connection. Audiobook generation and playback live in TextHalo.
+A relay for TextHalo's desktop audiobook library. Currently supports Kindle web on `read.amazon.ca` and `read.amazon.com`. The popup shows website support, book title, page position and app connection, with two actions: **Listen from this page** and **Build complete audiobook**. TextHalo performs generation and playback locally.
 
 ## Local setup
 
 1. Install the native helper: `node browser-extension/native/setup.mjs --install`.
 2. Load this folder as an unpacked extension in `chrome://extensions`.
-3. Reload an open Kindle book. Ready selected books connect to the running app automatically.
-4. Open the extension popup and choose **Enable page capture** for that tab; Chrome requires this gesture for screenshot access.
-5. Use the app's floating suggestion or **Audiobooks** section to create or continue a recording.
+3. Reload an open Kindle book. Detection does not connect automatically.
+4. Open the extension popup and choose **Connect to TextHalo** for that tab; Chrome requires this gesture for screenshot access.
+5. Choose **Listen from this page** or **Build complete audiobook** in the extension. Playback and chapter controls remain in the app overlay while the extension is connected. Only chapters recorded completely from beginning to end offer Continue in the **Audiobooks** library. A mid-chapter page session can play now without searching backward; its initial fragment is not resumable later. Choose **Disconnect** to end the reader connection.
+
+The app’s **Audiobooks** section can save a bundled extension ZIP and open these installation instructions. Once published, set `VITE_READER_EXTENSION_URL` to the verified Store listing when building the app to switch the download button to Store installation.
 
 After updating source files, reload the installed extension and the reader tab. The popup reports a timeout or outdated worker rather than remaining on “Checking”. The native helper uses the stable extension ID in `extension-id.txt`; helper origin and Chrome registration must stay aligned.
 
