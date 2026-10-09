@@ -77,6 +77,10 @@ struct Book {
     reader_hint: Option<ReaderHint>,
     #[serde(default)]
     recovery: Option<Value>,
+    #[serde(default)]
+    full_scan: Option<Box<full_scan::FullScan>>,
+    #[serde(default)]
+    continuous: bool,
     #[serde(default = "default_audio")]
     audio_file: String,
     #[serde(default)]
@@ -154,7 +158,7 @@ impl Book {
             })
             .collect::<Vec<_>>();
         checkpoints.sort_by_key(|c| c["page"].as_str().and_then(page_number).unwrap_or(u64::MAX));
-        json!({"backfillProgress":backfill_progress,"id":self.id,"key":self.key,"title":self.title,"platform":"kindle","pages":self.pages.len(),"generated":self.generated,"seconds":self.seconds(),"totalPages":self.pages.len()+self.saved_ranges.iter().map(|b|b.pages.len()).sum::<usize>(),"totalGenerated":self.generated+self.saved_ranges.iter().map(|b|b.generated).sum::<usize>(),"totalSeconds":self.seconds()+self.saved_ranges.iter().map(|b|b.seconds()).sum::<f64>(),"position":self.position,"speed":self.speed,"complete":self.complete,"fromBeginning":self.from_beginning,"message":self.message,"activity":self.activity,"backfillBlocked":self.backfill.as_ref().and_then(|b|b.blocked.as_ref()),
+        json!({"fullPreparation":self.full_scan.as_ref().map(|s|s.view()),"backfillProgress":backfill_progress,"id":self.id,"key":self.key,"title":self.title,"platform":"kindle","pages":self.pages.len(),"generated":self.generated,"seconds":self.seconds(),"totalPages":self.pages.len()+self.saved_ranges.iter().map(|b|b.pages.len()).sum::<usize>(),"totalGenerated":self.generated+self.saved_ranges.iter().map(|b|b.generated).sum::<usize>(),"totalSeconds":self.seconds()+self.saved_ranges.iter().map(|b|b.seconds()).sum::<f64>(),"position":self.position,"speed":self.speed,"complete":self.complete && coverage_intact(self),"fromBeginning":self.from_beginning,"message":self.message,"activity":self.activity,"backfillBlocked":self.backfill.as_ref().and_then(|b|b.blocked.as_ref()),
             "recovery": self.recovery, "resume": resume(self), "pendingPage": self.pending_start.as_ref().and_then(|f| self.pages.iter().find(|p| &p.fingerprint == f)).map(|p| &p.progress),
             "checkpoints": checkpoints,
             "passage":current.map(|s|json!({"text":s.text,"page":s.sources.first().and_then(|p|self.pages.get(p.page)).map(|p|&p.progress)}))})
@@ -273,6 +277,8 @@ fn select_page(
         next.range_id = identity();
         next.audio_file = format!("{}.wav", identity());
         next.backfill = None;
+        next.full_scan = None;
+        next.continuous = false;
         next.reader_hint = None;
         next.recovery = None;
         next.pages.clear();
@@ -408,12 +414,94 @@ fn stable_position(book: &Book) -> Option<f64> {
             / RATE as f64,
     )
 }
+// Labels can prove that a numbered chapter is missing; they do not prove page coverage.
+fn chapter_number(label: &str) -> Option<u32> {
+    let lower = label.to_lowercase();
+    let suffix = lower.strip_prefix("chapter ")?.trim();
+    if let Ok(number) = suffix.parse::<u32>() {
+        return Some(number);
+    }
+    let words = suffix.replace('-', " ");
+    let mut number = 0u32;
+    for word in words.split_whitespace() {
+        let value = match word {
+            "one" => 1,
+            "two" => 2,
+            "three" => 3,
+            "four" => 4,
+            "five" => 5,
+            "six" => 6,
+            "seven" => 7,
+            "eight" => 8,
+            "nine" => 9,
+            "ten" => 10,
+            "eleven" => 11,
+            "twelve" => 12,
+            "thirteen" => 13,
+            "fourteen" => 14,
+            "fifteen" => 15,
+            "sixteen" => 16,
+            "seventeen" => 17,
+            "eighteen" => 18,
+            "nineteen" => 19,
+            "twenty" => 20,
+            "thirty" => 30,
+            "forty" => 40,
+            "fifty" => 50,
+            "sixty" => 60,
+            "seventy" => 70,
+            "eighty" => 80,
+            "ninety" => 90,
+            "hundred" => {
+                number = number.max(1) * 100;
+                continue;
+            }
+            "and" => continue,
+            _ => return None,
+        };
+        number += value;
+    }
+    (number > 0).then_some(number)
+}
+fn numbered_successor(a: &Checkpoint, b: &Checkpoint) -> bool {
+    chapter_number(&a.label)
+        .zip(chapter_number(&b.label))
+        .is_none_or(|(a, b)| a.checked_add(1) == Some(b))
+}
+fn page_span_continuous(book: &Book, start: usize, end: usize) -> bool {
+    book.continuous
+        || book
+            .pages
+            .get(start..end.min(book.pages.len()))
+            .is_some_and(|pages| {
+                pages.windows(2).all(|pair| {
+                    page_number(&pair[0].progress)
+                        .zip(page_number(&pair[1].progress))
+                        .is_none_or(|(a, b)| b >= a && b - a <= 3)
+                })
+            })
+}
+fn coverage_intact(book: &Book) -> bool {
+    book.continuous
+        || (page_span_continuous(book, 0, book.pages.len())
+            && book
+                .checkpoints
+                .windows(2)
+                .all(|c| numbered_successor(&c[0], &c[1])))
+}
 fn chapter_view(book: &Book, index: usize, c: &Checkpoint) -> Value {
     let end = book
         .checkpoints
         .get(index + 1)
         .map_or(book.sentences.len(), |n| n.sentence);
-    let closed = index + 1 < book.checkpoints.len() || book.end_verified;
+    let following = book.checkpoints.get(index + 1);
+    let closed = (following.is_some() || book.end_verified)
+        && (book.continuous || following.is_none_or(|next| numbered_successor(c, next)))
+        && page_span_continuous(
+            book,
+            c.page,
+            following.map_or(book.pages.len(), |next| next.page + 1),
+        );
     let complete = c.verified_start
         && closed
         && end <= book.generated
@@ -547,13 +635,23 @@ fn commit(dir: &Path, book: &mut Book, samples: &[f32]) -> Result<(), String> {
     if samples.is_empty() || samples.iter().any(|s| !s.is_finite()) {
         return Err("Sentence produced no valid audio".into());
     }
+    let bytes: Vec<u8> = samples
+        .iter()
+        .flat_map(|s| ((s.clamp(-1., 1.) * 32767.) as i16).to_le_bytes())
+        .collect();
+    commit_pcm(dir, book, &bytes)
+}
+fn commit_pcm(dir: &Path, book: &mut Book, bytes: &[u8]) -> Result<(), String> {
+    if bytes.is_empty() || bytes.len() % 2 != 0 {
+        return Err("Sentence produced no valid PCM audio".into());
+    }
     let mut next = book.clone();
     let sentence = next
         .sentences
         .get_mut(next.generated)
         .ok_or("No pending sentence")?;
     sentence.start_sample = next.committed_samples;
-    sentence.end_sample = next.committed_samples + samples.len() as u64;
+    sentence.end_sample = next.committed_samples + (bytes.len() / 2) as u64;
     next.committed_samples = sentence.end_sample;
     next.generated += 1;
     let h = header(next.committed_samples)?;
@@ -564,11 +662,7 @@ fn commit(dir: &Path, book: &mut Book, samples: &[f32]) -> Result<(), String> {
             .map_err(|e| e.to_string())?;
         f.seek(SeekFrom::Start(44 + book.committed_samples * 2))
             .map_err(|e| e.to_string())?;
-        let bytes: Vec<u8> = samples
-            .iter()
-            .flat_map(|s| ((s.clamp(-1., 1.) * 32767.) as i16).to_le_bytes())
-            .collect();
-        f.write_all(&bytes)
+        f.write_all(bytes)
             .and_then(|_| f.sync_all())
             .map_err(|e| e.to_string())?;
         f.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
@@ -638,7 +732,8 @@ fn publish_prefix(dir: &Path, book: &mut Book, prefix: &Book) -> Result<(), Stri
     next.generated += sentence_count;
     next.committed_samples += added;
     next.from_beginning = prefix.from_beginning;
-    next.complete = next.from_beginning
+    next.complete = coverage_intact(&next)
+        && next.from_beginning
         && next.saved_ranges.is_empty()
         && next.checkpoints.iter().all(|c| c.verified_start)
         && next.end_verified
@@ -769,7 +864,8 @@ fn publish_suffix(dir: &Path, book: &mut Book, suffix: &Book) -> Result<(), Stri
     next.committed_samples += suffix.committed_samples;
     next.saved_ranges.retain(|r| r.range_id != suffix.range_id);
     next.end_verified = suffix.end_verified;
-    next.complete = next.from_beginning
+    next.complete = coverage_intact(&next)
+        && next.from_beginning
         && next.end_verified
         && next.saved_ranges.is_empty()
         && next.generated == next.sentences.len()
@@ -904,6 +1000,8 @@ fn chapter(text: &str) -> Option<String> {
         && line.len() < 100)
         .then(|| line.to_owned())
 }
+#[path = "audiobooks/full_scan.rs"]
+mod full_scan;
 #[path = "audiobooks/matching.rs"]
 mod matching;
 use matching::{
@@ -1309,6 +1407,18 @@ fn capture(book: &mut Book, reader: &Value, text: &str) -> Result<(), String> {
     capture_from(book, reader, text, 0)
 }
 fn capture_from(book: &mut Book, reader: &Value, text: &str, offset: usize) -> Result<(), String> {
+    capture_from_mode(book, reader, text, offset, false)
+}
+fn repeated_capture(book: &Book, reader: &Value, normal: &str, verified_forward: bool) -> bool {
+    book.pages.iter().any(|p| {
+        p.fingerprint == reader["fingerprint"].as_str().unwrap_or("")
+            || (!normal.is_empty() && p.text == normal
+                && !(verified_forward && ReaderPosition::parse(&p.progress)
+                    .zip(reader["progress"].as_str().and_then(ReaderPosition::parse))
+                    .is_some_and(|(a,b)| a.compare(b) == Some(std::cmp::Ordering::Less))))
+    })
+}
+fn capture_from_mode(book: &mut Book, reader: &Value, text: &str, offset: usize, verified_forward: bool) -> Result<(), String> {
     let fingerprint = reader["fingerprint"]
         .as_str()
         .ok_or("Missing page fingerprint")?;
@@ -1325,11 +1435,7 @@ fn capture_from(book: &mut Book, reader: &Value, text: &str, offset: usize) -> R
         return Ok(());
     }
     let novel = normal[offset..].to_owned();
-    if book
-        .pages
-        .iter()
-        .any(|p| p.fingerprint == fingerprint || (!normal.is_empty() && p.text == normal))
-    {
+    if repeated_capture(book, reader, &normal, verified_forward) {
         return Err("Repeated page detected; generation stopped safely".into());
     }
     let heading = if offset == 0 {
@@ -1444,6 +1550,8 @@ impl Audiobooks {
                             for range in &b.saved_ranges {
                                 recover(&dir, range)?;
                             }
+                            full_scan::recover_preparation(&dir, &mut b);
+                            b.complete &= coverage_intact(&b);
                             b.activity = None;
                             Ok(b)
                         }) {
@@ -2061,6 +2169,8 @@ fn prefix_book(book: &Book, backfill: &Backfill) -> Result<Book, String> {
     prefix.id = identity();
     prefix.audio_file = default_audio();
     prefix.backfill = None;
+    prefix.full_scan = None;
+    prefix.continuous = false;
     prefix.saved_ranges.clear();
     prefix.pending_start = None;
     prefix.reader_hint = None;
@@ -2507,6 +2617,10 @@ fn producer(
     chapter_only: bool,
     autoplay: bool,
 ) -> Result<(), String> {
+    if full {
+        return full_scan::producer(app, id, token)
+            .map_err(|error| format!("Audiobook preparation needs attention: {error}"));
+    }
     let service = app.state::<Audiobooks>();
     let bridge = app.state::<crate::reader_bridge::ReaderBridge>();
     let book = service
@@ -2692,7 +2806,8 @@ fn producer(
                     continue;
                 }
                 b.end_verified = true;
-                b.complete = b.from_beginning
+                b.complete = coverage_intact(b)
+                    && b.from_beginning
                     && b.saved_ranges.is_empty()
                     && b.checkpoints.iter().all(|c| c.verified_start);
                 refresh_chapter_files(&directory(id)?, b)?;
@@ -2826,7 +2941,7 @@ fn generate_mode(
         if book.key != book_key {
             return Err("Open the selected audiobook in the browser".into());
         }
-        if book.complete {
+        if book.complete && (!full || book.continuous) {
             return Err("This audiobook is already complete".into());
         }
     } else {
@@ -2837,6 +2952,8 @@ fn generate_mode(
             pending_start: None,
             reader_hint: None,
             recovery: None,
+            full_scan: None,
+            continuous: false,
             audio_file: default_audio(),
             backfill: None,
             end_verified: false,
@@ -2903,7 +3020,7 @@ fn generate_mode(
     library.worker = true;
     library.producing = Some((id.clone(), token.clone(), full || chapter_only));
     drop(library);
-    if restart {
+    if restart && !full {
         let result = (|| {
             play(app, &id, None)?;
             if playback.is_some_and(|p| p.paused) {
@@ -2980,6 +3097,25 @@ pub async fn audiobook_complete_chapter(app: AppHandle, id: String) -> Result<St
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn missing_numbered_chapters_cannot_close_a_recorded_chapter() {
+        let mut b = book();
+        capture(
+            &mut b,
+            &reader(38, "p38"),
+            "Chapter Five\nThe saved fifth chapter ends here.",
+        )
+        .unwrap();
+        capture(
+            &mut b,
+            &reader(75, "p75"),
+            "Chapter Fourteen\nA later chapter was imported separately.",
+        )
+        .unwrap();
+        b.generated = b.sentences.len();
+        assert_eq!(chapter_view(&b, 0, &b.checkpoints[0])["complete"], false);
+        assert_eq!(chapter_view(&b, 0, &b.checkpoints[0])["status"], "partial");
+    }
     #[test]
     fn dismissing_the_floating_suggestion_keeps_library_reader_controls_available() {
         let service = Audiobooks::default();
@@ -3135,7 +3271,7 @@ mod tests {
             "Separated context halves must not create an append boundary"
         );
     }
-    fn book() -> Book {
+    pub(super) fn book() -> Book {
         Book {
             schema_version: 3,
             range_id: identity(),
@@ -3143,6 +3279,8 @@ mod tests {
             pending_start: None,
             reader_hint: None,
             recovery: None,
+            full_scan: None,
+            continuous: false,
             audio_file: default_audio(),
             backfill: None,
             end_verified: false,
@@ -3168,7 +3306,7 @@ mod tests {
             voice: crate::config::KokoroSettings::default(),
         }
     }
-    fn reader(page: u64, fingerprint: &str) -> Value {
+    pub(super) fn reader(page: u64, fingerprint: &str) -> Value {
         json!({"status":"ready","url":"https://read.amazon.ca/?asin=B0GY3RKVRZ","bookId":"B0GY3RKVRZ","progress":format!("Page {page}"),"fingerprint":fingerprint})
     }
     #[test]
@@ -4172,16 +4310,18 @@ mod tests {
             .map(|s| s.id.clone())
             .collect::<Vec<_>>();
         b.saved_ranges = vec![Box::new(opening.clone()), Box::new(middle.clone())];
-        for (seed, gap, sample) in [
+        for (seed, gap, sample, gap_page) in [
             (
                 &middle,
                 "The missing fourth page connects the middle and final recorded chapters.",
                 0.625,
+                "Page 4",
             ),
             (
                 &opening,
                 "The missing second page connects the opening and middle recorded chapters.",
                 0.375,
+                "Page 2",
             ),
         ] {
             b.backfill = Some(Box::default());
@@ -4191,7 +4331,7 @@ mod tests {
                 Page {
                     heading: None,
                     text,
-                    progress: "Page 2".into(),
+                    progress: gap_page.into(),
                     fingerprint: identity(),
                 },
                 false,

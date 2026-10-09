@@ -33,7 +33,8 @@ export type Audiobook = {
     label: string;
     nearby?: { sentenceId: string; seconds: number; page: string } | null;
   } | null;
-  activity: "forward" | "backfill" | "selected" | "locating" | null;
+  activity: "forward" | "backfill" | "selected" | "locating" | "full-scan" | null;
+  fullPreparation?: {phase: string; pages: number; page: string | null; generated: number; reused: number} | null;
   resume: { page: string; chapter: string | null } | null;
   pendingPage: string | null;
   backfillBlocked: string | null;
@@ -143,6 +144,12 @@ export function completeChapter(id: string) {
 
 export function preparationLabel(book: Audiobook) {
   const progress = book.backfillProgress;
+  const full = book.fullPreparation;
+  if (full && book.activity === "full-scan") {
+    if (full.phase === "finding-start") return "Finding the beginning of the book…";
+    if (full.phase === "publishing") return "Saving the complete audiobook…";
+    return `Creating full audiobook · ${full.page || "starting"} · ${full.generated} sentences ready · ${full.reused} reused`;
+  }
   if (book.activity === "locating") return book.recovery?.label || "Locating your saved sentence…";
   if (book.pendingPage && book.activity === null) {
     return `Selected page saved · ${book.pendingPage}. Resume preparing to listen.`;

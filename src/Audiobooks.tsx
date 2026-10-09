@@ -335,7 +335,7 @@ export default function Audiobooks() {
                       title="Fill missing passages and reuse audio already prepared"
                       onClick={() => run(() => generateBook(book.id, true))}
                     >
-                      Create full audiobook
+                      {book.fullPreparation ? "Resume full audiobook" : "Create full audiobook"}
                     </button>
                   </div>
                 )
