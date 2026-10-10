@@ -154,13 +154,31 @@ fn saved_playback(book: &Book, position: Option<f64>) -> Option<(f64, u64, usize
         let end = book.sentences.get(end_index.checked_sub(1)?)?.end_sample;
         (end > start).then_some((start, end))
     };
+    // Playlist: a selected chapter keeps playing through the complete chapters
+    // that follow it, stopping after the last consecutive complete chapter.
+    let playlist_end = |k: usize, i: usize, end: u64| {
+        let mut playlist_end = end;
+        let mut next = i + 1;
+        for &(j, c) in &chapters[k + 1..] {
+            if j != next {
+                break;
+            }
+            if let Some((_, chapter_end)) = bounds(j, c) {
+                playlist_end = chapter_end;
+                next += 1;
+            } else {
+                break;
+            }
+        }
+        playlist_end
+    };
     let wanted = position.unwrap_or(book.position);
     if wanted.is_finite() && wanted >= 0. {
         let sample = (wanted * RATE as f64).round() as u64;
-        for (i, c) in &chapters {
-            if let Some((start, end)) = bounds(*i, c) {
+        for (k, &(i, c)) in chapters.iter().enumerate() {
+            if let Some((start, end)) = bounds(i, c) {
                 if sample >= start && sample < end {
-                    return Some((wanted, end, *i));
+                    return Some((wanted, playlist_end(k, i, end), i));
                 }
             }
         }
@@ -168,9 +186,9 @@ fn saved_playback(book: &Book, position: Option<f64>) -> Option<(f64, u64, usize
     if position.is_some() {
         return None;
     }
-    let (i, c) = chapters.first()?;
-    let (start, end) = bounds(*i, c)?;
-    Some((start as f64 / RATE as f64, end, *i))
+    let &(i, c) = chapters.first()?;
+    let (start, end) = bounds(i, c)?;
+    Some((start as f64 / RATE as f64, playlist_end(0, i, end), i))
 }
 fn resume(book: &Book) -> Option<Value> {
     std::iter::once(book)

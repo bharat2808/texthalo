@@ -186,7 +186,11 @@ async function prepare(directory, version, config) {
   // Notarization is explicit below, using the selected Keychain profile.
   for (const key of ["APPLE_ID", "APPLE_PASSWORD", "APPLE_API_KEY", "APPLE_API_KEY_PATH", "APPLE_API_ISSUER"]) delete env[key];
   await mkdir(resolve(directory, ".."), { recursive: true });
-  await mkdir(directory); // Refuse reuse: partial artifacts must never masquerade as a fresh build.
+  // Overwrite: clear any previous run's folder so release artifacts never pile up.
+  // Removing first (rather than reusing) keeps the original guarantee that partial
+  // artifacts from an interrupted run can never masquerade as a fresh build.
+  await rm(directory, { recursive: true, force: true });
+  await mkdir(directory);
   run("npm", ["test"]);
   run("npm", ["run", "website:build"]);
   run("cargo", ["test", "--locked", "--manifest-path", "src-tauri/Cargo.toml"]);
