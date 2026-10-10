@@ -110,6 +110,49 @@ fn build_assistant() {
     );
 }
 
+fn build_reader_host() {
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("macos") {
+        return;
+    }
+    let target = std::env::var("TARGET").unwrap();
+    let arch = if target.starts_with("aarch64") {
+        "arm64"
+    } else {
+        "x86_64"
+    };
+    std::fs::create_dir_all("binaries").expect("create native binary directory");
+    for file in [
+        "native/ScreenText.swift",
+        "../browser-extension/native/ReaderHost.swift",
+    ] {
+        println!("cargo:rerun-if-changed={file}");
+    }
+    let output = format!("binaries/reader-host-{target}");
+    let deployment_target = format!("{arch}-apple-macos14.0");
+    let toolchain = swift_toolchain();
+    let status = std::process::Command::new(&toolchain.compiler)
+        .args([
+            "-parse-as-library",
+            "-O",
+            "-target",
+            &deployment_target,
+            "-sdk",
+            &toolchain.sdk,
+            "native/ScreenText.swift",
+            "../browser-extension/native/ReaderHost.swift",
+            "-o",
+            &output,
+        ])
+        .status()
+        .expect("A Swift toolchain is required to build the reader host");
+    assert!(status.success(), "reader host compilation failed");
+    println!(
+        "cargo:rustc-env=TEXTHALO_READER_HOST_DEV_PATH={}/{}",
+        std::env::var("CARGO_MANIFEST_DIR").unwrap(),
+        output
+    );
+}
+
 fn build_reader_zip() {
     let root = std::path::Path::new("../browser-extension");
     let files = [
@@ -146,6 +189,7 @@ fn build_reader_zip() {
 fn main() {
     build_reader_zip();
     build_assistant();
+    build_reader_host();
     println!("cargo:rerun-if-env-changed=VITE_TEXTHALO_API_URL");
     println!("cargo:rerun-if-env-changed=VITE_TEXTHALO_WEBSITE_URL");
     if let Ok(origin) = std::env::var("VITE_TEXTHALO_API_URL") {

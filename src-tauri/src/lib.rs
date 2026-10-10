@@ -36,6 +36,7 @@ pub mod numbers;
 mod overlay;
 mod pcm;
 mod reader_bridge;
+mod reader_host;
 mod shortcuts;
 mod speech;
 mod speech_input;
@@ -1477,6 +1478,7 @@ pub fn run() {
 
             let handle = app.handle().clone();
             hosted::initialize_secure_storage(&handle);
+            reader_host::ensure_registered(&handle);
             let fresh_install = !config::settings_path(&handle).exists();
             let settings = config::load(&handle);
             if fresh_install && !cfg!(debug_assertions) && settings.launch_at_login {

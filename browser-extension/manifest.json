@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "TextHalo Reader",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Control local Kindle audiobook creation and playback through the TextHalo Mac app.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAz9HNrm4hn8S2I0Y65dU/fQ01ZRW4flmjrhECwXFV1G0FCf0gcdtdW0lcxpZVpowQi+s7xv3coPCLhoPpo7x+3Vp4OK3pZRxNSjH7SfilbOGlqPMh8skyXDmtLEwzdMWr2zKgFTe1P7VmwQNSh5jO67VJyM8hUd1aibTtn+ZYrHmhlCPhxBn87jW/eYhUvropmzt+jCkJBqtHyayTWEoIGkEaMnWneSFnEjBKZb+DAsrr67Te94PpRr0eaHGuRN4o6ThUHeweqs/PjOoCHKo7TYNwb67k3uBEkTMqry1xz2YA/UI67ZHxBK8zI1NnR6YMViTm27bxK/YnGZhPg7VJaQIDAQAB",
   "permissions": [

@@ -39,6 +39,9 @@ test-results/
 # Native assistant sidecar compiled by build.rs
 src-tauri/binaries/texthalo-assistant-*
 
+# Browser reader native-messaging host compiled by build.rs
+src-tauri/binaries/reader-host-*
+
 # Generated demo narration and render scratch assets
 modal-video/output/
 

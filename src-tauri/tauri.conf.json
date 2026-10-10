@@ -61,7 +61,8 @@
       "icons/icon.ico"
     ],
     "externalBin": [
-      "binaries/texthalo-assistant"
+      "binaries/texthalo-assistant",
+      "binaries/reader-host"
     ]
   },
   "plugins": {

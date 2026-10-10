@@ -1,6 +1,6 @@
 # Chrome Web Store preparation
 
-This is TextHalo's macOS browser relay, version 0.4.0. It has not been submitted or published. Narration, page buffering, audio files and listening bookmarks belong to the TextHalo desktop app. The extension provides two connected-book actions: Listen from this page and Build complete audiobook; generation, audio storage and the saved library remain in the desktop app.
+This is TextHalo's macOS browser relay, version 0.5.0. It has not been submitted or published. Narration, page buffering, audio files and listening bookmarks belong to the TextHalo desktop app. The extension provides two connected-book actions: Listen from this page and Build complete audiobook; generation, audio storage and the saved library remain in the desktop app.
 
 ## Draft listing
 
@@ -39,14 +39,17 @@ Official references (checked October 9, 2026):
 - https://developer.chrome.com/docs/extensions/develop/concepts/native-messaging
 
 
-## Readiness audit — October 9, 2026
+## Readiness audit — October 10, 2026
 
 The MV3 package has narrow Kindle host access, bundled executable code, icons and an allowlisted archive. Native messaging is supported by Chrome; requiring a Mac desktop companion is not itself a publishing blocker. Store acceptance remains subject to review.
 
+Completed October 10, 2026:
+- The Mac app now registers the native host itself on every launch (`src-tauri/src/reader_host.rs`): it installs the `reader-host` binary (compiled by `build.rs`, bundled via `externalBin`) to `~/Library/Application Support/TextHalo Reader/` and writes the `com.texthalo.reader.json` manifests for Chrome, Edge, Brave and Chromium. No Xcode or manual setup needed on user machines.
+- The extension detects a missing app install: the popup probes the native host once per session (`bridge-status`); when the host is absent it shows a download banner with a direct link to the latest Mac DMG (`https://storage.texthalo.app/TextHalo-macOS-aarch64.dmg`). No new extension permissions were required.
+- The website privacy policy (`https://texthalo.app/privacy/`) now has a “Browser extension” section covering the reader integration; effective date October 10, 2026. Supply this URL as the store listing's privacy policy.
+
 Still required before submission:
-- Distribute the updated, signed app and signed reader helper with a user installation flow. Current app packaging does not install/register the helper; `native/setup.mjs --install` is a development setup, requiring source and a Swift compiler.
-- Create a Store draft, verify its assigned ID against `extension-id.txt`, manifest key and helper origin/registration, and test the Store-installed extension with the distributed app.
-- Publish the extension’s privacy disclosures and Limited Use statement; the current website privacy page does not describe this reader integration. Complete the Store privacy and permission fields.
+- Create a Store draft, verify its assigned ID against `extension-id.txt`, manifest key and helper origin/registration, and test the Store-installed extension with the distributed app (fresh Mac without the app: banner appears; install DMG, launch app once, reopen popup: banner clears).
 - Prepare listing screenshots, support details, and reviewer instructions/test content. Verify capture, page turns, connection loss, app restarts and audiobook playback with a real supported Kindle book.
 - Configure `VITE_READER_EXTENSION_URL` only after a real listing exists. Until then the app downloads its bundled ZIP for manual unpacked installation and links to setup instructions.
 

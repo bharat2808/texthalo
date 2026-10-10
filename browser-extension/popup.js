@@ -3,6 +3,8 @@ const setText = (id, text) => {
   const element = $(id);
   if (element.textContent !== text) element.textContent = text;
 };
+// Mutable release artifact: always the latest published Mac app.
+const DOWNLOAD_URL = "https://storage.texthalo.app/TextHalo-macOS-aarch64.dmg";
 async function request(type, payload = {}) {
   let timer;
   const response = await Promise.race([
@@ -24,6 +26,31 @@ async function request(type, payload = {}) {
   return response.data;
 }
 let controls = null, pending = false, refreshing = false, actionError = "", connectionError = "";
+// The native host is registered by the Mac app on launch. When it is absent,
+// the app was never installed (or never launched): offer a direct download.
+// Checked once per popup session: each probe spawns the host process.
+let bridgeChecked = false, bridgeAbsent = false;
+async function bridgeMissing() {
+  if (bridgeChecked) return bridgeAbsent;
+  bridgeChecked = true;
+  try {
+    await request("bridge-status");
+    bridgeAbsent = false;
+  } catch (error) {
+    bridgeAbsent = /not found/i.test(error.message);
+  }
+  return bridgeAbsent;
+}
+function showDownload(show) {
+  $("download").hidden = !show;
+  document.querySelector(".support").hidden = show;
+  $("status").hidden = show;
+  if (show) {
+    $("book").hidden = true;
+    $("controls").hidden = true;
+    $("connect").hidden = true;
+  }
+}
 function renderControls(data) {
   controls = data;
   const book = data.context.book;
@@ -41,6 +68,11 @@ async function refresh() {
   if (refreshing) return;
   refreshing = true;
   try {
+    if (await bridgeMissing()) {
+      showDownload(true);
+      return;
+    }
+    showDownload(false);
     const state = await request("reader-status");
     setText("supported", state.supported ? "Yes" : "No");
     $("supported").className = state.supported ? "yes" : "no";
@@ -75,6 +107,9 @@ async function act(action) {
   } catch (error) { actionError = error.message; }
   finally { pending = false; await refresh(); }
 }
+$("download-app").onclick = () => {
+  chrome.tabs.create({ url: DOWNLOAD_URL });
+};
 $("connect").onclick = async () => {
   $("connect").disabled = true;
   connectionError = "";

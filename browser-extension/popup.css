@@ -84,3 +84,7 @@ body { width: 340px; }
 
 body { max-height: 560px; overflow-y: auto; }
 .actions button:not(#page) { background: #303744; color: #edf1f7; }
+
+#download h1 { margin-top: 0; }
+#download-app { margin: 12px 0 4px; }
+#download .fine { font-size: 11px; color: #8994a5; }
