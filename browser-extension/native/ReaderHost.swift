@@ -4,7 +4,7 @@ import ImageIO
 import UniformTypeIdentifiers
 
 @main struct ReaderHost {
-    static let allowedOrigin = "chrome-extension://ldaclgaigaiejonmonhpncphihillpka/"
+    static let allowedOrigin = "chrome-extension://jafnpokahhbldophkeogljemkblfmgmo/"
     struct Rect: Decodable { let x: Double; let y: Double; let width: Double; let height: Double }
     struct Viewport: Decodable { let width: Double; let height: Double }
     struct Request: Decodable {
