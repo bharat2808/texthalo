@@ -1,2 +1,3 @@
-# build.rs generates this sidecar. Watching it restarts Cargo during each build.
+# build.rs generates these sidecars. Watching them restarts Cargo during each build.
 binaries/texthalo-assistant-*
+binaries/reader-host-*

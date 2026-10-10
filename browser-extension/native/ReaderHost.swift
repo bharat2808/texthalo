@@ -5,6 +5,14 @@ import UniformTypeIdentifiers
 
 @main struct ReaderHost {
     static let allowedOrigin = "chrome-extension://jafnpokahhbldophkeogljemkblfmgmo/"
+    static func acceptsOrigin(_ origin: String?) -> Bool {
+        if origin == allowedOrigin { return true }
+        #if TEXTHALO_READER_DEVELOPMENT
+        return origin == "chrome-extension://ldaclgaigaiejonmonhpncphihillpka/"
+        #else
+        return false
+        #endif
+    }
     struct Rect: Decodable { let x: Double; let y: Double; let width: Double; let height: Double }
     struct Viewport: Decodable { let width: Double; let height: Double }
     struct Request: Decodable {
@@ -95,7 +103,7 @@ import UniformTypeIdentifiers
         return ["ok":true,"protocolVersion":1,"requestId":request.requestId,"data":result]
     }
     static func main() async {
-        guard CommandLine.arguments.dropFirst().first==allowedOrigin else {
+        guard acceptsOrigin(CommandLine.arguments.dropFirst().first) else {
             if let path=ProcessInfo.processInfo.environment["TEXTHALO_READER_OUTPUT"] {
                 let arguments=Array(CommandLine.arguments.dropFirst()).map { String($0.prefix(300)) }
                 if let data=try? JSONSerialization.data(withJSONObject:["arguments":arguments]) {

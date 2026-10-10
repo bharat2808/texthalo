@@ -91,12 +91,18 @@ fn register() -> Result<(), String> {
     let launcher = format!("#!/bin/sh\nexec \"{}\" \"$@\"\n", dir.join("reader-host").display());
     write_if_differ(&dir.join("launch-host"), launcher.as_bytes(), 0o700)?;
 
+    let mut allowed_origins = vec![format!("chrome-extension://{}/", extension_id())];
+    // The unpacked extension's manifest key predates its Store-assigned ID.
+    // Keep this local development origin out of release registrations.
+    if cfg!(debug_assertions) {
+        allowed_origins.push("chrome-extension://ldaclgaigaiejonmonhpncphihillpka/".into());
+    }
     let manifest = serde_json::json!({
         "name": HOST_NAME,
         "description": "TextHalo browser reader relay",
         "path": dir.join("launch-host").to_string_lossy(),
         "type": "stdio",
-        "allowed_origins": [format!("chrome-extension://{}/", extension_id())],
+        "allowed_origins": allowed_origins,
     });
     let manifest_text = format!(
         "{}\n",

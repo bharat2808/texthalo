@@ -130,7 +130,11 @@ fn build_reader_host() {
     let output = format!("binaries/reader-host-{target}");
     let deployment_target = format!("{arch}-apple-macos14.0");
     let toolchain = swift_toolchain();
-    let status = std::process::Command::new(&toolchain.compiler)
+    let mut command = std::process::Command::new(&toolchain.compiler);
+    if std::env::var("DEBUG").as_deref() == Ok("true") {
+        command.args(["-D", "TEXTHALO_READER_DEVELOPMENT"]);
+    }
+    let status = command
         .args([
             "-parse-as-library",
             "-O",
