@@ -395,6 +395,9 @@ impl FullScan {
         }
         recover(&folder, &self.draft)?;
         load_bookmark(&folder, &mut self.draft);
+        if repair_ocr_chapter_boundaries(&mut self.draft) {
+            save(&folder, &self.draft)?;
+        }
         if self.reuse_policy == 0 {
             let reused_partial = self
                 .draft

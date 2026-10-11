@@ -983,7 +983,73 @@ fn page_number(progress: &str) -> Option<u64> {
     }
     p.next()?.parse().ok()
 }
+// A common OCR split drops the p in Chapter. Only accept a numbered heading at the page start.
+fn ocr_chapter_prefix(text: &str) -> Option<String> {
+    let mut words = text.split_whitespace();
+    let first = words.next()?.to_ascii_lowercase();
+    if !matches!(first.as_str(), "cha" | "chap") || !words.next()?.eq_ignore_ascii_case("ter") {
+        return None;
+    }
+    let mut label = String::from("Chapter");
+    let mut recognized = None;
+    for word in words.take(4) {
+        label.push(' ');
+        label.push_str(word);
+        if chapter_number(&label).is_some() {
+            recognized = Some(label.clone());
+        } else {
+            break;
+        }
+    }
+    recognized
+}
+fn repair_ocr_chapter_boundaries(book: &mut Book) -> bool {
+    let mut changed = false;
+    for page in 0..book.pages.len() {
+        if book.pages[page].heading.is_some() {
+            continue;
+        }
+        let Some(label) = ocr_chapter_prefix(&book.pages[page].text) else {
+            continue;
+        };
+        // Never split a sentence assembled across pages or infer a missing chapter start.
+        let Some(sentence) = book.sentences.iter().position(|s| {
+            s.sources
+                .first()
+                .is_some_and(|source| source.page == page && source.start == 0)
+                && s.sources.iter().all(|source| source.page == page)
+        }) else {
+            continue;
+        };
+        if let Some(checkpoint) = book
+            .checkpoints
+            .iter_mut()
+            .find(|c| c.page == page && c.sentence == sentence)
+        {
+            checkpoint.label = label.clone();
+            checkpoint.verified_start = true;
+        } else {
+            book.checkpoints.push(Checkpoint {
+                id: identity(),
+                verified_start: true,
+                label: label.clone(),
+                sentence,
+                page,
+            });
+        }
+        book.pages[page].heading = Some(label);
+        changed = true;
+    }
+    book.checkpoints.sort_by_key(|c| c.sentence);
+    for range in &mut book.saved_ranges {
+        changed |= repair_ocr_chapter_boundaries(range);
+    }
+    changed
+}
 fn chapter(text: &str) -> Option<String> {
+    if let Some(label) = ocr_chapter_prefix(text) {
+        return Some(label);
+    }
     let line = text.lines().find(|l| !l.trim().is_empty())?.trim();
     let lower = line.to_lowercase();
     ((lower == "prologue"
@@ -1551,6 +1617,9 @@ impl Audiobooks {
                                 recover(&dir, range)?;
                             }
                             full_scan::recover_preparation(&dir, &mut b);
+                            if repair_ocr_chapter_boundaries(&mut b) {
+                                save(&dir, &b)?;
+                            }
                             b.complete &= coverage_intact(&b);
                             b.activity = None;
                             Ok(b)
@@ -1648,7 +1717,11 @@ impl Audiobooks {
         }
         let r = &reader["reader"];
         let k = key(r).ok()?;
-        let l = self.0.lock().unwrap();
+        let mut l = self.0.lock().unwrap();
+        if let Some(book) = l.books.values_mut().find(|b| b.key == k) {
+            // Reconnection resolves this warning without dismissing other preparation errors.
+            crate::reader_bridge::clear_connection_error(&mut book.message);
+        }
         let book = l.books.values().find(|b| b.key == k);
         Some(
             json!({"reader":r,"differentPage":book.is_some_and(|b|different_page(b,r)),"book":book.map(Book::view),"generating":l.producing.as_ref().is_some_and(|(id,_,_)|book.is_some_and(|b|&b.id==id))}),
@@ -2686,6 +2759,96 @@ pub async fn audiobook_generate(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn split_ocr_chapter_headings_survive_line_breaks() {
+        for heading in [
+            "Cha\nter Three\nAt 5 a.m.",
+            "Cha ter\nThree\nAt 5 a.m.",
+            "\nChap\nter Three\nAt 5 a.m.",
+        ] {
+            assert_eq!(chapter(heading).as_deref(), Some("Chapter Three"));
+        }
+        assert!(chapter("At 5 a.m.\nCha ter Three").is_none());
+    }
+    #[test]
+    fn reconnecting_the_same_book_clears_its_saved_connection_warning() {
+        let service = Audiobooks::default();
+        let mut b = book();
+        b.message = Some("Connect the book from the Chrome extension first.".into());
+        let id = b.id.clone();
+        service.0.lock().unwrap().books.insert(id.clone(), b);
+        let mut state = json!({"connected":false,"reader":reader(12,"page12")});
+        assert!(service.reader_context(&state).is_none());
+        assert!(service.0.lock().unwrap().books[&id].message.is_some());
+        state["connected"] = json!(true);
+        state["reader"]["bookId"] = json!("AAAAAAAAAA");
+        service.reader_context(&state);
+        assert!(service.0.lock().unwrap().books[&id].message.is_some());
+        state["reader"]["bookId"] = json!("B0GY3RKVRZ");
+        let context = service.reader_context(&state).unwrap();
+        assert!(context["book"]["message"].is_null());
+        assert!(service.0.lock().unwrap().books[&id].message.is_none());
+    }
+    #[test]
+    fn ocr_split_chapter_headings_close_the_previous_chapter_and_repair_saved_markers() {
+        let dir = std::env::temp_dir().join(format!("texthalo-heading-repair-{}", identity()));
+        fs::create_dir_all(&dir).unwrap();
+        let mut b = book();
+        capture(
+            &mut b,
+            &reader(1, "one"),
+            "Cha ter One\nThe traveler opened the wooden gate and stepped into the dark forest.",
+        )
+        .unwrap();
+        assert_eq!(b.checkpoints[0].label, "Chapter One");
+        recover(&dir, &b).unwrap();
+        commit(&dir, &mut b, &[0.4; 24000]).unwrap();
+        capture(
+            &mut b,
+            &reader(2, "two"),
+            "Cha ter Two\nThe sun rose over the mountains while the village began to wake.",
+        )
+        .unwrap();
+        assert_eq!(chapter_view(&b, 0, &b.checkpoints[0])["complete"], true);
+        assert_eq!(chapter_view(&b, 1, &b.checkpoints[1])["complete"], false);
+        let id = b.checkpoints[0].id.clone();
+        let bytes = fs::read(audio_path(&dir, &b).unwrap()).unwrap();
+        // Reproduce the saved metadata created before the OCR spelling was supported.
+        b.checkpoints.truncate(1);
+        b.checkpoints[0].verified_start = false;
+        b.checkpoints[0].label = b.pages[0].progress.clone();
+        for page in &mut b.pages {
+            page.heading = None;
+        }
+        assert!(repair_ocr_chapter_boundaries(&mut b));
+        assert_eq!(b.checkpoints[0].id, id);
+        assert_eq!(b.checkpoints.len(), 2);
+        assert_eq!(b.checkpoints[1].label, "Chapter Two");
+        assert_eq!(chapter_view(&b, 0, &b.checkpoints[0])["complete"], true);
+        assert!(!repair_ocr_chapter_boundaries(&mut b));
+        assert_eq!(fs::read(audio_path(&dir, &b).unwrap()).unwrap(), bytes);
+        fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn recognizing_an_ocr_heading_cannot_fill_a_gap_in_chapter_coverage() {
+        let mut b = book();
+        capture(
+            &mut b,
+            &reader(1, "one"),
+            "Cha ter One\nThe expedition left the village early in the morning.",
+        )
+        .unwrap();
+        capture(
+            &mut b,
+            &reader(9, "two"),
+            "Cha ter Two\nThe expedition returned home before the winter storm.",
+        )
+        .unwrap();
+        b.generated = b.sentences.len();
+        assert_eq!(chapter_view(&b, 0, &b.checkpoints[0])["complete"], false);
+        assert!(chapter("I saw cha ter one written on a sign.").is_none());
+        assert!(chapter("Cha ter nonsense").is_none());
+    }
     #[test]
     fn roman_opening_positions_sort_before_numbered_pages_and_support_recovery() {
         use super::*;

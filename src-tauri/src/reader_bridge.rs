@@ -29,6 +29,17 @@ fn now() -> u64 {
         .unwrap()
         .as_millis() as u64
 }
+pub(crate) fn clear_connection_error(error: &mut Option<String>) {
+    if matches!(
+        error.as_deref(),
+        Some(
+            "Connect the book from the Chrome extension first."
+                | "Connect the extension to TextHalo first."
+        )
+    ) {
+        *error = None;
+    }
+}
 fn valid_reader(reader: &Value) -> bool {
     reader["status"] == "ready"
         && reader["bookId"]
@@ -190,7 +201,9 @@ impl ReaderBridge {
             return Err("The connected book changed. Reconnect the extension.".into());
         }
         if route == "/controls" {
-            let inner = self.shared.0.lock().unwrap();
+            let mut inner = self.shared.0.lock().unwrap();
+            // The checks above confirm this connection; an older failure no longer applies.
+            clear_connection_error(&mut inner.control_error);
             let mut context = context.clone();
             // Only the connected book's controls are sent to Chrome; no saved passage text.
             if let Some(book) = context["book"].as_object_mut() {
@@ -430,6 +443,20 @@ pub async fn reader_bridge_command(app: AppHandle, command: Value) -> Result<Val
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn confirmed_connection_clears_only_connection_required_errors() {
+        for message in [
+            "Connect the book from the Chrome extension first.",
+            "Connect the extension to TextHalo first.",
+        ] {
+            let mut error = Some(message.to_owned());
+            clear_connection_error(&mut error);
+            assert_eq!(error, None);
+        }
+        let mut error = Some("Local OCR failed.".to_owned());
+        clear_connection_error(&mut error);
+        assert_eq!(error.as_deref(), Some("Local OCR failed."));
+    }
     #[test]
     fn reader_identity_is_domain_and_book_bound() {
         assert!(valid_reader(
