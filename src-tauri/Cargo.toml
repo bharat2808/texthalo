@@ -1,7 +1,7 @@
 [package]
 name = "kiegen"
 default-run = "texthalo"
-version = "0.1.16"
+version = "0.1.18"
 description = "Speak any selected text, from anywhere in macOS"
 authors = ["bharat2808 <vermabhrat642@gmail.com>"]
 edition = "2021"

@@ -100,6 +100,8 @@ test("English selection works when browser storage is disabled", async ({ browse
   await page.locator(".website-language-picker select").selectOption("en");
   await expect(page).toHaveURL(/\/en\/$/);
   await expect(page.locator("h1")).toContainText("Your words.");
+  const menu = page.getByRole("button", { name: "Open menu", exact: true });
+  if (await menu.isVisible()) await menu.click();
   await page.getByRole("navigation").getByRole("link", { name: "Pricing", exact: true }).click();
   await expect(page).toHaveURL(/\/en\/pricing\/$/);
   await expect(page.locator("h1")).toContainText("Start free.");

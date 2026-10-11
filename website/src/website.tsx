@@ -58,6 +58,7 @@ function Website() {
               <a className="text-link" href={i18n.href("#how-it-works")}>{i18n.t("See how it works")} <Arrow /></a>
             </div>
             <div className="hero-meta"><span><i className="apple-mark">●</i> {i18n.t("Requires Apple Silicon")}</span><span className="meta-divider" /><span>{i18n.t("Free local features")}</span></div>
+            <a className="text-link kindle-hero-link" href="#kindle">{i18n.t("Listen to Kindle ebooks")} <Arrow /></a>
           </div>
           <ProductVideo />
           <div className="hero-footnote"><span>01 / 03</span><span className="footnote-line" /><span>{i18n.t("ONE MAC APP, THREE WAYS TO WORK")}</span></div>
@@ -75,6 +76,23 @@ function Website() {
             <article className="step-card step-card-accent"><div className="step-top"><span>{i18n.t("03 / ASSISTANT")}</span><span className="step-icon chatter-icon">✳</span></div><h3>{i18n.t("Ask for a little help")}</h3><p>{i18n.t("Hold your Assistant shortcut to ask for writing, an edit, or something read aloud. Use selected text and available window context.")}</p><div className="mini-selection">{i18n.t("“Make this paragraph clearer.”")} <i /></div></article>
           </div>
           <p className="workflow-note">{i18n.t("Listen starts with ⌘⇧S. Set up your own Dictate and Assistant shortcuts in the app.")}</p>
+        </section>
+
+        <section id="kindle" className="kindle-section section-wrap">
+          <div className="section-heading">
+            <div><div className="eyebrow"><span className="eyebrow-line" /> {i18n.t("KINDLE EBOOKS")}</div><h2>{i18n.t("Your books, read aloud.")}</h2></div>
+            <p>{i18n.t("Connect Kindle for the web with the TextHalo Reader Chrome extension. Start at your open page or prepare a complete audiobook with local Kokoro narration.")}</p>
+          </div>
+          <div className="steps-grid">
+            <article className="step-card"><div className="step-top"><span>01</span><span className="step-icon sound-icon">≈</span></div><h3>{i18n.t("Start where you are")}</h3><p>{i18n.t("Choose Listen from this page in the extension to begin at the page you have open.")}</p></article>
+            <article className="step-card"><div className="step-top"><span>02</span><span className="step-icon selection-icon">⌖</span></div><h3>{i18n.t("Listen while chapters are prepared")}</h3><p>{i18n.t("Completed chapters appear as they finish. Play them and jump between chapters in TextHalo while the rest of the book is prepared.")}</p></article>
+            <article className="step-card step-card-accent"><div className="step-top"><span>03</span><span className="step-icon chatter-icon">♫</span></div><h3>{i18n.t("Keep listening on your Mac")}</h3><p>{i18n.t("Your transcript, audio, and listening position stay on your Mac. Once the transcript is captured, prepare more chapters without the reader connection and play saved audio offline.")}</p></article>
+          </div>
+          <div className="kindle-setup">
+            <a className="button button-dark" href="https://chromewebstore.google.com/detail/texthalo-reader/jafnpokahhbldophkeogljemkblfmgmo" target="_blank" rel="noreferrer">{i18n.t("Get TextHalo Reader")} <Arrow /></a>
+            <p>{i18n.t("Install and launch TextHalo, add the extension to Chrome, then open a Kindle book and choose Connect to TextHalo.")}</p>
+          </div>
+          <p className="workflow-note">{i18n.t("Supports Kindle for the web on read.amazon.com and read.amazon.ca. Chapter recognition depends on the book’s layout and text capture.")}</p>
         </section>
 
         <section id="voices" className="voices-section">
@@ -96,7 +114,7 @@ function Website() {
           <div className="privacy-copy"><div className="eyebrow"><span className="eyebrow-line" /> {i18n.t("YOUR WORDS, YOUR CHOICE")}</div><h2>{i18n.t("Privacy by")}<br /><em>{i18n.t("where it happens.")}</em></h2><p>{i18n.t("Local voices and dictation process on your Mac. On-device Assistant uses Apple Intelligence when available. Cloud Assistant sends your request and text context to TextHalo and its model provider; Fish Audio separately receives the words you ask it to speak.")}</p><div className="privacy-points"><div><span className="check-mark">✓</span><span><strong>{i18n.t("Choose where processing happens")}</strong><small>{i18n.t("Use local speech and dictation, or enable hosted services with their privacy notices.")}</small></span></div><div><span className="check-mark">✓</span><span><strong>{i18n.t("Optional features stay optional")}</strong><small>{i18n.t("Cloud Assistant requires consent. Assistant screenshots and microphone audio are not uploaded for cloud generation.")}</small></span></div></div><a className="text-link" href={i18n.href("/privacy/")}>{i18n.t("Read the privacy policy")} <Arrow /></a></div>
         </section>
 
-        <section className="closing-cta"><div className="closing-inner"><div className="closing-mark"><Mark /></div><div className="eyebrow eyebrow-light"><span className="eyebrow-line" /> {i18n.t("READY WHEN YOU ARE")}</div><h2>{i18n.t("Listen. Dictate.")}<br /><em>{i18n.t("Get a little help.")}</em></h2><p>{i18n.t("Free local features. Optional paid Cloud Assistant and hosted voices.")}</p><a className="button button-cream button-large" href={i18n.href(DOWNLOAD)} target="_blank" rel="noreferrer">{i18n.t("Get TextHalo for macOS")} <Arrow /></a><span className="cta-version">{i18n.t("Current version {0}", [version])} <span>·</span> {i18n.t("Requires Apple Silicon")}</span></div><div className="cta-decoration cta-dec-a"/><div className="cta-decoration cta-dec-b"/></section>
+        <section className="closing-cta"><div className="closing-inner"><div className="closing-mark"><Mark /></div><div className="eyebrow eyebrow-light"><span className="eyebrow-line" /> {i18n.t("READY WHEN YOU ARE")}</div><h2>{i18n.t("Listen. Dictate.")}<br /><em>{i18n.t("Get a little help.")}</em></h2><p>{i18n.t("Free local features. Optional paid Cloud Assistant and hosted voices.")}</p><a className="button button-cream button-large" href={i18n.href(DOWNLOAD)} target="_blank" rel="noreferrer">{i18n.t("Get TextHalo for macOS")} <Arrow /></a><span className="cta-version">{i18n.t("Current version {0}", [version])} <span>·</span> {i18n.t("Requires Apple Silicon")}</span><p className="cta-update-note">{i18n.t("Updating from an earlier release? Install 0.1.18 manually once to enable future automatic updates.")}</p></div><div className="cta-decoration cta-dec-a"/><div className="cta-decoration cta-dec-b"/></section>
       </main>
 
       <footer className="site-footer"><a className="wordmark footer-wordmark" href={i18n.href("#top")}><Mark /><span>TextHalo</span></a><span className="footer-copy">{i18n.t("Listen. Dictate. Get a little help.")}</span><div className="footer-links"><a href={i18n.href("/licenses/")}>{i18n.t("Third-party licenses")}</a><a href={i18n.href("/pricing/")}>{i18n.t("Pricing")}</a><a href={i18n.href("/demo/")}>{i18n.t("Demo")}</a><a href={i18n.href("/stories/")}>{i18n.t("Stories")}</a><a href={i18n.href("/blog/")}>{i18n.t("Blog")}</a></div><span className="copyright">© {new Date().getFullYear()} TextHalo</span></footer>

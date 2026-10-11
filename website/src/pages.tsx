@@ -221,7 +221,7 @@ export type SeoMetadata = {
 const defaultMetadata = (path: string): SeoMetadata => ({
   path,
   title: "TextHalo for Mac — Listen, Dictate & Assistant",
-  description: "Listen to selected text, dictate on your Mac, and ask Assistant to write, edit, or read aloud. Free local features with optional paid hosted services.",
+  description: "Listen to Kindle ebooks and selected text on your Mac. Prepare audiobooks, dictate, and get writing help with TextHalo. Free local features; optional hosted services.",
   type: "website",
   schema: {
     "@context": "https://schema.org",
@@ -229,7 +229,7 @@ const defaultMetadata = (path: string): SeoMetadata => ({
     name: "TextHalo",
     applicationCategory: "UtilitiesApplication",
     operatingSystem: "macOS",
-    description: "A Mac menu bar app for text to speech, on-device dictation, and writing assistance, with free local features and optional paid hosted services.",
+    description: "A Mac app for Kindle audiobooks, text to speech, on-device dictation, and writing assistance, with free local features and optional paid hosted services.",
     url: SITE_URL,
     downloadUrl: MAC_DOWNLOAD,
     offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },

@@ -1,4 +1,7 @@
 import { test, expect } from '@playwright/test';
+import { readFileSync } from 'node:fs';
+
+const { version } = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8'));
 
 test('third-party licenses are discoverable, localized, and readable on mobile', async ({ page }) => {
   await page.route('**/*.neonauth.*/**', route => route.abort());
@@ -12,7 +15,7 @@ test('third-party licenses are discoverable, localized, and readable on mobile',
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   const inventory = await page.request.get('/licenses/dependencies.json');
   expect(inventory.ok()).toBe(true);
-  expect((await inventory.json()).version).toBe('0.1.16');
+  expect((await inventory.json()).version).toBe(version);
   const notice = await page.request.get('/licenses/attributions/espeak-ng-COPYING.txt');
   expect(notice.ok()).toBe(true);
   expect(await notice.text()).toContain('GNU GENERAL PUBLIC LICENSE');

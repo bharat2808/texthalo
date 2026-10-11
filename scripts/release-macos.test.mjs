@@ -120,14 +120,15 @@ test("R2 publication verifies versioned uploads before promoting downloads and l
       const uploads = actions.filter(a => a[0] === "npx");
       assert.ok(uploads.every(a => a.includes("--remote")));
       assert.ok(uploads.every(a => a.some(arg => arg.startsWith("texthalo-storage/"))));
-      assert.equal(uploads.some(a => a.includes("texthalo-storage/latest.json")), !corrupt);
+      assert.equal(uploads.some(a => a.includes("texthalo-storage/updates/v2/latest.json")), !corrupt);
+      assert.ok(!uploads.some(a => a.includes("texthalo-storage/latest.json")), "legacy installations keep their original signing feed");
       assert.equal(uploads.some(a => a.includes("texthalo-storage/TextHalo-macOS-aarch64.dmg")), !corrupt);
       if (!corrupt) {
-        const promotion = actions.findIndex(a => a.includes("texthalo-storage/latest.json"));
+        const promotion = actions.findIndex(a => a.includes("texthalo-storage/updates/v2/latest.json"));
         for (const name of names) {
           assert.ok(actions.findIndex(a => a[0] === "verify" && a[1] === `https://storage.texthalo.app/releases/1.2.3/${name}`) < promotion);
         }
-        assert.ok(uploads.find(a => a.includes("texthalo-storage/latest.json")).includes("no-store"));
+        assert.ok(uploads.find(a => a.includes("texthalo-storage/updates/v2/latest.json")).includes("no-store"));
       }
       assert.ok(!actions.some(a => a[0] === "gh" || a[0] === "git"));
     }

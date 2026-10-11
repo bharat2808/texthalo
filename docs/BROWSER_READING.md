@@ -12,7 +12,7 @@ The native helper runs local Apple Vision OCR using `src-tauri/native/ScreenText
 
 ## App UX
 
-`src/Audiobooks.tsx` lists saved books, library playback controls and checkpoints, and links directly to the official TextHalo Reader Chrome Web Store listing. `src/SpeechOverlay.tsx` retains its playback, preparation and checkpoint controls while the extension is connected. The audiobook overlay hides when the extension is disconnected. Dismiss hides the notice for that book for the app session. Audiobook playback without a reader connection does not open the floating popup. Normal selected-text speech keeps its existing overlay controls.
+`src/Audiobooks.tsx` lists saved books, library playback controls and checkpoints, reports the live extension connection status, and links directly to the official TextHalo Reader Chrome Web Store listing. `src/SpeechOverlay.tsx` retains playback and chapter controls for saved audiobook playback even without the reader connection. Dismiss hides the reader notice for that book for the app session. Once the full transcript is captured, Prepare more chapters is available without Chrome. Normal selected-text speech keeps its existing overlay controls.
 
 The extension offers exactly two audiobook actions: Listen from this page and Build complete audiobook. Playback and chapter controls remain in the connected app overlay and saved library. Native control requests use a separate helper process so they cannot block the persistent relay's capture/navigation pump. The app accepts actions only for the current relay and connected book, validates playback targets, and reports asynchronous action errors on the next control-state poll.
 

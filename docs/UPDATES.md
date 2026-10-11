@@ -1,6 +1,6 @@
 # Application updates
 
-TextHalo uses Tauri's signed updater with a static manifest at `https://storage.texthalo.app/latest.json`.
+TextHalo uses Tauri's signed updater with a static manifest at `https://storage.texthalo.app/updates/v2/latest.json`.
 Release artifacts are stored in the existing `texthalo-storage` R2 bucket.
 The Rust updater plugin requests cache revalidation for both native/background
 checks and Settings checks, and only offers versions newer than the installed app.
@@ -27,8 +27,9 @@ architecture and executable path. This file stays on the Mac; it is not uploaded
 The updater keypair is separate from Apple's Developer ID certificate. The public key is
 in `src-tauri/tauri.conf.json`. The private key must stay outside the repository and must
 be backed up securely: existing installations trust that key, so losing it prevents future
-updates. On the release Mac, the local key is stored at `~/.tauri/kiegen-updater.key` with
-owner-only file permissions. Never attach it to a release or commit it.
+updates. On the release Mac, the replacement key is stored in the login Keychain under service `com.texthalo.updater.private-key` and at `~/.tauri/kiegen-updater.key` with owner-only file permissions. Never attach it to a release or commit it. Keep a secure backup outside the release Mac.
+
+The original release Mac was erased and its private updater key was lost. Version 0.1.18 introduces the replacement key and a separate v2 update feed. Users of earlier releases must install 0.1.18 manually once; later updates use the replacement key. Do not publish a replacement-key signature to the legacy root feed: earlier apps would reject it.
 
 ## Build and publish Apple Silicon updates
 
@@ -120,8 +121,8 @@ query URL so a missing object cannot cache a 404 at its canonical download URL. 
 verified against the prepared checksums and never overwritten; retries can reuse
 identical files. A release older than the current R2 manifest is rejected.
 The script verifies public checksums before updating the root DMG download,
-then publishes root `latest.json` last. Both mutable root objects use `no-store`.
-The manifest always references the immutable versioned updater archive.
+then publishes `updates/v2/latest.json` last. Both mutable root objects use `no-store`.
+The manifest always references the immutable versioned updater archive. The old root `latest.json` feed is preserved for installations that trust the lost original key.
 An upload or verification failure before promotion leaves the current manifest
 unchanged; publication and promotion of the two root objects are sequential.
 

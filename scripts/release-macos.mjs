@@ -10,6 +10,9 @@ import { createManifest, inspectArchive } from "./write-updater-manifest.mjs";
 
 export const RELEASE_BUCKET = "texthalo-storage";
 export const RELEASE_BASE_URL = "https://storage.texthalo.app";
+// Releases from 0.1.18 trust the replacement signing key. Preserve the legacy
+// feed so older apps never attempt to install an update signed with that key.
+export const RELEASE_MANIFEST_KEY = "updates/v2/latest.json";
 export const releaseAssetUrl = (version, name) => `${RELEASE_BASE_URL}/releases/${version}/${name}`;
 const ARCHITECTURES = ["aarch64"];
 const ROOT = resolve(fileURLToPath(new URL("..", import.meta.url)));
@@ -142,6 +145,7 @@ async function configuration() {
   const cargoLock = await readFile(join(ROOT, "src-tauri/Cargo.lock"), "utf8");
   if (!/^\d+\.\d+\.\d+$/.test(pkg.version) || pkg.version !== config.version || pkg.version !== cargo.match(/^version\s*=\s*"([^"]+)"/m)?.[1] || pkg.version !== lock.version || pkg.version !== lock.packages[""].version || pkg.version !== cargoLock.match(/name = "kiegen"\nversion = "([^"]+)"/)?.[1]) throw new Error("Release versions must agree in package.json, lockfiles, Cargo.toml and tauri.conf.json");
   if (!config.bundle.macOS.signingIdentity?.startsWith("Developer ID Application:")) throw new Error("A Developer ID signing identity is required");
+  if (JSON.stringify(config.plugins.updater.endpoints) !== JSON.stringify([`${RELEASE_BASE_URL}/${RELEASE_MANIFEST_KEY}`])) throw new Error("App updater endpoint must match the release signing channel");
   return { version: pkg.version, config };
 }
 
@@ -237,7 +241,7 @@ export async function verifyPublicFile(url, expectedHash, {
 }
 
 async function readLatestManifest() {
-  const response = await fetchReleaseAsset(`${RELEASE_BASE_URL}/latest.json`);
+  const response = await fetchReleaseAsset(`${RELEASE_BASE_URL}/${RELEASE_MANIFEST_KEY}`);
   if (response.status === 404) return null;
   if (!response.ok) throw new Error(`Cannot read the current R2 release (${response.status})`);
   return response.json();
@@ -259,7 +263,7 @@ async function verifyPublicAssets(receipt) {
   if (latest?.version !== receipt.version) throw new Error("The prepared version is not the latest R2 release");
   for (const name of assetNames()) await verifyPublicFile(releaseAssetUrl(receipt.version, name), receipt.files[name]);
   await verifyPublicFile(`${RELEASE_BASE_URL}/TextHalo-macOS-aarch64.dmg`, receipt.files["TextHalo-macOS-aarch64.dmg"]);
-  await verifyPublicFile(`${RELEASE_BASE_URL}/latest.json`, receipt.files["latest.json"]);
+  await verifyPublicFile(`${RELEASE_BASE_URL}/${RELEASE_MANIFEST_KEY}`, receipt.files["latest.json"]);
 }
 
 export async function publishRelease(directory, receipt, {
@@ -298,8 +302,8 @@ export async function publishRelease(directory, receipt, {
   const dmg = "TextHalo-macOS-aarch64.dmg";
   await upload(dmg, dmg, true);
   await verifyFile(`${RELEASE_BASE_URL}/${dmg}`, receipt.files[dmg]);
-  await upload("latest.json", "latest.json", true);
-  await verifyFile(`${RELEASE_BASE_URL}/latest.json`, receipt.files["latest.json"]);
+  await upload(RELEASE_MANIFEST_KEY, "latest.json", true);
+  await verifyFile(`${RELEASE_BASE_URL}/${RELEASE_MANIFEST_KEY}`, receipt.files["latest.json"]);
 }
 
 export async function deploy(receipt) {

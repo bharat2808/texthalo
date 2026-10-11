@@ -38,6 +38,14 @@
 @media(max-width:680px){.product-video{width:min(100%,530px);margin-top:23px}.product-video video{border-radius:9px}.product-video-caption{font-size:6px}}
 
 .workflow-note{margin:22px 0 0;color:var(--muted);font-size:12px;line-height:1.7}
+.kindle-hero-link{display:inline-flex;align-items:center;gap:8px;margin-top:20px}
+.kindle-section{padding-bottom:88px;scroll-margin-top:28px}
+.kindle-section .step-card{min-height:240px}
+.kindle-setup{display:flex;align-items:center;gap:24px;margin-top:24px}
+.kindle-setup .button{flex-shrink:0}
+.kindle-setup p{max-width:600px;margin:0;color:var(--muted);font-size:13px;line-height:1.7}
+.closing-cta .cta-update-note{max-width:460px;margin:16px 0 0;line-height:1.7}
+@media(max-width:700px){.kindle-section{padding-bottom:64px}.kindle-section .section-heading h2{font-size:clamp(34px,9vw,43px)}.kindle-section .step-card{min-height:210px}.kindle-setup{align-items:flex-start;flex-direction:column;gap:14px}}
 @media(max-width:680px){.hero-meta{flex-wrap:wrap}.site-footer{grid-template-columns:1fr}.footer-links{grid-row:2;flex-wrap:wrap;row-gap:12px}.copyright{grid-row:3}}
 
 /* Search-friendly editorial pages */
