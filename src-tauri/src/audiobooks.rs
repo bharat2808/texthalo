@@ -597,11 +597,31 @@ fn activate_range(book: &mut Book, range: &str) -> Result<(), String> {
     *book = selected;
     Ok(())
 }
+#[cfg(test)]
 fn select_page(
     dir: &Path,
     book: &mut Book,
     reader: &Value,
     text: &str,
+) -> Result<Option<f64>, String> {
+    select_page_matching(dir, book, reader, text, None)
+}
+fn select_listening_page(
+    dir: &Path,
+    book: &mut Book,
+    reader: &Value,
+    text: &str,
+    settings: &crate::config::Settings,
+) -> Result<Option<f64>, String> {
+    select_generation_voice(dir, book, settings)?;
+    select_page_matching(dir, book, reader, text, Some(&synthesis_key(settings)))
+}
+fn select_page_matching(
+    dir: &Path,
+    book: &mut Book,
+    reader: &Value,
+    text: &str,
+    requested_recording: Option<&str>,
 ) -> Result<Option<f64>, String> {
     if key(reader)? != book.key {
         return Err("Connected book changed".into());
@@ -617,6 +637,7 @@ fn select_page(
     let number = reader["progress"].as_str().and_then(page_number);
     let found = std::iter::once(&*book)
         .chain(book.saved_ranges.iter().map(|b| b.as_ref()))
+        .filter(|b| requested_recording.is_none_or(|key| recording_key(b) == key))
         .find_map(|b| {
             b.pages
                 .iter()
@@ -2428,7 +2449,19 @@ pub async fn audiobook_listen_page(
         let service = handle.state::<Audiobooks>();
         let mut l = service.0.lock().unwrap();
         let book = l.books.get_mut(&book_id).ok_or("Audiobook not found")?;
-        let position = select_page(&directory(&book_id)?, book, &result["reader"], text)?;
+        let settings = handle
+            .state::<crate::AppState>()
+            .settings
+            .lock()
+            .unwrap()
+            .clone();
+        let position = select_listening_page(
+            &directory(&book_id)?,
+            book,
+            &result["reader"],
+            text,
+            &settings,
+        )?;
         Ok::<_, String>((position, _transition.revision))
     })
     .await
@@ -3141,12 +3174,15 @@ fn generate_mode(
         book.activity = Some("selected".into());
     }
     save(&directory(&id)?, book)?;
+    if voice_changed && playback.is_some() {
+        // Replacing the old player must not call Stop: Stop also cancels this
+        // audiobook's producer. Retire it before publishing the new producer.
+        crate::begin_speech(app, crate::Phase::Idle);
+        library.playing = None;
+    }
     library.worker = true;
     library.producing = Some((id.clone(), token.clone(), full));
     drop(library);
-    if voice_changed && playback.is_some() {
-        crate::stop_speaking(app.clone());
-    }
     if restart && !full {
         let result = (|| {
             play(app, &id, None)?;
@@ -3733,6 +3769,55 @@ mod tests {
             serde_json::from_slice(&fs::read(dir.join("book.json")).unwrap()).unwrap();
         assert_eq!(restored.range_id, b.range_id);
         assert_eq!(restored.saved_ranges.len(), 1);
+        fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn listening_from_a_cached_page_prepares_the_selected_fish_voice() {
+        let dir = std::env::temp_dir().join(format!("texthalo-fish-page-{}", identity()));
+        fs::create_dir_all(&dir).unwrap();
+        let mut settings = crate::config::Settings::default();
+        settings.engine = crate::config::Engine::Fish;
+        settings.fish.voice_id = "old-voice".into();
+        let mut b = book();
+        b.synthesis_key = synthesis_key(&settings);
+        let page = reader(8, "p8");
+        capture(&mut b, &page, "First sentence. Second sentence.").unwrap();
+        recover(&dir, &b).unwrap();
+        commit_with_voice(&dir, &mut b, &[0.25; 24000], "fish:old-voice", "Old voice").unwrap();
+        let old_range = b.range_id.clone();
+        assert_eq!(
+            select_listening_page(
+                &dir,
+                &mut b,
+                &page,
+                "First sentence. Second sentence.",
+                &settings
+            )
+            .unwrap(),
+            Some(0.)
+        );
+        settings.fish.voice_id = "new-voice".into();
+        assert_eq!(
+            select_listening_page(
+                &dir,
+                &mut b,
+                &page,
+                "First sentence. Second sentence.",
+                &settings
+            )
+            .unwrap(),
+            None
+        );
+        assert_ne!(b.range_id, old_range);
+        assert_eq!(b.generated, 0);
+        assert_eq!(b.pending_start.as_deref(), Some("p8"));
+        assert_eq!(recording_key(&b), synthesis_key(&settings));
+        assert!(b
+            .saved_ranges
+            .iter()
+            .any(|r| r.range_id == old_range && r.generated == 1));
+        commit_with_voice(&dir, &mut b, &[0.5; 24000], "fish:new-voice", "New voice").unwrap();
+        assert_eq!(selected_position(&b), Some(0.));
         fs::remove_dir_all(dir).unwrap();
     }
     #[test]
