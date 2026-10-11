@@ -4,7 +4,7 @@ The website’s `/licenses/` page lists third-party licenses and attribution onl
 
 ## Inventory and regeneration
 
-`website/src/third-party-licenses.json` and the downloadable `website/public/licenses/dependencies.json` snapshot 842 unique locked Rust/npm package versions for release 0.1.18. The generator excludes the application’s own packages, records each dependency’s declared license, and copies available LICENSE, COPYING, COPYRIGHT, and NOTICE files without alteration. Upstream links cover additional details and packages whose distribution does not include a notice file.
+`website/src/third-party-licenses.json` and the downloadable `website/public/licenses/dependencies.json` snapshot 842 unique locked Rust/npm package versions for release 0.1.19. The generator excludes the application’s own packages, records each dependency’s declared license, and copies available LICENSE, COPYING, COPYRIGHT, and NOTICE files without alteration. Upstream links cover additional details and packages whose distribution does not include a notice file.
 
 After installing the locked dependencies, run `npm run licenses:generate` from the repository root and review the generated changes. Cargo metadata identifies normal macOS dependencies; other resolved Rust packages are listed under build tools and other locked packages. Vite’s emitted module metadata distinguishes actual shipped npm modules from build tools and unused optional packages. npm entries cover every package in package-lock.json, including platform-specific packages.
 
