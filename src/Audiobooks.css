@@ -312,3 +312,34 @@
 .audiobook-chapters .chapter-status-attention {
   color: light-dark(#94601c, #e9ae64);
 }
+.audiobook-warning {
+  background: light-dark(#fff8e6, #2a2111);
+  border: 1px solid light-dark(#e6c87a, #6b5a2a);
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin: 0 0 16px;
+  font-size: 13px;
+  color: light-dark(#7a5c1a, #e9c86a);
+}
+.audiobook-voice-group {
+  margin-bottom: 20px;
+}
+.audiobook-voice-group:last-child {
+  margin-bottom: 0;
+}
+.audiobook-voice-label {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--label-secondary);
+  margin: 16px 0 4px;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.audiobook-voice-count {
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+}

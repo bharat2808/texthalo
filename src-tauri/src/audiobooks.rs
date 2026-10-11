@@ -37,6 +37,148 @@ struct Sentence {
     sources: Vec<Source>,
     start_sample: u64,
     end_sample: u64,
+    /// Provider and voice used to generate this sentence's audio, e.g.
+    /// `kokoro:af_heart`. Empty for sentences created before voice tracking.
+    #[serde(default)]
+    voice_key: String,
+}
+
+/// Display identity. Cache identity also includes model and synthesis controls.
+fn voice_key(settings: &crate::config::Settings) -> String {
+    use crate::config::Engine;
+    match settings.engine {
+        Engine::Kokoro => format!("kokoro:{}", settings.kokoro.voice),
+        Engine::Apple => format!("apple:{}", settings.voice.as_deref().unwrap_or("default")),
+        Engine::Chatterbox => format!(
+            "chatterbox:{}:{}",
+            settings.chatterbox.voice,
+            settings
+                .chatterbox
+                .ref_audio
+                .as_deref()
+                .unwrap_or("default")
+        ),
+        Engine::Fish => format!("fish:{}", settings.fish.voice_id),
+    }
+}
+fn synthesis_key(settings: &crate::config::Settings) -> String {
+    use crate::config::Engine;
+    match settings.engine {
+        Engine::Kokoro => json!([
+            "kokoro",
+            settings.kokoro.voice,
+            settings.kokoro.quant,
+            settings.kokoro.speed
+        ]),
+        Engine::Apple => json!(["apple", settings.voice, settings.rate]),
+        Engine::Chatterbox => json!([
+            "chatterbox",
+            settings.chatterbox.voice,
+            settings.chatterbox.ref_audio,
+            settings.chatterbox.quant,
+            settings.chatterbox.exaggeration,
+            settings.chatterbox.cfg_weight
+        ]),
+        Engine::Fish => json!([
+            "fish",
+            settings.fish.voice_id,
+            settings.fish.model_id,
+            settings.fish.enhance_text
+        ]),
+    }
+    .to_string()
+}
+fn recording_key(book: &Book) -> String {
+    if !book.synthesis_key.is_empty() {
+        return book.synthesis_key.clone();
+    }
+    // Before provider selection was supported, all audiobook audio was Kokoro.
+    let legacy_voice = format!("kokoro:{}", book.voice.voice);
+    if book
+        .sentences
+        .iter()
+        .take(book.generated)
+        .any(|s| !s.voice_key.is_empty() && s.voice_key != legacy_voice)
+    {
+        return format!("unknown:{}", book.range_id);
+    }
+    synthesis_key(&crate::config::Settings {
+        engine: crate::config::Engine::Kokoro,
+        kokoro: book.voice.clone(),
+        ..Default::default()
+    })
+}
+fn reset_recording(book: &mut Book, settings: &crate::config::Settings) {
+    book.range_id = identity();
+    book.audio_file = format!("{}.wav", identity());
+    book.pages.clear();
+    book.sentences.clear();
+    book.checkpoints.clear();
+    book.pending.clear();
+    book.generated = 0;
+    book.committed_samples = 0;
+    book.position = 0.;
+    book.pending_start = None;
+    book.reader_hint = None;
+    book.recovery = None;
+    book.bookmark_sentence = None;
+    book.bookmark_offset = 0;
+    book.complete = false;
+    book.continuous = false;
+    book.end_verified = false;
+    book.from_beginning = false;
+    book.synthesis_key = synthesis_key(settings);
+    book.voice = settings.kokoro.clone();
+}
+fn select_generation_voice(
+    dir: &Path,
+    book: &mut Book,
+    settings: &crate::config::Settings,
+) -> Result<(), String> {
+    let mut next = book.clone();
+    if recording_key(book) != synthesis_key(settings) && book.generated > 0 {
+        let mut previous = book.clone();
+        previous.saved_ranges.clear();
+        previous.full_scan = None;
+        next.saved_ranges.push(Box::new(previous));
+        reset_recording(&mut next, settings);
+        recover(dir, &next)?;
+    } else {
+        next.synthesis_key = synthesis_key(settings);
+        next.voice = settings.kokoro.clone();
+    }
+    save(dir, &next)?;
+    *book = next;
+    Ok(())
+}
+fn render_sentence(
+    app: &AppHandle,
+    settings: &crate::config::Settings,
+    text: &str,
+    scratch: &Path,
+    active: impl Fn() -> bool,
+) -> Result<Vec<f32>, String> {
+    let state = app.state::<crate::AppState>();
+    let _guard = state.synthesis.for_engine(settings.engine).lock().unwrap();
+    if !active() {
+        return Err("Preparation stopped".into());
+    }
+    if let Some(reason) = crate::selected_engine_refusal(settings) {
+        return Err(reason);
+    }
+    if settings.engine == crate::config::Engine::Fish {
+        return tauri::async_runtime::block_on(crate::hosted::render_speech(
+            text,
+            &settings.fish,
+            active,
+        ));
+    }
+    let result = state
+        .spoken
+        .render(settings, text, scratch)
+        .and_then(|_| crate::spoken::Spoken::load_audio(scratch));
+    let _ = fs::remove_file(scratch);
+    result
 }
 #[derive(Clone, Serialize, Deserialize)]
 struct Page {
@@ -109,6 +251,8 @@ struct Book {
     message: Option<String>,
     #[serde(default)]
     voice: crate::config::KokoroSettings,
+    #[serde(default)]
+    synthesis_key: String,
 }
 impl Book {
     fn ranges(&self) -> impl Iterator<Item = &Book> {
@@ -596,10 +740,26 @@ fn chapter_view(book: &Book, index: usize, c: &Checkpoint) -> Value {
             c.page,
             following.map_or(book.pages.len(), |next| next.page + 1),
         );
+    let chapter_voices = book
+        .sentences
+        .iter()
+        .skip(c.sentence)
+        .take(end.saturating_sub(c.sentence))
+        .filter(|s| s.end_sample > s.start_sample)
+        .map(|s| {
+            if s.voice_key.is_empty() {
+                format!("kokoro:{}", book.voice.voice)
+            } else {
+                s.voice_key.clone()
+            }
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+    let mixed_voices = chapter_voices.len() > 1;
     let complete = c.verified_start
         && closed
         && end <= book.generated
-        && (index + 1 < book.checkpoints.len() || book.pending.is_empty());
+        && (index + 1 < book.checkpoints.len() || book.pending.is_empty())
+        && !mixed_voices;
     let duration = book
         .sentences
         .iter()
@@ -609,7 +769,12 @@ fn chapter_view(book: &Book, index: usize, c: &Checkpoint) -> Value {
         .map(|s| s.end_sample - s.start_sample)
         .sum::<u64>() as f64
         / RATE as f64;
-    json!({"id":c.id,"rangeId":book.range_id,"label":chapter_label(book,c),"sentence":c.sentence,"page":book.pages.get(c.page).map(|p|&p.progress),"seconds":book.sentences.get(c.sentence).filter(|_|c.sentence<book.generated).map(|s|s.start_sample as f64/RATE as f64),"duration":duration,"complete":complete,"status":if complete{"complete"}else if book.message.is_some(){"attention"}else if c.sentence<book.generated{"partial"}else{"preparing"},"needsEarlier":!c.verified_start})
+    let voice_key = if mixed_voices {
+        "mixed".to_string()
+    } else {
+        chapter_voices.into_iter().next().unwrap_or_default()
+    };
+    json!({"id":c.id,"rangeId":book.range_id,"label":chapter_label(book,c),"sentence":c.sentence,"page":book.pages.get(c.page).map(|p|&p.progress),"seconds":book.sentences.get(c.sentence).filter(|_|c.sentence<book.generated).map(|s|s.start_sample as f64/RATE as f64),"duration":duration,"complete":complete,"status":if complete{"complete"}else if book.message.is_some(){"attention"}else if c.sentence<book.generated{"partial"}else{"preparing"},"needsEarlier":!c.verified_start,"voiceKey":voice_key})
 }
 fn save_bookmark(dir: &Path, book: &Book) -> Result<(), String> {
     let bytes = bookmark_value(book).to_string();
@@ -733,9 +898,29 @@ fn commit(dir: &Path, book: &mut Book, samples: &[f32]) -> Result<(), String> {
         .iter()
         .flat_map(|s| ((s.clamp(-1., 1.) * 32767.) as i16).to_le_bytes())
         .collect();
-    commit_pcm(dir, book, &bytes)
+    commit_pcm(dir, book, &bytes, None)
 }
-fn commit_pcm(dir: &Path, book: &mut Book, bytes: &[u8]) -> Result<(), String> {
+fn commit_with_voice(
+    dir: &Path,
+    book: &mut Book,
+    samples: &[f32],
+    voice: &str,
+) -> Result<(), String> {
+    if samples.is_empty() || samples.iter().any(|s| !s.is_finite()) {
+        return Err("Sentence produced no valid audio".into());
+    }
+    let bytes: Vec<u8> = samples
+        .iter()
+        .flat_map(|s| ((s.clamp(-1., 1.) * 32767.) as i16).to_le_bytes())
+        .collect();
+    commit_pcm(dir, book, &bytes, Some(voice))
+}
+fn commit_pcm(
+    dir: &Path,
+    book: &mut Book,
+    bytes: &[u8],
+    voice: Option<&str>,
+) -> Result<(), String> {
     if bytes.is_empty() || bytes.len() % 2 != 0 {
         return Err("Sentence produced no valid PCM audio".into());
     }
@@ -746,6 +931,9 @@ fn commit_pcm(dir: &Path, book: &mut Book, bytes: &[u8]) -> Result<(), String> {
         .ok_or("No pending sentence")?;
     sentence.start_sample = next.committed_samples;
     sentence.end_sample = next.committed_samples + (bytes.len() / 2) as u64;
+    if let Some(voice) = voice {
+        sentence.voice_key = voice.to_string();
+    }
     next.committed_samples = sentence.end_sample;
     next.generated += 1;
     let h = header(next.committed_samples)?;
@@ -794,10 +982,14 @@ fn cached_suffix_match(
     reader: &Value,
     text: &str,
 ) -> Result<Option<(Box<Book>, usize)>, String> {
+    let wanted_voice = recording_key(book);
     let normalized = text.split_whitespace().collect::<Vec<_>>().join(" ");
     let number = reader["progress"].as_str().and_then(page_number);
     let mut found = None;
     for range in &book.saved_ranges {
+        if recording_key(range) != wanted_voice {
+            continue;
+        }
         let exact = range.pages.first().is_some_and(|p| {
             p.text == normalized
                 && (reader["fingerprint"].as_str() == Some(&p.fingerprint)
@@ -1330,16 +1522,22 @@ fn locate_continuation_report(
     Err("Could not confidently locate your saved sentence in nearby views. Your saved audio is available; locate your saved position or choose Listen from this page.".into())
 }
 fn locate_for_job(
+    app: &AppHandle,
     bridge: &crate::reader_bridge::ReaderBridge,
     service: &Audiobooks,
     id: &str,
     token: &str,
     book: &Book,
     view_limit: usize,
+    expected_voice: &str,
 ) -> Result<(Value, String, usize), String> {
     locate_continuation_report(
-        &|request| bridge.command_while(request, || generation_active(service, id, token)),
-        &|| generation_active(service, id, token),
+        &|request| {
+            bridge.command_while(request, || {
+                generation_voice_active(app, service, id, token, expected_voice)
+            })
+        },
+        &|| generation_voice_active(app, service, id, token, expected_voice),
         book,
         view_limit,
         &|update| {
@@ -1406,6 +1604,7 @@ fn assemble(book: &mut Book, finished: bool) -> Result<(), String> {
                 sources: slice(offset, end),
                 start_sample: 0,
                 end_sample: 0,
+                voice_key: String::new(),
             });
         }
         offset = end;
@@ -1794,7 +1993,7 @@ impl Audiobooks {
                 view
             })
             .collect::<Vec<_>>();
-        json!({"readerConnected":reader["connected"] == true,"readerWarning":warning,"books":books,"tray":tray,"readerContext":reader_context,"generating":l.producing.as_ref().map(|(id,_,_)|id),"playback":playback})
+        json!({"readerConnected":reader["connected"] == true,"readerWarning":warning,"books":books,"tray":tray,"readerContext":reader_context,"generating":l.producing.as_ref().map(|(id,_,_)|id),"playback":playback,"engine":format!("{:?}", app.state::<crate::AppState>().settings.lock().unwrap().engine)})
     }
 }
 #[tauri::command]
@@ -2213,6 +2412,16 @@ fn generation_active(service: &Audiobooks, id: &str, token: &str) -> bool {
         .as_ref()
         .is_some_and(|(i, t, _)| i == id && t == token)
 }
+fn generation_voice_active(
+    app: &AppHandle,
+    service: &Audiobooks,
+    id: &str,
+    token: &str,
+    expected: &str,
+) -> bool {
+    generation_active(service, id, token)
+        && synthesis_key(&app.state::<crate::AppState>().settings.lock().unwrap()) == expected
+}
 #[derive(Clone, Copy)]
 enum ReaderPosition {
     FrontMatter(u64),
@@ -2316,6 +2525,13 @@ fn producer(
     }
     let service = app.state::<Audiobooks>();
     let bridge = app.state::<crate::reader_bridge::ReaderBridge>();
+    let settings = app
+        .state::<crate::AppState>()
+        .settings
+        .lock()
+        .unwrap()
+        .clone();
+    let id_dir = directory(id)?;
     let book = service
         .0
         .lock()
@@ -2324,6 +2540,15 @@ fn producer(
         .get(id)
         .cloned()
         .ok_or("Audiobook not found")?;
+    let mut book = book;
+    select_generation_voice(&id_dir, &mut book, &settings)?;
+    let expected_voice = synthesis_key(&settings);
+    service
+        .0
+        .lock()
+        .unwrap()
+        .books
+        .insert(id.to_string(), book.clone());
     let mut auto = autoplay;
     if auto && book.generated > 0 && book.pending_start.is_none() {
         play(app, id, None)?;
@@ -2337,12 +2562,14 @@ fn producer(
             }
         }
         let (reader, text, offset) = locate_for_job(
+            app,
             &bridge,
             &service,
             id,
             token,
             &book,
             if full { 10_000 } else { 12 },
+            &expected_voice,
         )?;
         let mut l = service.0.lock().unwrap();
         if !l.producing.as_ref().is_some_and(|(_, t, _)| t == token) {
@@ -2366,17 +2593,6 @@ fn producer(
         reader
     };
     let mut need_next = !book.pages.is_empty();
-    let settings = {
-        let mut s = app
-            .state::<crate::AppState>()
-            .settings
-            .lock()
-            .unwrap()
-            .clone();
-        s.engine = crate::config::Engine::Kokoro;
-        s.kokoro = book.voice.clone();
-        s
-    };
     loop {
         let (sentence, buffer, active) = {
             let l = service.0.lock().unwrap();
@@ -2394,25 +2610,27 @@ fn producer(
         if !active {
             return Ok(());
         }
+        if !generation_voice_active(app, &service, id, token, &expected_voice) {
+            return Err(
+                "Voice settings changed during generation. Resume to use the newly selected voice."
+                    .into(),
+            );
+        }
         // Finish the entire captured page before pausing the producer.
         if let Some(sentence) = sentence {
             let scratch = directory(id)?.join("sentence.tmp.wav");
-            let state = app.state::<crate::AppState>();
-            let samples = {
-                let _guard = state.synthesis.for_engine(settings.engine).lock().unwrap();
-                let result = state
-                    .spoken
-                    .render(&settings, &sentence.text, &scratch)
-                    .and_then(|_| crate::spoken::Spoken::load_audio(&scratch));
-                let _ = fs::remove_file(&scratch);
-                result?
-            };
+            let samples = render_sentence(app, &settings, &sentence.text, &scratch, || {
+                generation_voice_active(app, &service, id, token, &expected_voice)
+            })?;
+            if !generation_voice_active(app, &service, id, token, &expected_voice) {
+                return Err("Voice settings changed during generation. Resume to use the newly selected voice.".into());
+            }
             let mut l = service.0.lock().unwrap();
             if !l.producing.as_ref().is_some_and(|(_, t, _)| t == token) {
                 return Ok(());
             }
             let b = l.books.get_mut(id).ok_or("Audiobook removed")?;
-            commit(&directory(id)?, b, &samples)?;
+            commit_with_voice(&directory(id)?, b, &samples, &voice_key(&settings))?;
             let selected = selected_position(b);
             if let Some(position) = selected {
                 b.position = position;
@@ -2426,7 +2644,7 @@ fn producer(
             let committed = b.committed_samples;
             let audio = audio_path(&directory(id)?, b)?;
             if let Some(p) = l.playing.as_ref().filter(|p| {
-                p.book == id && !p.saved_chapter && state.job.lock().unwrap().is_current(p.job)
+                p.book == id && !p.saved_chapter && app.state::<crate::AppState>().job.lock().unwrap().is_current(p.job)
             }) {
                 p.player.update_file(&audio, committed, false)?;
             }
@@ -2532,7 +2750,16 @@ fn producer(
                 )?;
             }
             drop(l);
-            let (at, raw, offset) = locate_for_job(&bridge, &service, id, token, &merged, 10_000)?;
+            let (at, raw, offset) = locate_for_job(
+                app,
+                &bridge,
+                &service,
+                id,
+                token,
+                &merged,
+                10_000,
+                &expected_voice,
+            )?;
             reader = at;
             let mut l = service.0.lock().unwrap();
             if !l.producing.as_ref().is_some_and(|(_, t, _)| t == token) {
@@ -2615,7 +2842,8 @@ fn generate_mode(
         if book.key != book_key {
             return Err("Open the selected audiobook in the browser".into());
         }
-        if book.complete && (!full || book.continuous) {
+        let requested = synthesis_key(&app.state::<crate::AppState>().settings.lock().unwrap());
+        if book.complete && (!full || book.continuous) && recording_key(book) == requested {
             return Err("This audiobook is already complete".into());
         }
     } else {
@@ -2660,6 +2888,7 @@ fn generate_mode(
                 .unwrap()
                 .kokoro
                 .clone(),
+            synthesis_key: synthesis_key(&app.state::<crate::AppState>().settings.lock().unwrap()),
         };
         let dir = directory(&id)?;
         recover(&dir, &book)?;
@@ -3076,6 +3305,7 @@ mod tests {
             from_beginning: true,
             message: None,
             voice: crate::config::KokoroSettings::default(),
+            synthesis_key: String::new(),
         }
     }
     pub(super) fn reader(page: u64, fingerprint: &str) -> Value {
@@ -3747,7 +3977,7 @@ mod tests {
     fn retrieval_earlier_guard_is_bounded_for_a_large_history() {
         let mut b = book();
         for number in 0..1500 {
-            b.sentences.push(Sentence {id:number.to_string(),continuation_of:None,text:format!("The archivist catalogued artifact number {number} beside the northern entrance while recording the details in her notebook."),sources:vec![],start_sample:0,end_sample:0});
+            b.sentences.push(Sentence {id:number.to_string(),continuation_of:None,text:format!("The archivist catalogued artifact number {number} beside the northern entrance while recording the details in her notebook."),sources:vec![],start_sample:0,end_sample:0,voice_key:String::new()});
         }
         let start = std::time::Instant::now();
         assert!(!contains_earlier_context(&b,"The archivist opened the garden door and watched sunlight spread across the empty courtyard. Several unfamiliar travelers waited quietly by a stone fountain while distant bells announced the start of another day."));

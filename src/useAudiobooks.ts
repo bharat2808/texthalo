@@ -11,6 +11,7 @@ export type Checkpoint = {
   sentence: number;
   page: string;
   seconds: number | null;
+  voiceKey: string;
 };
 export type Audiobook = {
   id: string;
@@ -52,6 +53,7 @@ export type Audio = {
 };
 export type AudiobookState = {
   readerConnected?: boolean | null;
+  engine?: string;
   books: Audiobook[];
   tray: {
     reader: {

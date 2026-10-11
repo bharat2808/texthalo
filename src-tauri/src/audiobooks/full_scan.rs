@@ -77,9 +77,6 @@ fn read_fresh_view_with(
     }
     Err("The reader is still showing a previously captured view. No text was skipped. Wait for the page to finish loading, then resume full audiobook preparation.".into())
 }
-fn same_voice(a: &crate::config::KokoroSettings, b: &crate::config::KokoroSettings) -> bool {
-    a.voice == b.voice && a.quant == b.quant && a.speed == b.speed
-}
 fn same_passage(source: &Book, old: &Sentence, draft: &Book, new: &Sentence) -> bool {
     let context = |page: &Page, source: &Source| {
         let words = text_words(&page.text);
@@ -354,7 +351,7 @@ impl FullScan {
     fn index(&mut self) {
         self.cache.clear();
         for (i, source) in self.sources.iter().enumerate() {
-            if !same_voice(&source.voice, &self.draft.voice) || source.key != self.draft.key {
+            if recording_key(source) != recording_key(&self.draft) || source.key != self.draft.key {
                 continue;
             }
             for (j, sentence) in source.sentences.iter().take(source.generated).enumerate() {
@@ -581,7 +578,13 @@ impl FullScan {
         let mut pcm = vec![0; length];
         input.read_exact(&mut pcm).map_err(|e| e.to_string())?;
         self.draft.sentences[self.draft.generated].id = sentence.id.clone();
-        commit_pcm(&self.folder(root)?, &mut self.draft, &pcm)?;
+        let voice = if sentence.voice_key.is_empty() {
+            format!("kokoro:{}", source.voice.voice)
+        } else {
+            sentence.voice_key.clone()
+        };
+        self.draft.sentences[self.draft.generated].voice_key = voice.clone();
+        commit_pcm(&self.folder(root)?, &mut self.draft, &pcm, Some(&voice))?;
         self.reused += 1;
         Ok(true)
     }
@@ -808,50 +811,56 @@ pub(super) fn producer(app: &AppHandle, id: &str, token: &str) -> Result<(), Str
         .get(id)
         .cloned()
         .ok_or("Audiobook not found")?;
-    let mut scan = book
-        .full_scan
-        .as_deref()
-        .cloned()
-        .unwrap_or_else(|| FullScan::new(&book));
-    scan.recover(&root)?;
-    persist(&service, id, token, &root, &scan)?;
-    prepare_transcript_with(
-        &mut scan,
-        &root,
-        |request| bridge.command_while(request, || generation_active(&service, id, token)),
-        || generation_active(&service, id, token),
-        |scan| persist(&service, id, token, &root, scan),
-    )?;
-    let mut settings = app
+    let settings = app
         .state::<crate::AppState>()
         .settings
         .lock()
         .unwrap()
         .clone();
-    settings.engine = crate::config::Engine::Kokoro;
-    settings.kokoro = scan.draft.voice.clone();
+    let requested_key = synthesis_key(&settings);
+    let mut scan = book
+        .full_scan
+        .as_deref()
+        .filter(|scan| scan.draft().synthesis_key == requested_key)
+        .cloned()
+        .unwrap_or_else(|| FullScan::new(&book));
+    scan.draft.synthesis_key = requested_key.clone();
+    scan.draft.voice = settings.kokoro.clone();
+    scan.index();
+    scan.recover(&root)?;
+    persist(&service, id, token, &root, &scan)?;
+    prepare_transcript_with(
+        &mut scan,
+        &root,
+        |request| {
+            bridge.command_while(request, || {
+                generation_voice_active(app, &service, id, token, &requested_key)
+            })
+        },
+        || generation_voice_active(app, &service, id, token, &requested_key),
+        |scan| persist(&service, id, token, &root, scan),
+    )?;
     loop {
         if !generation_active(&service, id, token) {
             return Ok(());
+        }
+        if !generation_voice_active(app, &service, id, token, &requested_key) {
+            return Err(
+                "Voice settings changed during generation. Resume to use the newly selected voice."
+                    .into(),
+            );
         }
         if let Some(sentence) = scan.draft.sentences.get(scan.draft.generated).cloned() {
             if !scan.reuse(&root)? {
                 let folder = scan.folder(&root)?;
                 let scratch = folder.join("sentence.tmp.wav");
-                let state = app.state::<crate::AppState>();
-                let samples = {
-                    let _guard = state.synthesis.for_engine(settings.engine).lock().unwrap();
-                    let result = state
-                        .spoken
-                        .render(&settings, &sentence.text, &scratch)
-                        .and_then(|_| crate::spoken::Spoken::load_audio(&scratch));
-                    let _ = fs::remove_file(&scratch);
-                    result?
-                };
-                if !generation_active(&service, id, token) {
-                    return Ok(());
+                let samples = render_sentence(app, &settings, &sentence.text, &scratch, || {
+                    generation_voice_active(app, &service, id, token, &requested_key)
+                })?;
+                if !generation_voice_active(app, &service, id, token, &requested_key) {
+                    return Err("Voice settings changed during generation. Resume to use the newly selected voice.".into());
                 }
-                commit(&folder, &mut scan.draft, &samples)?;
+                commit_with_voice(&folder, &mut scan.draft, &samples, &voice_key(&settings))?;
             }
             persist(&service, id, token, &root, &scan)?;
             continue;

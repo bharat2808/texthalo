@@ -541,7 +541,7 @@ fn run_speech_input_inner(
 ///
 /// A user who picks Kokoro must never hear Samantha and conclude that is what Kokoro
 /// sounds like, so there is no fallback here — the shortcut reports the reason instead.
-fn selected_engine_refusal(settings: &Settings) -> Option<String> {
+pub(crate) fn selected_engine_refusal(settings: &Settings) -> Option<String> {
     if settings.engine == config::Engine::Apple {
         return None;
     }

@@ -755,6 +755,136 @@ pub struct SpeechHistory {
     pub source: crate::capture::SourceMetadata,
 }
 
+/// Render hosted PCM without starting a player or taking over the speech job.
+/// Audiobooks publish the result only after a successful terminal event.
+pub(crate) async fn render_speech(
+    text: &str,
+    settings: &crate::config::FishSettings,
+    active: impl Fn() -> bool,
+) -> Result<Vec<f32>, String> {
+    let render = async {
+        let token = access_token(false).await?;
+        let url = origin()?
+            .replacen("https://", "wss://", 1)
+            .replacen("http://", "ws://", 1)
+            + "/v1/tts/stream";
+        let (socket, _) = connect_async(&url)
+            .await
+            .map_err(|_| "Could not connect to hosted audiobook speech.".to_string())?;
+        render_speech_socket(socket, text, settings, &token).await
+    };
+    tokio::pin!(render);
+    let mut tick = tokio::time::interval(Duration::from_millis(50));
+    loop {
+        tokio::select! {
+            biased;
+            _ = tick.tick() => {
+                if !active() { return Err("Preparation stopped".into()); }
+            }
+            result = &mut render => return result,
+        }
+    }
+}
+
+async fn render_speech_socket<S>(
+    mut socket: tokio_tungstenite::WebSocketStream<S>,
+    text: &str,
+    settings: &crate::config::FishSettings,
+    token: &str,
+) -> Result<Vec<f32>, String>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    if settings.model_id.is_empty() || settings.voice_id.is_empty() {
+        return Err("Choose a hosted voice before generating an audiobook.".into());
+    }
+    let text = crate::speech_input::normalize(text);
+    let mut upload = crate::hosted_input::Upload::default();
+    upload.append(&text)?;
+    upload.finish()?;
+    let start = StreamStart {
+        kind: "start",
+        token,
+        key: uuid::Uuid::new_v4().to_string(),
+        text: &upload.text,
+        voice_id: &settings.voice_id,
+        model_id: &settings.model_id,
+        enhance_text: settings.enhance_text,
+        input_mode: None,
+    };
+    socket
+        .send(Message::Text(
+            serde_json::to_string(&start)
+                .map_err(|e| e.to_string())?
+                .into(),
+        ))
+        .await
+        .map_err(|_| "Could not start hosted audiobook speech.".to_string())?;
+    let mut pcm = Vec::new();
+    loop {
+        let message = tokio::time::timeout(Duration::from_secs(120), socket.next())
+            .await
+            .map_err(|_| "Hosted audiobook speech timed out.".to_string())?
+            .ok_or("Hosted audiobook speech ended before completion")?
+            .map_err(|_| "Hosted audiobook speech was interrupted".to_string())?;
+        match message {
+            Message::Binary(bytes) => pcm.extend_from_slice(&bytes),
+            Message::Text(raw) => {
+                let event: StreamEvent = serde_json::from_str(&raw).unwrap_or(StreamEvent::Other);
+                match event {
+                    StreamEvent::AwaitingPlayback {
+                        next_chunk_index,
+                        audio_bytes_sent,
+                    } => {
+                        // Received bytes are consumed by the recording, not by a player.
+                        if audio_bytes_sent != pcm.len() as u64 {
+                            return Err("Hosted speech audio byte count did not match".into());
+                        }
+                        socket.send(Message::Text(json!({"type":"continue","nextChunkIndex":next_chunk_index,"playedAudioBytes":audio_bytes_sent}).to_string().into()))
+                            .await.map_err(|_| "Could not continue hosted audiobook speech".to_string())?;
+                    }
+                    StreamEvent::Finished {
+                        status,
+                        credit_limited,
+                        ..
+                    } => {
+                        if credit_limited {
+                            return Err(api_error(
+                                reqwest::StatusCode::PAYMENT_REQUIRED,
+                                &json!({"error":"insufficient_credits"}),
+                            ));
+                        }
+                        if status != "completed" || pcm.is_empty() || pcm.len() % 2 != 0 {
+                            return Err("Hosted audiobook sentence did not complete".into());
+                        }
+                        return Ok(pcm
+                            .as_chunks::<2>()
+                            .0
+                            .iter()
+                            .map(|b| i16::from_le_bytes(*b) as f32 / 32768.)
+                            .collect());
+                    }
+                    StreamEvent::Error { error, .. } => {
+                        return Err(api_error(
+                            reqwest::StatusCode::BAD_REQUEST,
+                            &json!({"error":error.unwrap_or_else(|| "stream_failed".into())}),
+                        ))
+                    }
+                    _ => {}
+                }
+            }
+            Message::Ping(bytes) => socket
+                .send(Message::Pong(bytes))
+                .await
+                .map_err(|_| "Hosted speech connection closed".to_string())?,
+            Message::Close(_) => {
+                return Err("Hosted audiobook speech ended before completion".into())
+            }
+            _ => {}
+        }
+    }
+}
+
 pub async fn stream_speech_input(
     app: AppHandle,
     job_id: u64,

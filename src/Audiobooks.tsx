@@ -20,6 +20,15 @@ export default function Audiobooks() {
   );
   const book = libraryBooks.find((b) => b.id === selected);
   const chapters = book?.checkpoints.filter((c) => c.complete && c.seconds !== null) ?? [];
+  // Group chapters by provider-voice. Each group header shows the voice;
+  // individual chapters don't repeat it.
+  const chaptersByVoice = chapters.reduce<Map<string, typeof chapters>>((map, c) => {
+    const key = c.voiceKey || "unknown";
+    if (!map.has(key)) map.set(key, []);
+    map.get(key)!.push(c);
+    return map;
+  }, new Map());
+  const isCloudEngine = state.engine === "Fish";
   const playing =
     state.playback && state.playback.bookId === book?.id
       ? state.playback.audio
@@ -304,34 +313,49 @@ export default function Audiobooks() {
               )}
             </div>
           </div>
+          {isCloudEngine && (
+            <p className="audiobook-warning" role="alert">
+              ⚠️ Cloud provider selected: credits will be charged for audiobook generation.
+            </p>
+          )}
           <div className="audiobook-chapters">
             <h3>Completed chapters</h3>
             {state.generating === book.id && (
               <p role="status">Finished chapters appear here as they become ready. You can listen while the rest of the book is being prepared.</p>
             )}
             {!chapters.length && <p>No completed chapters yet.</p>}
-            {chapters.map((c) => (
-              <button
-                key={`${c.rangeId}:${c.id}`}
-                disabled={busy}
-                onClick={() =>
-                  run(() => listenBook(book.id, c.seconds!, c.rangeId))
-                }
-              >
-                <span>
-                  {c.label}
-                  <small
-                    className={`chapter-status chapter-status-${c.status}`}
+            {[...chaptersByVoice.entries()].map(([voiceKey, voiceChapters]) => (
+              <div key={voiceKey} className="audiobook-voice-group">
+                <h4 className="audiobook-voice-label">
+                  {voiceKey === "unknown" ? "Unknown voice" : voiceKey.replace(/:/, " · ")}
+                  <span className="audiobook-voice-count">
+                    {voiceChapters.length} chapter{voiceChapters.length === 1 ? "" : "s"}
+                  </span>
+                </h4>
+                {voiceChapters.map((c) => (
+                  <button
+                    key={`${c.rangeId}:${c.id}`}
+                    disabled={busy}
+                    onClick={() =>
+                      run(() => listenBook(book.id, c.seconds!, c.rangeId))
+                    }
                   >
-                    Complete
-                  </small>
-                </span>
-                <small>
-                  {c.page} ·{" "}
-                  {audioClock(c.duration)} ready
-                </small>
-                <span aria-hidden="true">▶</span>
-              </button>
+                    <span>
+                      {c.label}
+                      <small
+                        className={`chapter-status chapter-status-${c.status}`}
+                      >
+                        Complete
+                      </small>
+                    </span>
+                    <small>
+                      {c.page} ·{" "}
+                      {audioClock(c.duration)} ready
+                    </small>
+                    <span aria-hidden="true">▶</span>
+                  </button>
+                ))}
+              </div>
             ))}
           </div>
           {playing && book.passage && (
