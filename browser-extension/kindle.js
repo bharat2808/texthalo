@@ -1,11 +1,25 @@
 (() => {
   if (globalThis.__textHaloReader) return;
-  const VERSION = "kindle-dom-0.5";
+  const VERSION = "kindle-dom-0.5.1";
   const supported = () =>
     ["read.amazon.ca", "read.amazon.com"].includes(location.hostname) &&
     /^[A-Z0-9]{10}$/i.test(
       new URL(location.href).searchParams.get("asin") || "",
     );
+  const readingPosition = (text) => {
+    const match = text.trim().match(/^(Page|Location)\s*(\d+|[ivxlcdm]+)(?=\s|$)(?:\s+of\s+(\d+))?/i);
+    if (!match) return null;
+    const roman = !/^\d+$/.test(match[2]);
+    let current = Number(match[2]);
+    if (roman) {
+      const token = match[2].toUpperCase();
+      if (match[1].toLowerCase() !== "page" ||
+          !/^M{0,3}(CM|CD|D?C{0,3})(XC|XL|L?X{0,3})(IX|IV|V?I{0,3})$/.test(token)) return null;
+      const values = { I: 1, V: 5, X: 10, L: 50, C: 100, D: 500, M: 1000 };
+      current = [...token].reduce((sum, c, i) => sum + (values[c] < (values[token[i + 1]] || 0) ? -values[c] : values[c]), 0);
+    }
+    return { current, total: match[3] ? Number(match[3]) : null, roman };
+  };
   const rectangle = (el) => {
     const r = el.getBoundingClientRect();
     return { x: r.x, y: r.y, width: r.width, height: r.height };
@@ -88,7 +102,7 @@
         (el) =>
           visible(el) &&
           el.textContent.trim().length < 140 &&
-          /^(Page|Location)\s*\d+/i.test(el.textContent.trim()),
+          !!readingPosition(el.textContent),
       )
       .sort((a, b) => rectangle(a).height - rectangle(b).height);
     const progress =
@@ -100,7 +114,7 @@
             el.getAttribute("aria-label") ||
             "",
         )
-        .find((text) => /^(Page|Location)\s*\d+/i.test(text)) ||
+        .find((text) => !!readingPosition(text)) ||
       "";
     const titleCandidates = all("h1,h2,[title],[aria-label],div,span").filter(
       (el) =>
@@ -114,7 +128,8 @@
       titleCandidates
         .find(
           (el) =>
-            !/^(Kindle Library|Reader settings|Reader menu|Search|Table of Contents|Bookmark|Page \d)/i.test(
+            !readingPosition(name(el)) &&
+            !/^(Kindle Library|Reader settings|Reader menu|Search|Table of Contents|Bookmark)/i.test(
               name(el),
             ),
         )
@@ -275,9 +290,9 @@
         role: el.getAttribute("role"),
       }));
     const navigation = { previous: !!control("previous"), next: !!control("next") };
-    const position = progress.match(/^(?:Page|Location)\s+(\d+)(?:\s+of\s+(\d+))?/i);
-    const current = position ? Number(position[1]) : null;
-    const total = position?.[2] ? Number(position[2]) : null;
+    const position = readingPosition(progress);
+    const current = position?.current ?? null;
+    const total = position?.total ?? null;
     // At the cover Kindle removes Previous entirely. Absence alone is not
     // enough: require an edge position and a visible control in the other direction.
     const visibleControl = (label) => navigationDetails.some(
@@ -298,7 +313,7 @@
       ) || (current === 1 && !navigation.previous && visibleControl("next page")),
       endOfBook: navigationDetails.some(
         (c) => c.label.toLowerCase() === "next page" && c.disabled,
-      ) || (total !== null && total > 0 && current === total && !navigation.next && visibleControl("previous page")),
+      ) || (!position?.roman && total !== null && total > 0 && current === total && !navigation.next && visibleControl("previous page")),
       text: "",
     };
   }

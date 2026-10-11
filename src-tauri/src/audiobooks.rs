@@ -168,7 +168,9 @@ impl Book {
             checkpoints.sort_by_key(|c| {
                 ReaderPosition::parse(c["page"].as_str().unwrap_or(""))
                     .map(|p| match p {
-                        ReaderPosition::Page(n) | ReaderPosition::Location(n) => n,
+                        ReaderPosition::FrontMatter(n) => n,
+                        ReaderPosition::Page(n) => n.saturating_add(4000),
+                        ReaderPosition::Location(n) => n,
                     })
                     .unwrap_or(u64::MAX)
             });
@@ -1070,7 +1072,8 @@ fn locate_continuation_report(
             // Approach within two views before the bounded passage search. Starting
             // six pages away could reverse after five turns before reaching the hint.
             let distance = match (at, goal) {
-                (ReaderPosition::Page(a), ReaderPosition::Page(b))
+                (ReaderPosition::FrontMatter(a), ReaderPosition::FrontMatter(b))
+                | (ReaderPosition::Page(a), ReaderPosition::Page(b))
                 | (ReaderPosition::Location(a), ReaderPosition::Location(b)) => Some(a.abs_diff(b)),
                 _ => None,
             };
@@ -2139,6 +2142,7 @@ fn generation_active(service: &Audiobooks, id: &str, token: &str) -> bool {
 }
 #[derive(Clone, Copy)]
 enum ReaderPosition {
+    FrontMatter(u64),
     Page(u64),
     Location(u64),
 }
@@ -2146,23 +2150,85 @@ impl ReaderPosition {
     fn parse(progress: &str) -> Option<Self> {
         let mut words = progress.split_whitespace();
         let unit = words.next()?;
-        let number = words.next()?.parse::<u64>().ok()?;
+        let token = words.next()?;
         if unit.eq_ignore_ascii_case("page") {
-            Some(Self::Page(number))
+            token
+                .parse::<u64>()
+                .ok()
+                .map(Self::Page)
+                .or_else(|| roman_page(token).map(Self::FrontMatter))
         } else if unit.eq_ignore_ascii_case("location") {
-            Some(Self::Location(number))
+            Some(Self::Location(token.parse().ok()?))
         } else {
             None
         }
     }
     fn compare(self, other: Self) -> Option<std::cmp::Ordering> {
         match (self, other) {
-            (Self::Page(a), Self::Page(b)) | (Self::Location(a), Self::Location(b)) => {
-                Some(a.cmp(&b))
-            }
+            (Self::FrontMatter(a), Self::FrontMatter(b))
+            | (Self::Page(a), Self::Page(b))
+            | (Self::Location(a), Self::Location(b)) => Some(a.cmp(&b)),
+            (Self::FrontMatter(_), Self::Page(_)) => Some(std::cmp::Ordering::Less),
+            (Self::Page(_), Self::FrontMatter(_)) => Some(std::cmp::Ordering::Greater),
             _ => None,
         }
     }
+}
+fn roman_page(token: &str) -> Option<u64> {
+    if token.is_empty() || token.len() > 15 {
+        return None;
+    }
+    let token = token.to_ascii_uppercase();
+    let values = token
+        .chars()
+        .map(|c| match c {
+            'I' => Some(1_u64),
+            'V' => Some(5),
+            'X' => Some(10),
+            'L' => Some(50),
+            'C' => Some(100),
+            'D' => Some(500),
+            'M' => Some(1000),
+            _ => None,
+        })
+        .collect::<Option<Vec<_>>>()?;
+    let number = values
+        .iter()
+        .enumerate()
+        .map(|(i, &v)| {
+            if values.get(i + 1).is_some_and(|&next| next > v) {
+                -(v as i64)
+            } else {
+                v as i64
+            }
+        })
+        .sum::<i64>();
+    if !(1..=3999).contains(&number) {
+        return None;
+    }
+    let mut remaining = number as u64;
+    let mut canonical = String::new();
+    for (value, symbol) in [
+        (1000, "M"),
+        (900, "CM"),
+        (500, "D"),
+        (400, "CD"),
+        (100, "C"),
+        (90, "XC"),
+        (50, "L"),
+        (40, "XL"),
+        (10, "X"),
+        (9, "IX"),
+        (5, "V"),
+        (4, "IV"),
+        (1, "I"),
+    ] {
+        while remaining >= value {
+            canonical.push_str(symbol);
+            remaining -= value;
+        }
+    }
+    (canonical == token).then_some(number as u64)
 }
 fn producer(
     app: &AppHandle,
@@ -2620,6 +2686,26 @@ pub async fn audiobook_generate(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn roman_opening_positions_sort_before_numbered_pages_and_support_recovery() {
+        use super::*;
+        let third = ReaderPosition::parse("Page iii of 405 • 0%").unwrap();
+        let fourth = ReaderPosition::parse("Page IV of 405 • 0%").unwrap();
+        let first_numbered = ReaderPosition::parse("Page 1 of 405 • 0%").unwrap();
+        assert!(matches!(third, ReaderPosition::FrontMatter(3)));
+        assert_eq!(third.compare(fourth), Some(std::cmp::Ordering::Less));
+        assert_eq!(
+            fourth.compare(first_numbered),
+            Some(std::cmp::Ordering::Less)
+        );
+        assert_eq!(
+            first_numbered.compare(third),
+            Some(std::cmp::Ordering::Greater)
+        );
+        assert_eq!(third.compare(ReaderPosition::Location(3)), None);
+        assert!(ReaderPosition::parse("Page iiii of 405").is_none());
+        assert!(ReaderPosition::parse("Location iii of 405").is_none());
+    }
     use super::*;
     #[test]
     fn missing_numbered_chapters_cannot_close_a_recorded_chapter() {

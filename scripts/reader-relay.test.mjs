@@ -126,7 +126,7 @@ test("popup ends checking when an outdated worker refuses its request", async ()
     return elements.get(id);
   };
   const context = {
-    document: { getElementById: element },
+    document: { getElementById: element, querySelector: element },
     chrome: {
       runtime: {
         sendMessage: async () => ({ ok: false, error: "Unsupported request." }),
@@ -156,7 +156,7 @@ test("popup times out a worker that never responds", async () => {
   };
   let timeout;
   const context = {
-    document: { getElementById: element },
+    document: { getElementById: element, querySelector: element },
     chrome: { runtime: { sendMessage: () => new Promise(() => {}) } },
     setTimeout: (fn) => {
       timeout = fn;
@@ -171,7 +171,9 @@ test("popup times out a worker that never responds", async () => {
     ),
     context,
   );
-  timeout();
+  timeout(); // Native-host probe expires first.
+  await new Promise((resolve) => setImmediate(resolve));
+  timeout(); // The reader-status request also receives no response.
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(element("supported").textContent, "Unavailable");
   assert.match(element("status").textContent, /timed out/);
@@ -294,7 +296,7 @@ test("the connected popup offers both simple actions before any book or playback
     return elements.get(id);
   };
   const sent=[];
-  const context={document:{getElementById:element},setTimeout,clearTimeout,
+  const context={document:{getElementById:element,querySelector:element},setTimeout,clearTimeout,
     chrome:{runtime:{sendMessage:async message=>{
       sent.push(message);
       if(message.type==="reader-status") return {ok:true,data:{supported:true,status:"ready",connected:true}};
@@ -322,7 +324,7 @@ test("connected polling preserves visible controls and disables duplicate full b
     return elements.get(id);
   };
   let generating = null;
-  const document = {getElementById:element,activeElement:null};
+  const document = {getElementById:element,querySelector:element,activeElement:null};
   const context={document,setTimeout,clearTimeout,chrome:{runtime:{sendMessage:async message=>
     message.type==="reader-status" ? {ok:true,data:{supported:true,status:"ready",connected:true}} :
     {ok:true,data:{context:{book:{id:"book",checkpoints:[],generated:1},reader:{fingerprint:"view"}},
