@@ -330,6 +330,78 @@ impl Book {
             "passage":current.map(|s|json!({"text":s.text,"page":s.sources.first().and_then(|p|self.pages.get(p.page)).map(|p|&p.progress)}))})
     }
 }
+const FISH_BATCH_MIN: usize = 5;
+const FISH_BATCH_MAX: usize = 6;
+
+/// Select a Fish Audio request size without crossing a chapter boundary. Short
+/// final groups are allowed at chapter and book ends; otherwise wait for more
+/// captured text so the hosted model gets sentence context.
+fn next_fish_batch_len(book: &Book, allow_short: bool) -> Option<usize> {
+    let start = book.generated;
+    if start >= book.sentences.len() {
+        return None;
+    }
+    let next_chapter = book
+        .checkpoints
+        .iter()
+        .map(|c| c.sentence)
+        .find(|&n| n > start);
+    let end = next_chapter
+        .unwrap_or(book.sentences.len())
+        .min(book.sentences.len());
+    let available = end.saturating_sub(start);
+    if available == 0 {
+        return None;
+    }
+    if available >= FISH_BATCH_MIN {
+        Some(available.min(FISH_BATCH_MAX))
+    } else if next_chapter.is_some() || book.end_verified || allow_short {
+        Some(available)
+    } else {
+        None
+    }
+}
+
+/// Turn several transcript sentences into one audio unit. Source spans remain
+/// attached to the combined text, and checkpoint indices move with the splice.
+fn coalesce_fish_batch(book: &mut Book, count: usize) {
+    if count <= 1 || book.generated + count > book.sentences.len() {
+        return;
+    }
+    let start = book.generated;
+    let end = start + count;
+    let batch_id = book.sentences[start].id.clone();
+    let text = book.sentences[start..end]
+        .iter()
+        .map(|sentence| sentence.text.as_str())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let sources = book.sentences[start..end]
+        .iter()
+        .flat_map(|sentence| sentence.sources.clone())
+        .collect::<Vec<_>>();
+    let removed_ids = book.sentences[start + 1..end]
+        .iter()
+        .map(|sentence| sentence.id.clone())
+        .collect::<std::collections::HashSet<_>>();
+    book.sentences[start].text = text;
+    book.sentences[start].sources = sources;
+    book.sentences.drain(start + 1..end);
+    for checkpoint in &mut book.checkpoints {
+        if checkpoint.sentence >= end {
+            checkpoint.sentence -= count - 1;
+        }
+    }
+    if book
+        .bookmark_sentence
+        .as_ref()
+        .is_some_and(|id| removed_ids.contains(id))
+    {
+        book.bookmark_sentence = Some(batch_id);
+        book.bookmark_offset = 0;
+    }
+}
+
 // Session audio can play immediately. Only a closed, fully rendered chapter is resumable.
 fn saved_playback(book: &Book, position: Option<f64>) -> Option<(f64, u64, usize)> {
     let chapters = book
@@ -2595,17 +2667,28 @@ fn producer(
     let mut need_next = !book.pages.is_empty();
     loop {
         let (sentence, buffer, active) = {
-            let l = service.0.lock().unwrap();
+            let mut l = service.0.lock().unwrap();
             let b = l.books.get(id).ok_or("Audiobook removed")?;
             let active = l
                 .producing
                 .as_ref()
                 .is_some_and(|(i, t, _)| i == id && t == token);
-            (
-                b.sentences.get(b.generated).cloned(),
-                listening_buffer(b),
-                active,
-            )
+            let b = l.books.get_mut(id).ok_or("Audiobook removed")?;
+            let sentence = if settings.engine == crate::config::Engine::Fish {
+                match next_fish_batch_len(b, reader["endOfBook"] == true) {
+                    Some(count) => {
+                        coalesce_fish_batch(b, count);
+                        if count > 1 {
+                            save(&directory(id)?, b)?;
+                        }
+                        b.sentences.get(b.generated).cloned()
+                    }
+                    None => None,
+                }
+            } else {
+                b.sentences.get(b.generated).cloned()
+            };
+            (sentence, listening_buffer(b), active)
         };
         if !active {
             return Ok(());
@@ -2644,7 +2727,14 @@ fn producer(
             let committed = b.committed_samples;
             let audio = audio_path(&directory(id)?, b)?;
             if let Some(p) = l.playing.as_ref().filter(|p| {
-                p.book == id && !p.saved_chapter && app.state::<crate::AppState>().job.lock().unwrap().is_current(p.job)
+                p.book == id
+                    && !p.saved_chapter
+                    && app
+                        .state::<crate::AppState>()
+                        .job
+                        .lock()
+                        .unwrap()
+                        .is_current(p.job)
             }) {
                 p.player.update_file(&audio, committed, false)?;
             }

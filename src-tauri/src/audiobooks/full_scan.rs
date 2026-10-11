@@ -850,6 +850,14 @@ pub(super) fn producer(app: &AppHandle, id: &str, token: &str) -> Result<(), Str
                     .into(),
             );
         }
+        if settings.engine == crate::config::Engine::Fish {
+            if let Some(count) = next_fish_batch_len(&scan.draft, true) {
+                coalesce_fish_batch(&mut scan.draft, count);
+                if count > 1 {
+                    persist(&service, id, token, &root, &scan)?;
+                }
+            }
+        }
         if let Some(sentence) = scan.draft.sentences.get(scan.draft.generated).cloned() {
             if !scan.reuse(&root)? {
                 let folder = scan.folder(&root)?;
