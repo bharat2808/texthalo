@@ -2734,7 +2734,21 @@ fn producer(
         play(app, id, None)?;
         auto = false;
     }
-    let mut reader = if !book.pages.is_empty() {
+    let mut reader = if let Some(selected_fingerprint) = book.pending_start.as_deref() {
+        // Listen from this page already captured the explicitly selected view in
+        // select_page. Do not run the saved-position locator, which would navigate
+        // away from that view and can fail when the old recording is unrelated.
+        let reader = bridge.command_while(json!({"type":"inspect"}), || {
+            generation_active(&service, id, token)
+        })?;
+        if key(&reader)? != book.key {
+            return Err("Connected book changed".into());
+        }
+        if reader["fingerprint"].as_str() != Some(selected_fingerprint) {
+            return Err("The selected page changed. Choose Listen from this page again.".into());
+        }
+        reader
+    } else if !book.pages.is_empty() {
         {
             let mut l = service.0.lock().unwrap();
             if let Some(b) = l.books.get_mut(id) {
