@@ -12,6 +12,8 @@ use std::{
 };
 use tauri::{AppHandle, Emitter, Manager};
 const RATE: u64 = 24_000;
+// Leave room above the hosted continuation threshold for arriving audio.
+const STREAM_BUFFER_SECONDS: f64 = 12.0;
 fn identity() -> String {
     uuid::Uuid::new_v4().to_string()
 }
@@ -2924,7 +2926,7 @@ fn producer(
                         })
                         .map(|p| p.player.clone());
                     if let Some(player) = player {
-                        while player.buffered_seconds() >= 8.0
+                        while player.buffered_seconds() >= STREAM_BUFFER_SECONDS
                             && generation_voice_active(app, &service, id, token, &expected_voice)
                         {
                             player.is_playing()?;

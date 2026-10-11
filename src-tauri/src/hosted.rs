@@ -18,6 +18,8 @@ use tokio::{
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
 const CREDENTIALS_KEY: &str = "desktop-credentials-v1";
+// Request the next audiobook chunk with ten seconds of 24 kHz PCM16 remaining.
+const AUDIOBOOK_LOOKAHEAD_BYTES: u64 = crate::pcm::SAMPLE_RATE as u64 * 2 * 10;
 static TOKEN_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 static CREDENTIAL_CACHE: OnceLock<Mutex<Option<DesktopCredentials>>> = OnceLock::new();
 static APP_HANDLE: OnceLock<AppHandle> = OnceLock::new();
@@ -196,6 +198,7 @@ fn api_error(status: reqwest::StatusCode, body: &Value) -> String {
         "insufficient_credits" => "You’re out of hosted credits. Open Billing to review your balance or add a credit pack.".into(),
         "voice_clone_entitlement_required" | "subscription_required" => "Voice cloning requires an active Creator plan.".into(),
         "feature_disabled" => "Voice cloning is not enabled on this server yet.".into(),
+        "invalid_playback_ack" => "The speech stream buffer was rejected by the server. Update TextHalo and try again.".into(),
         "unknown_voice" | "unknown_voice_clone" => "That voice is no longer available. Choose another voice.".into(),
         "voice_not_ready" => "This voice is still training. Try again when it is ready.".into(),
         "voice_clone_limit_reached" => "You’ve reached the saved voice clone limit for your plan.".into(),
@@ -707,6 +710,8 @@ async fn checkout(path: &str, body: Value) -> Result<String, String> {
 #[serde(tag = "type", rename_all = "snake_case")]
 enum StreamEvent {
     Ready {
+        #[serde(default, rename = "maxPlaybackBufferBytes")]
+        max_playback_buffer_bytes: Option<u64>,
         #[serde(rename = "sessionId")]
         session_id: String,
         #[serde(rename = "inputMode")]
@@ -843,6 +848,8 @@ where
     let mut pcm = Vec::new();
     let mut pending = Vec::new();
     let mut received = 0u64;
+    // Older servers allow only two seconds; use their limit until they advertise more.
+    let mut lookahead_bytes = 96_000;
     loop {
         let message = tokio::time::timeout(Duration::from_secs(120), socket.next())
             .await
@@ -867,6 +874,14 @@ where
             Message::Text(raw) => {
                 let event: StreamEvent = serde_json::from_str(&raw).unwrap_or(StreamEvent::Other);
                 match event {
+                    StreamEvent::Ready {
+                        max_playback_buffer_bytes,
+                        ..
+                    } => {
+                        lookahead_bytes = max_playback_buffer_bytes
+                            .unwrap_or(96_000)
+                            .min(AUDIOBOOK_LOOKAHEAD_BYTES);
+                    }
                     StreamEvent::AwaitingPlayback {
                         next_chunk_index,
                         audio_bytes_sent,
@@ -878,7 +893,7 @@ where
                         let mut played = played_audio_bytes()
                             .unwrap_or(audio_bytes_sent)
                             .min(audio_bytes_sent);
-                        while audio_bytes_sent.saturating_sub(played) > 96_000 {
+                        while audio_bytes_sent.saturating_sub(played) > lookahead_bytes {
                             tokio::time::sleep(Duration::from_millis(20)).await;
                             played = played_audio_bytes()
                                 .unwrap_or(audio_bytes_sent)
@@ -1113,6 +1128,7 @@ async fn stream_speech_inner(
                     StreamEvent::Ready {
                         session_id,
                         input_mode,
+                        ..
                     } => {
                         if incremental && input_mode.as_deref() != Some("incremental") {
                             return Err(
