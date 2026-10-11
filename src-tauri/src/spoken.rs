@@ -290,6 +290,53 @@ impl Spoken {
         .map(|(report, latency, underrun, _)| (report, latency, underrun))
     }
 
+    pub(crate) fn render_streaming<C, F>(
+        &self,
+        settings: &Settings,
+        text: &str,
+        cancelled: C,
+        mut on_audio: F,
+    ) -> Result<Vec<f32>, String>
+    where
+        C: Fn() -> bool + Sync,
+        F: FnMut(&[f32]) -> Result<(), String>,
+    {
+        let (first, next) = match settings.engine {
+            Engine::Apple | Engine::Kokoro => (180, 240),
+            Engine::Chatterbox => (100, 160),
+            _ => return Err("PCM rendering needs a local speech engine".into()),
+        };
+        let mut complete = Vec::new();
+        crate::streaming::run_input(
+            crate::speech_input::SpeechInput::Complete(text.into()),
+            first,
+            next,
+            |chunk| {
+                let began = std::time::Instant::now();
+                let audio = self.synthesize_audio(settings, chunk)?;
+                Ok((
+                    audio,
+                    began.elapsed().as_secs_f64(),
+                    chunk.chars().count().max(1),
+                ))
+            },
+            |audio, stopped| {
+                if let Some(((samples, _, rate), _, _)) = audio {
+                    if rate != crate::pcm::SAMPLE_RATE as u32 {
+                        return Err("Unsupported speech sample rate".into());
+                    }
+                    if !stopped() {
+                        on_audio(&samples)?;
+                        complete.extend(samples);
+                    }
+                }
+                Ok(())
+            },
+            cancelled,
+        )?;
+        Ok(complete)
+    }
+
     pub(crate) fn stream_pcm_input<C, P>(
         &self,
         settings: &Settings,

@@ -762,6 +762,16 @@ pub(crate) async fn render_speech(
     settings: &crate::config::FishSettings,
     active: impl Fn() -> bool,
 ) -> Result<Vec<f32>, String> {
+    render_speech_stream(text, settings, active, |_| Ok(()), || None).await
+}
+
+pub(crate) async fn render_speech_stream(
+    text: &str,
+    settings: &crate::config::FishSettings,
+    active: impl Fn() -> bool,
+    mut on_audio: impl FnMut(&[f32]) -> Result<(), String>,
+    played_audio_bytes: impl Fn() -> Option<u64>,
+) -> Result<Vec<f32>, String> {
     let render = async {
         let token = access_token(false).await?;
         let url = origin()?
@@ -771,7 +781,15 @@ pub(crate) async fn render_speech(
         let (socket, _) = connect_async(&url)
             .await
             .map_err(|_| "Could not connect to hosted audiobook speech.".to_string())?;
-        render_speech_socket(socket, text, settings, &token).await
+        render_speech_socket(
+            socket,
+            text,
+            settings,
+            &token,
+            &mut on_audio,
+            &played_audio_bytes,
+        )
+        .await
     };
     tokio::pin!(render);
     let mut tick = tokio::time::interval(Duration::from_millis(50));
@@ -791,6 +809,8 @@ async fn render_speech_socket<S>(
     text: &str,
     settings: &crate::config::FishSettings,
     token: &str,
+    on_audio: &mut impl FnMut(&[f32]) -> Result<(), String>,
+    played_audio_bytes: &impl Fn() -> Option<u64>,
 ) -> Result<Vec<f32>, String>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
@@ -821,6 +841,8 @@ where
         .await
         .map_err(|_| "Could not start hosted audiobook speech.".to_string())?;
     let mut pcm = Vec::new();
+    let mut pending = Vec::new();
+    let mut received = 0u64;
     loop {
         let message = tokio::time::timeout(Duration::from_secs(120), socket.next())
             .await
@@ -828,7 +850,20 @@ where
             .ok_or("Hosted audiobook speech ended before completion")?
             .map_err(|_| "Hosted audiobook speech was interrupted".to_string())?;
         match message {
-            Message::Binary(bytes) => pcm.extend_from_slice(&bytes),
+            Message::Binary(bytes) => {
+                received += bytes.len() as u64;
+                pending.extend_from_slice(&bytes);
+                let count = pending.len() & !1;
+                let samples: Vec<f32> = pending[..count]
+                    .chunks_exact(2)
+                    .map(|b| i16::from_le_bytes([b[0], b[1]]) as f32 / 32768.)
+                    .collect();
+                if !samples.is_empty() {
+                    on_audio(&samples)?;
+                }
+                pcm.extend_from_slice(&pending[..count]);
+                pending.drain(..count);
+            }
             Message::Text(raw) => {
                 let event: StreamEvent = serde_json::from_str(&raw).unwrap_or(StreamEvent::Other);
                 match event {
@@ -836,11 +871,20 @@ where
                         next_chunk_index,
                         audio_bytes_sent,
                     } => {
-                        // Received bytes are consumed by the recording, not by a player.
-                        if audio_bytes_sent != pcm.len() as u64 {
+                        // Pace provider continuation using the live player when present.
+                        if audio_bytes_sent != received {
                             return Err("Hosted speech audio byte count did not match".into());
                         }
-                        socket.send(Message::Text(json!({"type":"continue","nextChunkIndex":next_chunk_index,"playedAudioBytes":audio_bytes_sent}).to_string().into()))
+                        let mut played = played_audio_bytes()
+                            .unwrap_or(audio_bytes_sent)
+                            .min(audio_bytes_sent);
+                        while audio_bytes_sent.saturating_sub(played) > 96_000 {
+                            tokio::time::sleep(Duration::from_millis(20)).await;
+                            played = played_audio_bytes()
+                                .unwrap_or(audio_bytes_sent)
+                                .min(audio_bytes_sent);
+                        }
+                        socket.send(Message::Text(json!({"type":"continue","nextChunkIndex":next_chunk_index,"playedAudioBytes":played}).to_string().into()))
                             .await.map_err(|_| "Could not continue hosted audiobook speech".to_string())?;
                     }
                     StreamEvent::Finished {
@@ -854,7 +898,7 @@ where
                                 &json!({"error":"insufficient_credits"}),
                             ));
                         }
-                        if status != "completed" || pcm.is_empty() || pcm.len() % 2 != 0 {
+                        if status != "completed" || pcm.is_empty() || !pending.is_empty() {
                             return Err("Hosted audiobook sentence did not complete".into());
                         }
                         return Ok(pcm

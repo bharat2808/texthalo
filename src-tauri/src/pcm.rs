@@ -86,7 +86,10 @@ struct SampleBuffer {
 }
 impl SampleBuffer {
     fn len(&self) -> usize {
-        self.disk.as_ref().map_or(self.samples.len(), |d| d.samples)
+        self.disk
+            .as_ref()
+            .map_or(0, |d| d.samples)
+            .saturating_add(self.samples.len())
     }
     fn read(&mut self, output: &mut [f32]) -> usize {
         if self.cancelled {
@@ -95,10 +98,18 @@ impl SampleBuffer {
             return 0;
         }
         let copied = output.len().min(self.len().saturating_sub(self.cursor));
-        if let Some(disk) = &self.disk {
-            disk.copy(self.cursor, &mut output[..copied]);
-        } else {
-            output[..copied].copy_from_slice(&self.samples[self.cursor..self.cursor + copied]);
+        let disk_len = self.disk.as_ref().map_or(0, |d| d.samples);
+        let disk_count = copied.min(disk_len.saturating_sub(self.cursor));
+        if disk_count > 0 {
+            self.disk
+                .as_ref()
+                .unwrap()
+                .copy(self.cursor, &mut output[..disk_count]);
+        }
+        if copied > disk_count {
+            let start = (self.cursor + disk_count).saturating_sub(disk_len);
+            output[disk_count..copied]
+                .copy_from_slice(&self.samples[start..start + copied - disk_count]);
         }
         self.cursor += copied;
         // Hosted acknowledgements use a monotonic high-water mark, including after rewind.
@@ -309,6 +320,26 @@ impl Player {
             state.disk = Some(disk);
             state.finished = last;
         }
+        Ok(())
+    }
+
+    pub(crate) fn promote_file(
+        &self,
+        path: &std::path::Path,
+        samples: u64,
+        promoted: usize,
+    ) -> Result<(), String> {
+        let disk = DiskSamples::open(path, samples)?;
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        if state.cancelled {
+            return Ok(());
+        }
+        let previous = state.disk.as_ref().map_or(0, |d| d.samples);
+        if disk.samples.checked_sub(previous) != Some(promoted) || state.samples.len() < promoted {
+            return Err("Streamed audio did not match the committed recording".into());
+        }
+        state.samples.drain(..promoted).for_each(drop);
+        state.disk = Some(disk);
         Ok(())
     }
 

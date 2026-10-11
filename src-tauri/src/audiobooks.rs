@@ -217,6 +217,49 @@ fn render_sentence(
     let _ = fs::remove_file(scratch);
     result
 }
+fn start_page_stream_playback(
+    app: &AppHandle,
+    service: &Audiobooks,
+    id: &str,
+    token: &str,
+    samples: Vec<f32>,
+) -> Result<(), String> {
+    let mut l = service.0.lock().unwrap();
+    if !l
+        .producing
+        .as_ref()
+        .is_some_and(|(i, t, _)| i == id && t == token)
+    {
+        return Err("Preparation stopped".into());
+    }
+    let b = l.books.get(id).ok_or("Audiobook removed")?;
+    let position = selected_position(b).unwrap_or(b.committed_samples as f64 / RATE as f64);
+    let range_id = b.range_id.clone();
+    let player = Arc::new(crate::pcm::Player::new()?);
+    player.update_file(&audio_path(&directory(id)?, b)?, b.committed_samples, false)?;
+    player.push(samples, false);
+    player.set_speed(b.speed)?;
+    let job = crate::begin_speech(app, crate::Phase::Preparing);
+    let state = app.state::<crate::AppState>();
+    let mut active = state.job.lock().unwrap();
+    if !active.is_current(job) {
+        return Err("Playback superseded".into());
+    }
+    state.spoken.activate_pcm(player.clone());
+    player.seek(position)?;
+    active.set(crate::Phase::Speaking, None, None);
+    let _ = app.emit("kiegen:status", &active.status);
+    drop(active);
+    l.playing = Some(Playing {
+        saved_chapter: false,
+        range_id,
+        book: id.into(),
+        job,
+        player,
+    });
+    Ok(())
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 struct Page {
     #[serde(default)]
@@ -2763,6 +2806,7 @@ fn producer(
         .books
         .insert(id.to_string(), book.clone());
     let mut auto = autoplay;
+    let stream_page_session = auto && (book.pending_start.is_some() || book.pages.is_empty());
     if auto && book.generated > 0 && book.pending_start.is_none() {
         play(app, id, None)?;
         auto = false;
@@ -2857,9 +2901,109 @@ fn producer(
         // Finish the entire captured page before pausing the producer.
         if let Some(sentence) = sentence {
             let scratch = directory(id)?.join("sentence.tmp.wav");
-            let samples = render_sentence(app, &settings, &sentence.text, &scratch, || {
-                generation_voice_active(app, &service, id, token, &expected_voice)
-            })?;
+            let mut streamed_samples = 0usize;
+            let samples = if stream_page_session {
+                let sentence_start = service.0.lock().unwrap().books[id].committed_samples;
+                let mut startup = Vec::new();
+                let mut on_audio = |chunk: &[f32]| -> Result<(), String> {
+                    let player = service
+                        .0
+                        .lock()
+                        .unwrap()
+                        .playing
+                        .as_ref()
+                        .filter(|p| {
+                            p.book == id
+                                && !p.saved_chapter
+                                && app
+                                    .state::<crate::AppState>()
+                                    .job
+                                    .lock()
+                                    .unwrap()
+                                    .is_current(p.job)
+                        })
+                        .map(|p| p.player.clone());
+                    if let Some(player) = player {
+                        while player.buffered_seconds() >= 8.0
+                            && generation_voice_active(app, &service, id, token, &expected_voice)
+                        {
+                            player.is_playing()?;
+                            std::thread::sleep(Duration::from_millis(10));
+                        }
+                        if !generation_voice_active(app, &service, id, token, &expected_voice) {
+                            return Err("Preparation stopped".into());
+                        }
+                        player.push(chunk.to_vec(), false);
+                        streamed_samples += chunk.len();
+                    } else if auto {
+                        startup.extend_from_slice(chunk);
+                        streamed_samples += chunk.len();
+                        let threshold = if settings.engine == crate::config::Engine::Fish {
+                            1
+                        } else {
+                            RATE as usize / 2
+                        };
+                        if startup.len() >= threshold {
+                            start_page_stream_playback(
+                                app,
+                                &service,
+                                id,
+                                token,
+                                std::mem::take(&mut startup),
+                            )?;
+                            auto = false;
+                        }
+                    }
+                    Ok(())
+                };
+                let state = app.state::<crate::AppState>();
+                let _guard = state.synthesis.for_engine(settings.engine).lock().unwrap();
+                if let Some(reason) = crate::selected_engine_refusal(&settings) {
+                    return Err(reason);
+                }
+                let samples = if settings.engine == crate::config::Engine::Fish {
+                    tauri::async_runtime::block_on(crate::hosted::render_speech_stream(
+                        &sentence.text,
+                        &settings.fish,
+                        || generation_voice_active(app, &service, id, token, &expected_voice),
+                        &mut on_audio,
+                        || {
+                            service
+                                .0
+                                .lock()
+                                .unwrap()
+                                .playing
+                                .as_ref()
+                                .filter(|p| p.book == id && !p.saved_chapter)
+                                .map(|p| {
+                                    p.player
+                                        .played_audio_bytes()
+                                        .saturating_sub(sentence_start.saturating_mul(2))
+                                })
+                        },
+                    ))?
+                } else {
+                    state.spoken.render_streaming(
+                        &settings,
+                        &sentence.text,
+                        || !generation_voice_active(app, &service, id, token, &expected_voice),
+                        &mut on_audio,
+                    )?
+                };
+                drop(on_audio);
+                if auto && !startup.is_empty() {
+                    start_page_stream_playback(app, &service, id, token, startup)?;
+                    auto = false;
+                }
+                if streamed_samples > 0 && streamed_samples != samples.len() {
+                    return Err("Streamed audio length did not match".into());
+                }
+                samples
+            } else {
+                render_sentence(app, &settings, &sentence.text, &scratch, || {
+                    generation_voice_active(app, &service, id, token, &expected_voice)
+                })?
+            };
             if !generation_voice_active(app, &service, id, token, &expected_voice) {
                 return Err("Voice settings changed during generation. Resume to use the newly selected voice.".into());
             }
@@ -2897,7 +3041,11 @@ fn producer(
                         .unwrap()
                         .is_current(p.job)
             }) {
-                p.player.update_file(&audio, committed, false)?;
+                if streamed_samples > 0 {
+                    p.player.promote_file(&audio, committed, streamed_samples)?;
+                } else {
+                    p.player.update_file(&audio, committed, false)?;
+                }
             }
             drop(l);
             if auto && ready {
