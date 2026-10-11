@@ -199,6 +199,8 @@ pub struct Settings {
 #[serde(default)]
 pub struct FishSettings {
     pub voice_id: String,
+    #[serde(default)]
+    pub voice_name: String,
     pub model_id: String,
     pub enhance_text: bool,
     pub privacy_accepted: bool,
@@ -208,6 +210,7 @@ impl Default for FishSettings {
     fn default() -> Self {
         Self {
             voice_id: String::new(),
+            voice_name: String::new(),
             model_id: String::new(),
             enhance_text: true,
             privacy_accepted: false,

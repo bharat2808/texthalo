@@ -327,7 +327,9 @@ export default function Audiobooks() {
             {[...chaptersByVoice.entries()].map(([voiceKey, voiceChapters]) => (
               <div key={voiceKey} className="audiobook-voice-group">
                 <h4 className="audiobook-voice-label">
-                  {voiceKey === "unknown" ? "Unknown voice" : voiceKey.replace(/:/, " · ")}
+                  {voiceKey === "unknown" ? "Unknown voice" : voiceKey.startsWith("fish:")
+                    ? `FISH · ${voiceChapters[0]?.voiceLabel || voiceKey.slice("fish:".length)}`
+                    : voiceKey.replace(/:/, " · ")}
                   <span className="audiobook-voice-count">
                     {voiceChapters.length} chapter{voiceChapters.length === 1 ? "" : "s"}
                   </span>

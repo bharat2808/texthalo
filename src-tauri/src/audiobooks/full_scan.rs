@@ -584,6 +584,7 @@ impl FullScan {
             sentence.voice_key.clone()
         };
         self.draft.sentences[self.draft.generated].voice_key = voice.clone();
+        self.draft.sentences[self.draft.generated].voice_label = sentence.voice_label.clone();
         commit_pcm(&self.folder(root)?, &mut self.draft, &pcm, Some(&voice))?;
         self.reused += 1;
         Ok(true)
@@ -868,7 +869,13 @@ pub(super) fn producer(app: &AppHandle, id: &str, token: &str) -> Result<(), Str
                 if !generation_voice_active(app, &service, id, token, &requested_key) {
                     return Err("Voice settings changed during generation. Resume to use the newly selected voice.".into());
                 }
-                commit_with_voice(&folder, &mut scan.draft, &samples, &voice_key(&settings))?;
+                commit_with_voice(
+                    &folder,
+                    &mut scan.draft,
+                    &samples,
+                    &voice_key(&settings),
+                    &voice_label(&settings),
+                )?;
             }
             persist(&service, id, token, &root, &scan)?;
             continue;

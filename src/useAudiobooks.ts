@@ -12,6 +12,7 @@ export type Checkpoint = {
   page: string;
   seconds: number | null;
   voiceKey: string;
+  voiceLabel?: string;
 };
 export type Audiobook = {
   id: string;
@@ -70,7 +71,7 @@ export type AudiobookState = {
   readerContext?: AudiobookState["tray"];
   generating: string | null;
   readerWarning?: { bookId: string; code: "chrome-minimized" } | null;
-  playback: { bookId: string; audio: Audio } | null;
+  playback: { bookId: string; audio: Audio; voiceKey?: string | null } | null;
 };
 const empty: AudiobookState = {
   readerConnected: null,

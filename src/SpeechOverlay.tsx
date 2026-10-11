@@ -286,6 +286,10 @@ export default function SpeechOverlay() {
   const bookOnly = status.phase === "idle" && !playback.available && !!bookTray;
   const currentBook =
     books.books.find((b) => b.id === books.playback?.bookId) ?? bookTray?.book;
+  const currentVoiceChapters = currentBook?.checkpoints.filter((c) =>
+    (!books.playback?.voiceKey || c.voiceKey === books.playback.voiceKey) &&
+    c.complete && c.seconds !== null,
+  ) ?? [];
   const minimizedReader = books.readerWarning?.bookId === currentBook?.id && !!books.readerWarning;
   const waitingForChrome = minimizedReader && playback.available && playback.buffered - playback.position < 0.25;
   const readerNotice = minimizedReader ? (
@@ -389,14 +393,14 @@ export default function SpeechOverlay() {
           className="book-tray-checkpoints"
           aria-label="Completed audiobook chapters"
         >
-          {currentBook?.checkpoints.filter((c) => c.complete && c.seconds !== null).map((c) => (
+          {currentVoiceChapters.map((c) => (
             <button
               key={`${c.rangeId}:${c.id}`}
               data-complete={c.complete}
               title={`${c.label} · ${audioClock(c.duration)} audio`}
               disabled={busy}
               onClick={() => {
-                if (busy) return;
+                if (busy || !currentBook) return;
                 setBusy(true);
                 void bookAction(() => listenBook(currentBook.id, c.seconds!, c.rangeId))
                   .finally(() => setBusy(false));
@@ -411,7 +415,7 @@ export default function SpeechOverlay() {
               </small>
             </button>
           ))}
-          {!currentBook?.checkpoints.some((c) => c.complete && c.seconds !== null) && (
+          {!currentVoiceChapters.length && (
             <p>Completed chapters appear here when they are ready.</p>
           )}
         </div>

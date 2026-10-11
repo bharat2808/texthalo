@@ -41,6 +41,9 @@ struct Sentence {
     /// `kokoro:af_heart`. Empty for sentences created before voice tracking.
     #[serde(default)]
     voice_key: String,
+    /// Human-readable voice name captured when this audio was generated.
+    #[serde(default)]
+    voice_label: String,
 }
 
 /// Display identity. Cache identity also includes model and synthesis controls.
@@ -59,6 +62,18 @@ fn voice_key(settings: &crate::config::Settings) -> String {
                 .unwrap_or("default")
         ),
         Engine::Fish => format!("fish:{}", settings.fish.voice_id),
+    }
+}
+fn voice_label(settings: &crate::config::Settings) -> String {
+    use crate::config::Engine;
+    match settings.engine {
+        Engine::Fish if !settings.fish.voice_name.trim().is_empty() => {
+            settings.fish.voice_name.clone()
+        }
+        Engine::Fish => settings.fish.voice_id.clone(),
+        Engine::Kokoro => settings.kokoro.voice.clone(),
+        Engine::Apple => settings.voice.clone().unwrap_or_else(|| "default".into()),
+        Engine::Chatterbox => settings.chatterbox.voice.clone(),
     }
 }
 fn synthesis_key(settings: &crate::config::Settings) -> String {
@@ -107,6 +122,28 @@ fn recording_key(book: &Book) -> String {
         kokoro: book.voice.clone(),
         ..Default::default()
     })
+}
+fn sentence_voice_key(book: &Book, sentence: &Sentence) -> String {
+    if sentence.voice_key.is_empty() {
+        format!("kokoro:{}", book.voice.voice)
+    } else {
+        sentence.voice_key.clone()
+    }
+}
+fn range_has_voice(book: &Book, voice: &str) -> bool {
+    book.sentences
+        .iter()
+        .take(book.generated)
+        .any(|sentence| sentence_voice_key(book, sentence) == voice)
+}
+fn voice_at_position(book: &Book, seconds: f64) -> Option<String> {
+    let sample = (seconds.max(0.) * RATE as f64) as u64;
+    book.sentences
+        .iter()
+        .take(book.generated)
+        .find(|sentence| sentence.end_sample > sample)
+        .or_else(|| book.sentences.iter().take(book.generated).last())
+        .map(|sentence| sentence_voice_key(book, sentence))
 }
 fn reset_recording(book: &mut Book, settings: &crate::config::Settings) {
     book.range_id = identity();
@@ -291,13 +328,20 @@ impl Book {
         self.committed_samples as f64 / RATE as f64
     }
     fn view(&self) -> Value {
+        self.view_for_voice(None)
+    }
+    fn view_for_voice(&self, voice: Option<&str>) -> Value {
         let at = (self.position * RATE as f64) as u64;
         let current = self
             .sentences
             .iter()
             .take(self.generated)
             .find(|s| s.end_sample > at);
-        let ranges = self.visible_ranges();
+        let ranges = self
+            .visible_ranges()
+            .into_iter()
+            .filter(|range| voice.is_none_or(|voice| range_has_voice(range, voice)))
+            .collect::<Vec<_>>();
         let mut checkpoints = ranges
             .iter()
             .flat_map(|b| {
@@ -305,6 +349,7 @@ impl Book {
                     .iter()
                     .enumerate()
                     .map(move |(i, c)| chapter_view(b, i, c))
+                    .filter(|chapter| voice.is_none_or(|voice| chapter["voiceKey"] == voice))
             })
             .collect::<Vec<_>>();
         // A single recording is already in transcript order, including opening locations.
@@ -325,7 +370,7 @@ impl Book {
             .map(|c| c["duration"].as_f64().unwrap_or(0.))
             .sum::<f64>();
         json!({"fullPreparation":self.full_scan.as_ref().map(|s|s.view()),"id":self.id,"key":self.key,"title":self.title,"platform":"kindle","pages":self.pages.len(),"generated":self.generated,"seconds":self.seconds(),"totalPages":ranges.iter().map(|b|b.pages.len()).sum::<usize>(),"totalGenerated":ranges.iter().map(|b|b.generated).sum::<usize>(),"totalSeconds":ready_seconds,"generatedSeconds":ranges.iter().map(|b|b.seconds()).sum::<f64>(),"position":self.position,"speed":self.speed,"complete":self.complete && coverage_intact(self),"fromBeginning":self.from_beginning,"message":self.message,"activity":self.activity,
-            "recovery": self.recovery, "resume": resume(self), "pendingPage": self.pending_start.as_ref().and_then(|f| self.pages.iter().find(|p| &p.fingerprint == f)).map(|p| &p.progress),
+            "recovery": self.recovery, "resume": voice.map_or_else(|| resume(self), |voice| resume_for_voice(self, voice)), "pendingPage": self.pending_start.as_ref().and_then(|f| self.pages.iter().find(|p| &p.fingerprint == f)).map(|p| &p.progress),
             "checkpoints": checkpoints,
             "passage":current.map(|s|json!({"text":s.text,"page":s.sources.first().and_then(|p|self.pages.get(p.page)).map(|p|&p.progress)}))})
     }
@@ -404,11 +449,21 @@ fn coalesce_fish_batch(book: &mut Book, count: usize) {
 
 // Session audio can play immediately. Only a closed, fully rendered chapter is resumable.
 fn saved_playback(book: &Book, position: Option<f64>) -> Option<(f64, u64, usize)> {
+    saved_playback_for_voice(book, position, None)
+}
+fn saved_playback_for_voice(
+    book: &Book,
+    position: Option<f64>,
+    voice: Option<&str>,
+) -> Option<(f64, u64, usize)> {
     let chapters = book
         .checkpoints
         .iter()
         .enumerate()
-        .filter(|(i, c)| chapter_view(book, *i, c)["complete"] == true)
+        .filter(|(i, c)| {
+            let chapter = chapter_view(book, *i, c);
+            chapter["complete"] == true && voice.is_none_or(|voice| chapter["voiceKey"] == voice)
+        })
         .collect::<Vec<_>>();
     let bounds = |i: usize, c: &Checkpoint| {
         let start = book.sentences.get(c.sentence)?.start_sample;
@@ -456,7 +511,10 @@ fn saved_playback(book: &Book, position: Option<f64>) -> Option<(f64, u64, usize
     Some((start as f64 / RATE as f64, playlist_end(0, i, end), i))
 }
 fn resume_at(range: &Book, position: Option<f64>) -> Option<Value> {
-    let (seconds, _, index) = saved_playback(range, position)?;
+    resume_at_voice(range, position, None)
+}
+fn resume_at_voice(range: &Book, position: Option<f64>, voice: Option<&str>) -> Option<Value> {
+    let (seconds, _, index) = saved_playback_for_voice(range, position, voice)?;
     let sample = (seconds * RATE as f64).round() as u64;
     let sentence = range
         .sentences
@@ -471,6 +529,11 @@ fn resume_at(range: &Book, position: Option<f64>) -> Option<Value> {
 }
 fn resume(book: &Book) -> Option<Value> {
     book.ranges().find_map(|range| resume_at(range, None))
+}
+fn resume_for_voice(book: &Book, voice: &str) -> Option<Value> {
+    book.ranges()
+        .filter(|range| range_has_voice(range, voice))
+        .find_map(|range| resume_at_voice(range, None, Some(voice)))
 }
 fn different_page(book: &Book, reader: &Value) -> bool {
     let sample = (book.position * RATE as f64) as u64;
@@ -841,12 +904,22 @@ fn chapter_view(book: &Book, index: usize, c: &Checkpoint) -> Value {
         .map(|s| s.end_sample - s.start_sample)
         .sum::<u64>() as f64
         / RATE as f64;
+    let voice_label = if mixed_voices {
+        String::new()
+    } else {
+        book.sentences
+            .get(c.sentence)
+            .filter(|s| s.end_sample > s.start_sample)
+            .map(|s| s.voice_label.clone())
+            .filter(|label| !label.is_empty())
+            .unwrap_or_default()
+    };
     let voice_key = if mixed_voices {
         "mixed".to_string()
     } else {
         chapter_voices.into_iter().next().unwrap_or_default()
     };
-    json!({"id":c.id,"rangeId":book.range_id,"label":chapter_label(book,c),"sentence":c.sentence,"page":book.pages.get(c.page).map(|p|&p.progress),"seconds":book.sentences.get(c.sentence).filter(|_|c.sentence<book.generated).map(|s|s.start_sample as f64/RATE as f64),"duration":duration,"complete":complete,"status":if complete{"complete"}else if book.message.is_some(){"attention"}else if c.sentence<book.generated{"partial"}else{"preparing"},"needsEarlier":!c.verified_start,"voiceKey":voice_key})
+    json!({"id":c.id,"rangeId":book.range_id,"label":chapter_label(book,c),"sentence":c.sentence,"page":book.pages.get(c.page).map(|p|&p.progress),"seconds":book.sentences.get(c.sentence).filter(|_|c.sentence<book.generated).map(|s|s.start_sample as f64/RATE as f64),"duration":duration,"complete":complete,"status":if complete{"complete"}else if book.message.is_some(){"attention"}else if c.sentence<book.generated{"partial"}else{"preparing"},"needsEarlier":!c.verified_start,"voiceKey":voice_key,"voiceLabel":voice_label})
 }
 fn save_bookmark(dir: &Path, book: &Book) -> Result<(), String> {
     let bytes = bookmark_value(book).to_string();
@@ -977,6 +1050,7 @@ fn commit_with_voice(
     book: &mut Book,
     samples: &[f32],
     voice: &str,
+    label: &str,
 ) -> Result<(), String> {
     if samples.is_empty() || samples.iter().any(|s| !s.is_finite()) {
         return Err("Sentence produced no valid audio".into());
@@ -985,6 +1059,9 @@ fn commit_with_voice(
         .iter()
         .flat_map(|s| ((s.clamp(-1., 1.) * 32767.) as i16).to_le_bytes())
         .collect();
+    if let Some(sentence) = book.sentences.get_mut(book.generated) {
+        sentence.voice_label = label.to_string();
+    }
     commit_pcm(dir, book, &bytes, Some(voice))
 }
 fn commit_pcm(
@@ -1677,6 +1754,7 @@ fn assemble(book: &mut Book, finished: bool) -> Result<(), String> {
                 start_sample: 0,
                 end_sample: 0,
                 voice_key: String::new(),
+                voice_label: String::new(),
             });
         }
         offset = end;
@@ -2021,6 +2099,7 @@ impl Audiobooks {
         })
     }
     fn snapshot(&self, app: &AppHandle) -> Value {
+        let active_voice = voice_key(&app.state::<crate::AppState>().settings.lock().unwrap());
         let reader = app.state::<crate::reader_bridge::ReaderBridge>().status();
         let tray = self.tray(&reader);
         let reader_context = self.reader_context(&reader);
@@ -2039,28 +2118,50 @@ impl Audiobooks {
                     .is_current(p.job)
                     && p.player.snapshot().available
             })
-            .map(|p| json!({"bookId":p.book,"audio":p.player.snapshot()}));
+            .map(|p| {
+                let audio = p.player.snapshot();
+                let voice = l.books.get(&p.book).and_then(|book| {
+                    book.ranges()
+                        .find(|range| range.range_id == p.range_id)
+                        .and_then(|range| voice_at_position(range, audio.position))
+                });
+                json!({"bookId":p.book,"audio":audio,"voiceKey":voice})
+            });
         let books = l
             .books
             .values()
             .map(|book| {
+                let playing = l.playing.as_ref().filter(|p| p.book == book.id);
+                let range_and_audio = playing.and_then(|playing| {
+                    let range = book
+                        .ranges()
+                        .find(|range| range.range_id == playing.range_id)?;
+                    Some((range, playing.player.snapshot()))
+                });
+                let display_voice = range_and_audio
+                    .as_ref()
+                    .and_then(|(range, audio)| voice_at_position(range, audio.position));
+                // Keep every saved voice group visible so the user can choose any
+                // recording. Playback and resume state still follow the audible voice.
                 let mut view = book.view();
-                if let Some(playing) = l.playing.as_ref().filter(|p| p.book == book.id) {
-                    if let Some(range) = book.ranges().find(|r| r.range_id == playing.range_id) {
-                        let audio = playing.player.snapshot();
-                        let sample = (audio.position * RATE as f64) as u64;
-                        view["passage"] = range.sentences.iter().take(range.generated)
-                            .find(|s| s.end_sample > sample)
-                            .map(|s| json!({"text":s.text,"page":s.sources.first().and_then(|p|range.pages.get(p.page)).map(|p|&p.progress)}))
-                            .unwrap_or(Value::Null);
-                        if let Some(resume) = resume_at(range, Some(audio.position)) {
-                            view["resume"] = resume;
-                        }
-                        view["position"] = json!(audio.position);
-                        view["speed"] = json!(audio.speed);
-                        view["seconds"] = json!(range.seconds());
-                        view["generated"] = json!(range.generated);
+                let resume_voice = display_voice.as_deref().unwrap_or(&active_voice);
+                view["resume"] = resume_for_voice(book, resume_voice)
+                    .map_or(Value::Null, |resume| resume);
+                if let Some((range, audio)) = range_and_audio {
+                    let sample = (audio.position * RATE as f64) as u64;
+                    view["passage"] = range.sentences.iter().take(range.generated)
+                        .find(|s| s.end_sample > sample)
+                        .map(|s| json!({"text":s.text,"page":s.sources.first().and_then(|p|range.pages.get(p.page)).map(|p|&p.progress)}))
+                        .unwrap_or(Value::Null);
+                    if let Some(resume) =
+                        resume_at_voice(range, Some(audio.position), display_voice.as_deref())
+                    {
+                        view["resume"] = resume;
                     }
+                    view["position"] = json!(audio.position);
+                    view["speed"] = json!(audio.speed);
+                    view["seconds"] = json!(range.seconds());
+                    view["generated"] = json!(range.generated);
                 }
                 view
             })
@@ -2119,7 +2220,8 @@ fn play_selected_range(
         return Err("Preparing the first sentence…".into());
     }
     let saved = if saved_chapter {
-        Some(saved_playback(b, position).ok_or("Only completed chapters can be continued. Choose Listen from this page to start a new session.")?)
+        let voice = voice_at_position(b, position.unwrap_or(b.position));
+        Some(saved_playback_for_voice(b, position, voice.as_deref()).ok_or("Only completed chapters can be continued. Choose Listen from this page to start a new session.")?)
     } else {
         None
     };
@@ -2351,6 +2453,7 @@ pub async fn audiobook_play(
     range_id: Option<String>,
 ) -> Result<(), String> {
     // Validate before switching ranges or interrupting an active listening session.
+    let active_voice = voice_key(&app.state::<crate::AppState>().settings.lock().unwrap());
     let (range_id, seconds, preparing, revision) = {
         let service = app.state::<Audiobooks>();
         let l = service.0.lock().unwrap();
@@ -2360,7 +2463,7 @@ pub async fn audiobook_play(
                 .find(|b| b.range_id == range)
                 .ok_or("Saved chapter not found")?
         } else if seconds.is_none() {
-            let resume = resume(book).ok_or(
+            let resume = resume_for_voice(book, &active_voice).ok_or(
                 "No completed chapters yet. Choose Listen from this page to start listening.",
             )?;
             let range = resume["rangeId"].as_str().unwrap();
@@ -2368,8 +2471,13 @@ pub async fn audiobook_play(
         } else {
             book
         };
-        let (seconds, _, _) =
-            saved_playback(target, seconds).ok_or("Only completed chapters can be continued.")?;
+        let requested_voice = if range_id.is_none() && seconds.is_none() {
+            Some(active_voice.clone())
+        } else {
+            voice_at_position(target, seconds.unwrap_or(target.position))
+        };
+        let (seconds, _, _) = saved_playback_for_voice(target, seconds, requested_voice.as_deref())
+            .ok_or("Only completed chapters can be continued.")?;
         (
             Some(target.range_id.clone()),
             Some(seconds),
@@ -2713,7 +2821,13 @@ fn producer(
                 return Ok(());
             }
             let b = l.books.get_mut(id).ok_or("Audiobook removed")?;
-            commit_with_voice(&directory(id)?, b, &samples, &voice_key(&settings))?;
+            commit_with_voice(
+                &directory(id)?,
+                b,
+                &samples,
+                &voice_key(&settings),
+                &voice_label(&settings),
+            )?;
             let selected = selected_position(b);
             if let Some(position) = selected {
                 b.position = position;
@@ -2990,7 +3104,14 @@ fn generate_mode(
         .as_ref()
         .filter(|p| p.book == id && !p.saved_chapter)
         .map(|p| p.player.snapshot());
-    let restart = playback.is_some();
+    let requested_voice = synthesis_key(&app.state::<crate::AppState>().settings.lock().unwrap());
+    let voice_changed = library
+        .books
+        .get(&id)
+        .is_some_and(|book| book.generated > 0 && recording_key(book) != requested_voice);
+    // If generation will replace the current recording, restarting its stream here
+    // plays the previous voice while the new voice is being prepared.
+    let restart = playback.is_some() && !voice_changed;
     if let Some(snapshot) = &playback {
         let b = library.books.get_mut(&id).unwrap();
         b.position = snapshot.position.min(b.seconds());
@@ -3009,6 +3130,9 @@ fn generate_mode(
     library.worker = true;
     library.producing = Some((id.clone(), token.clone(), full));
     drop(library);
+    if voice_changed && playback.is_some() {
+        crate::stop_speaking(app.clone());
+    }
     if restart && !full {
         let result = (|| {
             play(app, &id, None)?;
@@ -3414,6 +3538,58 @@ mod tests {
         assert_eq!(b.position, 0.5);
         assert_eq!(stable_position(&b), Some(0.5));
         assert!(!different_page(&b, &reader(1, "p1")));
+    }
+
+    #[test]
+    fn audiobook_view_hides_chapters_from_other_voice_recordings() {
+        let mut current = book();
+        current.generated = 1;
+        current.committed_samples = 24_000;
+        current.sentences.push(Sentence {
+            id: "current-sentence".into(),
+            continuation_of: None,
+            text: "Current voice audio".into(),
+            sources: vec![],
+            start_sample: 0,
+            end_sample: 24_000,
+            voice_key: "fish:selected".into(),
+            voice_label: "Selected voice".into(),
+        });
+        current.checkpoints.push(Checkpoint {
+            id: "current-chapter".into(),
+            verified_start: true,
+            label: "Current voice chapter".into(),
+            sentence: 0,
+            page: 0,
+        });
+        let mut previous = book();
+        previous.generated = 1;
+        previous.committed_samples = 24_000;
+        previous.sentences.push(Sentence {
+            id: "previous-sentence".into(),
+            continuation_of: None,
+            text: "Previous voice audio".into(),
+            sources: vec![],
+            start_sample: 0,
+            end_sample: 24_000,
+            voice_key: "fish:previous".into(),
+            voice_label: "Previous voice".into(),
+        });
+        previous.checkpoints.push(Checkpoint {
+            id: "previous-chapter".into(),
+            verified_start: true,
+            label: "Previous voice chapter".into(),
+            sentence: 0,
+            page: 0,
+        });
+        current.saved_ranges.push(Box::new(previous));
+
+        let chapters = current.view_for_voice(Some("fish:selected"))["checkpoints"]
+            .as_array()
+            .unwrap()
+            .clone();
+        assert_eq!(chapters.len(), 1);
+        assert_eq!(chapters[0]["id"], "current-chapter");
     }
     #[test]
     fn choosing_an_uncached_page_retains_old_audio_in_the_same_library_book() {
@@ -4067,7 +4243,7 @@ mod tests {
     fn retrieval_earlier_guard_is_bounded_for_a_large_history() {
         let mut b = book();
         for number in 0..1500 {
-            b.sentences.push(Sentence {id:number.to_string(),continuation_of:None,text:format!("The archivist catalogued artifact number {number} beside the northern entrance while recording the details in her notebook."),sources:vec![],start_sample:0,end_sample:0,voice_key:String::new()});
+            b.sentences.push(Sentence {id:number.to_string(),continuation_of:None,text:format!("The archivist catalogued artifact number {number} beside the northern entrance while recording the details in her notebook."),sources:vec![],start_sample:0,end_sample:0,voice_key:String::new(),voice_label:String::new()});
         }
         let start = std::time::Instant::now();
         assert!(!contains_earlier_context(&b,"The archivist opened the garden door and watched sunlight spread across the empty courtyard. Several unfamiliar travelers waited quietly by a stone fountain while distant bells announced the start of another day."));
