@@ -298,60 +298,62 @@ export default function SpeechOverlay() {
   ) : null;
   const playingDetectedBook =
     playback.available && books.playback?.bookId === bookTray?.book?.id;
-  const preparingDetectedBook =
-    !!bookTray?.book && books.generating === bookTray.book.id;
+  const panelTray = bookTray && (!books.playback || books.playback.bookId === bookTray.book?.id)
+    ? bookTray : null;
+  const preparingCurrentBook = !!currentBook && books.generating === currentBook.id;
+  const canPrepareMore = !!currentBook && !currentBook.complete && !!currentBook.fullPreparation?.transcriptReady;
   const bookPanel =
-    bookTray && showControls ? (
+    (panelTray || currentBook) && showControls ? (
       <div className="book-tray-details">
         <div className="book-tray-title">
-          <span>Open in Kindle · {bookTray.reader.progress}</span>
-          <strong title={bookTray.reader.title}>{bookTray.reader.title}</strong>
-          {bookTray.book?.resume && (
+          <span>{panelTray ? `Open in Kindle · ${panelTray.reader.progress}` : "Audiobook chapters"}</span>
+          <strong title={currentBook?.title || panelTray?.reader.title}>{currentBook?.title || panelTray?.reader.title}</strong>
+          {currentBook?.resume && (
             <p
               className="book-tray-location"
-              title={`Last listened: ${bookTray.book.resume.chapter ? `${bookTray.book.resume.chapter} · ` : ""}${bookTray.book.resume.page}`}
+              title={`Last listened: ${currentBook.resume.chapter ? `${currentBook.resume.chapter} · ` : ""}${currentBook.resume.page}`}
             >
               Last listened:{" "}
-              {bookTray.book.resume.chapter
-                ? `${bookTray.book.resume.chapter} · `
+              {currentBook.resume.chapter
+                ? `${currentBook.resume.chapter} · `
                 : ""}
-              {bookTray.book.resume.page}
+              {currentBook.resume.page}
             </p>
           )}
         </div>
-        <div className="book-tray-actions">
-          {!playingDetectedBook && (
+        {(panelTray || preparingCurrentBook || canPrepareMore) && <div className="book-tray-actions">
+          {panelTray && !playingDetectedBook && (
             <button
               disabled={
                 busy ||
-                !!bookTray.book?.pendingPage ||
-                (bookTray.generating && !bookTray.book?.generated)
+                !!panelTray.book?.pendingPage ||
+                (panelTray.generating && !panelTray.book?.generated)
               }
               onClick={() => {
                 setBusy(true);
                 void bookAction(() =>
-                  bookTray.book?.resume
-                    ? listenBook(bookTray.book.id)
-                    : bookTray.book
-                      ? listenFromPage(bookTray.book.id, bookTray.reader.fingerprint)
+                  panelTray.book?.resume
+                    ? listenBook(panelTray.book.id)
+                    : panelTray.book
+                      ? listenFromPage(panelTray.book.id, panelTray.reader.fingerprint)
                       : generateBook(),
                 ).finally(() => setBusy(false));
               }}
             >
-              {bookTray.book?.resume
+              {panelTray.book?.resume
                 ? "Continue listening"
                 : "Listen from this page"}
             </button>
           )}
-          {bookTray.book && (bookTray.differentPage || bookTray.book.recovery?.step === "unresolved") && (
+          {panelTray?.book && (panelTray.differentPage || panelTray.book.recovery?.step === "unresolved") && (
             <button
               disabled={busy}
               onClick={() => {
                 setBusy(true);
                 void bookAction(() =>
                   listenFromPage(
-                    bookTray.book!.id,
-                    bookTray.reader.fingerprint,
+                    panelTray.book!.id,
+                    panelTray.reader.fingerprint,
                   ),
                 ).finally(() => setBusy(false));
               }}
@@ -359,16 +361,28 @@ export default function SpeechOverlay() {
               Listen from this page
             </button>
           )}
-          {preparingDetectedBook && (
+          {preparingCurrentBook ? (
             <button disabled={busy} onClick={() => void bookAction(() => invoke("audiobook_stop_generation"))}>
               Stop preparing
             </button>
+          ) : canPrepareMore && (
+            <button
+              disabled={busy || !!books.generating}
+              onClick={() => {
+                if (busy) return;
+                setBusy(true);
+                void bookAction(() => generateBook(currentBook!.id, true))
+                  .finally(() => setBusy(false));
+              }}
+            >
+              Prepare more chapters
+            </button>
           )}
-        </div>
-        {bookTray.book &&
-          (bookTray.book.pendingPage || preparingDetectedBook) && (
+        </div>}
+        {currentBook &&
+          (currentBook.pendingPage || preparingCurrentBook) && (
             <p className="book-tray-progress" role="status">
-              {preparationLabel(bookTray.book)}
+              {preparationLabel(currentBook)}
             </p>
           )}
         <div
@@ -377,15 +391,16 @@ export default function SpeechOverlay() {
         >
           {currentBook?.checkpoints.filter((c) => c.complete && c.seconds !== null).map((c) => (
             <button
-              key={c.id}
+              key={`${c.rangeId}:${c.id}`}
               data-complete={c.complete}
               title={`${c.label} · ${audioClock(c.duration)} audio`}
               disabled={busy}
-              onClick={() =>
-                void bookAction(() =>
-                  listenBook(currentBook.id, c.seconds!, c.rangeId),
-                )
-              }
+              onClick={() => {
+                if (busy) return;
+                setBusy(true);
+                void bookAction(() => listenBook(currentBook.id, c.seconds!, c.rangeId))
+                  .finally(() => setBusy(false));
+              }}
             >
               <span>{c.label}</span>
               <small className="book-chapter-duration">

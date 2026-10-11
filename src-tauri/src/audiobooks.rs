@@ -111,6 +111,38 @@ struct Book {
     voice: crate::config::KokoroSettings,
 }
 impl Book {
+    fn ranges(&self) -> impl Iterator<Item = &Book> {
+        self.full_scan
+            .as_ref()
+            .map(|scan| scan.draft())
+            .into_iter()
+            .chain(std::iter::once(self))
+            .chain(self.saved_ranges.iter().map(|b| b.as_ref()))
+    }
+    fn range_mut(&mut self, id: &str) -> Option<&mut Book> {
+        if self.range_id == id {
+            return Some(self);
+        }
+        if let Some(scan) = self.full_scan.as_mut() {
+            if scan.draft().range_id == id {
+                return Some(scan.draft_mut());
+            }
+        }
+        self.saved_ranges
+            .iter_mut()
+            .find(|b| b.range_id == id)
+            .map(|b| b.as_mut())
+    }
+    fn visible_ranges(&self) -> Vec<&Book> {
+        if let Some(scan) = self.full_scan.as_ref().filter(|s| s.transcript_ready()) {
+            // The verified full transcript supplies the order and coverage of this audiobook.
+            vec![scan.draft()]
+        } else {
+            std::iter::once(self)
+                .chain(self.saved_ranges.iter().map(|b| b.as_ref()))
+                .collect()
+        }
+    }
     fn seconds(&self) -> f64 {
         self.committed_samples as f64 / RATE as f64
     }
@@ -121,8 +153,9 @@ impl Book {
             .iter()
             .take(self.generated)
             .find(|s| s.end_sample > at);
-        let mut checkpoints = std::iter::once(self)
-            .chain(self.saved_ranges.iter().map(|b| b.as_ref()))
+        let ranges = self.visible_ranges();
+        let mut checkpoints = ranges
+            .iter()
             .flat_map(|b| {
                 b.checkpoints
                     .iter()
@@ -130,8 +163,22 @@ impl Book {
                     .map(move |(i, c)| chapter_view(b, i, c))
             })
             .collect::<Vec<_>>();
-        checkpoints.sort_by_key(|c| c["page"].as_str().and_then(page_number).unwrap_or(u64::MAX));
-        json!({"fullPreparation":self.full_scan.as_ref().map(|s|s.view()),"id":self.id,"key":self.key,"title":self.title,"platform":"kindle","pages":self.pages.len(),"generated":self.generated,"seconds":self.seconds(),"totalPages":self.pages.len()+self.saved_ranges.iter().map(|b|b.pages.len()).sum::<usize>(),"totalGenerated":self.generated+self.saved_ranges.iter().map(|b|b.generated).sum::<usize>(),"totalSeconds":self.seconds()+self.saved_ranges.iter().map(|b|b.seconds()).sum::<f64>(),"position":self.position,"speed":self.speed,"complete":self.complete && coverage_intact(self),"fromBeginning":self.from_beginning,"message":self.message,"activity":self.activity,
+        // A single recording is already in transcript order, including opening locations.
+        if ranges.len() > 1 {
+            checkpoints.sort_by_key(|c| {
+                ReaderPosition::parse(c["page"].as_str().unwrap_or(""))
+                    .map(|p| match p {
+                        ReaderPosition::Page(n) | ReaderPosition::Location(n) => n,
+                    })
+                    .unwrap_or(u64::MAX)
+            });
+        }
+        let ready_seconds = checkpoints
+            .iter()
+            .filter(|c| c["complete"] == true)
+            .map(|c| c["duration"].as_f64().unwrap_or(0.))
+            .sum::<f64>();
+        json!({"fullPreparation":self.full_scan.as_ref().map(|s|s.view()),"id":self.id,"key":self.key,"title":self.title,"platform":"kindle","pages":self.pages.len(),"generated":self.generated,"seconds":self.seconds(),"totalPages":ranges.iter().map(|b|b.pages.len()).sum::<usize>(),"totalGenerated":ranges.iter().map(|b|b.generated).sum::<usize>(),"totalSeconds":ready_seconds,"generatedSeconds":ranges.iter().map(|b|b.seconds()).sum::<f64>(),"position":self.position,"speed":self.speed,"complete":self.complete && coverage_intact(self),"fromBeginning":self.from_beginning,"message":self.message,"activity":self.activity,
             "recovery": self.recovery, "resume": resume(self), "pendingPage": self.pending_start.as_ref().and_then(|f| self.pages.iter().find(|p| &p.fingerprint == f)).map(|p| &p.progress),
             "checkpoints": checkpoints,
             "passage":current.map(|s|json!({"text":s.text,"page":s.sources.first().and_then(|p|self.pages.get(p.page)).map(|p|&p.progress)}))})
@@ -190,23 +237,22 @@ fn saved_playback(book: &Book, position: Option<f64>) -> Option<(f64, u64, usize
     let (start, end) = bounds(i, c)?;
     Some((start as f64 / RATE as f64, playlist_end(0, i, end), i))
 }
+fn resume_at(range: &Book, position: Option<f64>) -> Option<Value> {
+    let (seconds, _, index) = saved_playback(range, position)?;
+    let sample = (seconds * RATE as f64).round() as u64;
+    let sentence = range
+        .sentences
+        .iter()
+        .take(range.generated)
+        .find(|s| s.end_sample > sample)?;
+    let page = range.pages.get(sentence.sources.first()?.page)?;
+    Some(
+        json!({"page":page.progress,"chapter":chapter_label(range,&range.checkpoints[index]),
+        "seconds":seconds,"rangeId":range.range_id}),
+    )
+}
 fn resume(book: &Book) -> Option<Value> {
-    std::iter::once(book)
-        .chain(book.saved_ranges.iter().map(|b| b.as_ref()))
-        .find_map(|range| {
-            let (seconds, _, index) = saved_playback(range, None)?;
-            let sample = (seconds * RATE as f64).round() as u64;
-            let sentence = range
-                .sentences
-                .iter()
-                .take(range.generated)
-                .find(|s| s.end_sample > sample)?;
-            let page = range.pages.get(sentence.sources.first()?.page)?;
-            Some(
-                json!({"page":page.progress,"chapter":range.checkpoints[index].label,
-                "seconds":seconds,"rangeId":range.range_id}),
-            )
-        })
+    book.ranges().find_map(|range| resume_at(range, None))
 }
 fn different_page(book: &Book, reader: &Value) -> bool {
     let sample = (book.position * RATE as f64) as u64;
@@ -349,6 +395,7 @@ fn select_page(
 }
 struct Playing {
     saved_chapter: bool,
+    range_id: String,
     book: String,
     job: u64,
     player: Arc<crate::pcm::Player>,
@@ -519,6 +566,21 @@ fn coverage_intact(book: &Book) -> bool {
                 .windows(2)
                 .all(|c| numbered_successor(&c[0], &c[1])))
 }
+fn chapter_label<'a>(book: &Book, c: &'a Checkpoint) -> &'a str {
+    if book
+        .pages
+        .get(c.page)
+        .is_some_and(|p| p.heading.is_none() && p.progress == c.label)
+    {
+        if c.verified_start {
+            "Opening pages"
+        } else {
+            "Selected passage"
+        }
+    } else {
+        &c.label
+    }
+}
 fn chapter_view(book: &Book, index: usize, c: &Checkpoint) -> Value {
     let end = book
         .checkpoints
@@ -545,7 +607,7 @@ fn chapter_view(book: &Book, index: usize, c: &Checkpoint) -> Value {
         .map(|s| s.end_sample - s.start_sample)
         .sum::<u64>() as f64
         / RATE as f64;
-    json!({"id":c.id,"rangeId":book.range_id,"label":c.label,"sentence":c.sentence,"page":book.pages.get(c.page).map(|p|&p.progress),"seconds":book.sentences.get(c.sentence).filter(|_|c.sentence<book.generated).map(|s|s.start_sample as f64/RATE as f64),"duration":duration,"complete":complete,"status":if complete{"complete"}else if book.message.is_some(){"attention"}else if c.sentence<book.generated{"partial"}else{"preparing"},"needsEarlier":!c.verified_start})
+    json!({"id":c.id,"rangeId":book.range_id,"label":chapter_label(book,c),"sentence":c.sentence,"page":book.pages.get(c.page).map(|p|&p.progress),"seconds":book.sentences.get(c.sentence).filter(|_|c.sentence<book.generated).map(|s|s.start_sample as f64/RATE as f64),"duration":duration,"complete":complete,"status":if complete{"complete"}else if book.message.is_some(){"attention"}else if c.sentence<book.generated{"partial"}else{"preparing"},"needsEarlier":!c.verified_start})
 }
 fn save_bookmark(dir: &Path, book: &Book) -> Result<(), String> {
     let bytes = bookmark_value(book).to_string();
@@ -1513,6 +1575,7 @@ impl Audiobooks {
                 continue;
             };
             let id = p.book.clone();
+            let range_id = p.range_id.clone();
             let snapshot = p.player.snapshot();
             let current = app
                 .state::<crate::AppState>()
@@ -1521,10 +1584,9 @@ impl Audiobooks {
                 .unwrap()
                 .is_current(p.job);
             if let Some(book) = l.books.get_mut(&id) {
-                book.position = snapshot.position.min(book.seconds());
-                remember_position(book);
-                book.speed = snapshot.speed;
-                if let Err(e) = directory(&id).and_then(|d| save_bookmark(&d, book)) {
+                if let Err(e) =
+                    directory(&id).and_then(|d| record_playback(&d, book, &range_id, &snapshot))
+                {
                     book.message = Some(e);
                 }
             }
@@ -1553,10 +1615,9 @@ impl Audiobooks {
         if let Some(playing) = library.playing.take() {
             let snapshot = playing.player.snapshot();
             if let Some(book) = library.books.get_mut(&playing.book) {
-                book.position = snapshot.position.min(book.seconds());
-                book.speed = snapshot.speed;
-                remember_position(book);
-                if let Err(error) = directory(&book.id).and_then(|dir| save_bookmark(&dir, book)) {
+                if let Err(error) = directory(&book.id)
+                    .and_then(|dir| record_playback(&dir, book, &playing.range_id, &snapshot))
+                {
                     book.message = Some(error);
                 }
             }
@@ -1602,6 +1663,16 @@ impl Audiobooks {
             .filter(|b| b.key == k && !b.full_scan.as_ref().is_some_and(|s| s.transcript_ready()))
             .map(|b| b.id.clone())
     }
+    pub(crate) fn has_playback(&self, app: &AppHandle) -> bool {
+        self.0.lock().unwrap().playing.as_ref().is_some_and(|p| {
+            app.state::<crate::AppState>()
+                .job
+                .lock()
+                .unwrap()
+                .is_current(p.job)
+                && p.player.snapshot().available
+        })
+    }
     fn snapshot(&self, app: &AppHandle) -> Value {
         let reader = app.state::<crate::reader_bridge::ReaderBridge>().status();
         let tray = self.tray(&reader);
@@ -1622,7 +1693,32 @@ impl Audiobooks {
                     && p.player.snapshot().available
             })
             .map(|p| json!({"bookId":p.book,"audio":p.player.snapshot()}));
-        json!({"readerWarning":warning,"books":l.books.values().map(Book::view).collect::<Vec<_>>(),"tray":tray,"readerContext":reader_context,"generating":l.producing.as_ref().map(|(id,_,_)|id),"playback":playback})
+        let books = l
+            .books
+            .values()
+            .map(|book| {
+                let mut view = book.view();
+                if let Some(playing) = l.playing.as_ref().filter(|p| p.book == book.id) {
+                    if let Some(range) = book.ranges().find(|r| r.range_id == playing.range_id) {
+                        let audio = playing.player.snapshot();
+                        let sample = (audio.position * RATE as f64) as u64;
+                        view["passage"] = range.sentences.iter().take(range.generated)
+                            .find(|s| s.end_sample > sample)
+                            .map(|s| json!({"text":s.text,"page":s.sources.first().and_then(|p|range.pages.get(p.page)).map(|p|&p.progress)}))
+                            .unwrap_or(Value::Null);
+                        if let Some(resume) = resume_at(range, Some(audio.position)) {
+                            view["resume"] = resume;
+                        }
+                        view["position"] = json!(audio.position);
+                        view["speed"] = json!(audio.speed);
+                        view["seconds"] = json!(range.seconds());
+                        view["generated"] = json!(range.generated);
+                    }
+                }
+                view
+            })
+            .collect::<Vec<_>>();
+        json!({"readerWarning":warning,"books":books,"tray":tray,"readerContext":reader_context,"generating":l.producing.as_ref().map(|(id,_,_)|id),"playback":playback})
     }
 }
 #[tauri::command]
@@ -1645,13 +1741,30 @@ fn play_selected(
     revision: Option<u64>,
     saved_chapter: bool,
 ) -> Result<(), String> {
+    play_selected_range(app, id, position, revision, saved_chapter, None)
+}
+fn play_selected_range(
+    app: &AppHandle,
+    id: &str,
+    position: Option<f64>,
+    revision: Option<u64>,
+    saved_chapter: bool,
+    range_id: Option<&str>,
+) -> Result<(), String> {
     let service = app.state::<Audiobooks>();
     let mut l = service.0.lock().unwrap();
     check_selection(&l, revision)?;
     if l.transitioning {
         return Err("A passage is being selected. Try again in a moment.".into());
     }
-    let b = l.books.get(id).ok_or("Audiobook not found")?;
+    let book = l.books.get(id).ok_or("Audiobook not found")?;
+    let b = if let Some(range) = range_id {
+        book.ranges()
+            .find(|b| b.range_id == range)
+            .ok_or("Saved chapter not found")?
+    } else {
+        book
+    };
     if b.pending_start.is_some() {
         return Err("Prepare the selected page before listening.".into());
     }
@@ -1676,7 +1789,16 @@ fn play_selected(
     let samples = saved.map_or(b.committed_samples, |(_, end, _)| end);
     let speed = b.speed;
     let finished = saved_chapter || !l.producing.as_ref().is_some_and(|(i, _, _)| i == id);
-    let audio = audio_path(&directory(id)?, b)?;
+    let root = directory(id)?;
+    let folder = book
+        .full_scan
+        .as_ref()
+        .filter(|s| s.draft().range_id == b.range_id)
+        .map(|s| s.folder(&root))
+        .transpose()?
+        .unwrap_or(root.clone());
+    let audio = audio_path(&folder, b)?;
+    let playing_range = b.range_id.clone();
     let job = crate::begin_speech(app, crate::Phase::Preparing);
     let state = app.state::<crate::AppState>();
     let mut active = state.job.lock().unwrap();
@@ -1697,16 +1819,52 @@ fn play_selected(
     drop(active);
     l.playing = Some(Playing {
         saved_chapter,
+        range_id: playing_range.clone(),
         book: id.into(),
         job,
         player,
     });
     if let Some(b) = l.books.get_mut(id) {
-        b.position = seconds;
-        remember_position(b);
-        save_bookmark(&directory(id)?, b)?;
+        let range = b
+            .range_mut(&playing_range)
+            .ok_or("Saved chapter not found")?;
+        range.position = seconds;
+        remember_position(range);
+        if folder != root || playing_range == b.range_id {
+            save_bookmark(&folder, b.range_mut(&playing_range).unwrap())?;
+        }
+        if range_id.is_some() {
+            save(&root, b)?;
+        }
     }
     Ok(())
+}
+// Playback may reference the full-scan draft without activating it or cancelling its producer.
+fn record_playback(
+    root: &Path,
+    book: &mut Book,
+    range_id: &str,
+    snapshot: &crate::pcm::PlaybackStatus,
+) -> Result<(), String> {
+    let folder = book
+        .full_scan
+        .as_ref()
+        .filter(|s| s.draft().range_id == range_id)
+        .map(|s| s.folder(root))
+        .transpose()?
+        .unwrap_or_else(|| root.to_path_buf());
+    let range = book.range_mut(range_id).ok_or("Saved chapter not found")?;
+    range.position = snapshot.position.min(range.seconds());
+    range.speed = snapshot.speed;
+    remember_position(range);
+    if range_id == book.range_id {
+        save_bookmark(root, book)
+    } else {
+        if folder != root {
+            save_bookmark(&folder, book.range_mut(range_id).unwrap())?;
+        }
+        save(root, book)
+    }
 }
 struct PassageTransition {
     service: Audiobooks,
@@ -1846,13 +2004,12 @@ pub async fn audiobook_play(
     range_id: Option<String>,
 ) -> Result<(), String> {
     // Validate before switching ranges or interrupting an active listening session.
-    let (range_id, seconds) = {
+    let (range_id, seconds, preparing, revision) = {
         let service = app.state::<Audiobooks>();
         let l = service.0.lock().unwrap();
         let book = l.books.get(&id).ok_or("Audiobook not found")?;
         let target = if let Some(range) = range_id.as_deref() {
-            std::iter::once(book)
-                .chain(book.saved_ranges.iter().map(|r| r.as_ref()))
+            book.ranges()
                 .find(|b| b.range_id == range)
                 .ok_or("Saved chapter not found")?
         } else if seconds.is_none() {
@@ -1860,17 +2017,33 @@ pub async fn audiobook_play(
                 "No completed chapters yet. Choose Listen from this page to start listening.",
             )?;
             let range = resume["rangeId"].as_str().unwrap();
-            std::iter::once(book)
-                .chain(book.saved_ranges.iter().map(|r| r.as_ref()))
-                .find(|b| b.range_id == range)
-                .unwrap()
+            book.ranges().find(|b| b.range_id == range).unwrap()
         } else {
             book
         };
         let (seconds, _, _) =
             saved_playback(target, seconds).ok_or("Only completed chapters can be continued.")?;
-        (Some(target.range_id.clone()), Some(seconds))
+        (
+            Some(target.range_id.clone()),
+            Some(seconds),
+            book.full_scan.is_some(),
+            l.selection_revision,
+        )
     };
+    if preparing {
+        return tauri::async_runtime::spawn_blocking(move || {
+            play_selected_range(
+                &app,
+                &id,
+                seconds,
+                Some(revision),
+                true,
+                range_id.as_deref(),
+            )
+        })
+        .await
+        .map_err(|e| e.to_string())?;
+    }
     let revision = if let Some(range) = range_id {
         switch_range(&app, &id, &range).await?
     } else {

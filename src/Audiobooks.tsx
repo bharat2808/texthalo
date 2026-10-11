@@ -1,5 +1,4 @@
 import { useState } from "react";
-import { save } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { invoke } from "@tauri-apps/api/core";
 import {
@@ -25,14 +24,18 @@ export default function Audiobooks() {
     state.playback && state.playback.bookId === book?.id
       ? state.playback.audio
       : null;
+  const resumeChapters = chapters.filter((c) => c.rangeId === book?.resume?.rangeId);
+  const timelineEnd = playing?.buffered ?? (resumeChapters.length
+    ? Math.max(...resumeChapters.map((c) => c.seconds! + c.duration))
+    : book?.totalSeconds ?? 0);
+  const timelinePosition = playing?.position ?? book?.resume?.seconds ?? book?.position ?? 0;
   const run = (fn: () => Promise<unknown>) => {
     if (busy) return;
     setBusy(true);
     void action(fn).finally(() => setBusy(false));
   };
   const open = state.readerContext ?? state.tray;
-  const extensionUrl = import.meta.env.VITE_READER_EXTENSION_URL ||
-    "https://github.com/bharat2808/texthalo/tree/main/browser-extension";
+  const extensionUrl = "https://chromewebstore.google.com/detail/texthalo-reader/jafnpokahhbldophkeogljemkblfmgmo";
   return (
     <section className="audiobooks">
       <div className="audiobook-header">
@@ -40,18 +43,10 @@ export default function Audiobooks() {
           <span className="audiobook-eyebrow">YOUR LISTENING LIBRARY</span>
           <h1>Audiobooks</h1>
           <p>Your books, ready to pick up where you left off.</p>
-          <button disabled={busy} onClick={() => run(async () => {
-            if (import.meta.env.VITE_READER_EXTENSION_URL) return openUrl(extensionUrl);
-            const path = await save({ title: "Download TextHalo Reader", defaultPath: "texthalo-reader.zip",
-              filters: [{ name: "Extension ZIP", extensions: ["zip"] }] });
-            if (path) await invoke("reader_extension_download", { path });
-          })}>
-            Download TextHalo Reader extension{import.meta.env.VITE_READER_EXTENSION_URL ? " ↗" : ""}
+          <button disabled={busy} onClick={() => run(() => openUrl(extensionUrl))}>
+            Get TextHalo Reader from the Chrome Web Store ↗
           </button>
-          {!import.meta.env.VITE_READER_EXTENSION_URL && (
-            <p className="audiobook-hint">Unzip the download and load it unpacked in chrome://extensions. The reader helper is also required.</p>
-          )}
-          {!import.meta.env.VITE_READER_EXTENSION_URL && <button onClick={() => run(() => openUrl(extensionUrl))}>Installation instructions ↗</button>}
+          <p className="audiobook-hint">Add the extension to Chrome, open your Kindle book, then choose Connect to TextHalo in the extension.</p>
         </div>
       </div>
       {error && (
@@ -123,12 +118,12 @@ export default function Audiobooks() {
                       : b.complete
                         ? "Complete audiobook"
                         : `${audioClock(b.totalSeconds)} ready`}{" "}
-                    · {b.totalPages} pages
+                    · {b.totalPages} captured views
                   </p>
                   <progress
                     aria-label="Listening progress"
-                    max={b.seconds || 1}
-                    value={b.position}
+                    max={b.totalSeconds || 1}
+                    value={b.resume?.seconds ?? b.position}
                   />
                   <span>
                     {b.resume
@@ -156,20 +151,10 @@ export default function Audiobooks() {
                 KINDLE · {book.complete ? "COMPLETE" : "GROWING AUDIOBOOK"}
               </span>
               <h2>{book.title}</h2>
-              <p>
-                {audioClock(book.totalSeconds)} of audio ready · {book.totalPages} pages ·{" "}
-                {book.totalGenerated} sentences
-              </p>
+              <p>{audioClock(book.totalSeconds)} ready</p>
               {book.resume && (
-                <p className="audiobook-location">
-                  Last listened:{" "}
-                  {book.resume.chapter ? `${book.resume.chapter} · ` : ""}
-                  {book.resume.page}
-                </p>
-              )}
-              {open?.book?.id === book.id && (
-                <p className="audiobook-location">
-                  Open in Kindle: {open.reader.progress}
+                <p className="audiobook-location" title={book.resume.page}>
+                  {playing ? "Listening" : "Continue"}: {book.resume.chapter || book.resume.page}
                 </p>
               )}
               {book.pendingPage && state.generating !== book.id && (
@@ -185,8 +170,8 @@ export default function Audiobooks() {
                   className="primary"
                   disabled={
                     busy ||
-                    !book.generated ||
-                    (!!book.pendingPage && (!playing || playing.paused))
+                    !chapters.length ||
+                    (!!book.pendingPage && !book.fullPreparation && (!playing || playing.paused))
                   }
                   onClick={() =>
                     run(() =>
@@ -250,9 +235,9 @@ export default function Audiobooks() {
                   aria-label="Audiobook playback position"
                   type="range"
                   min={playing?.start ?? 0}
-                  max={playing?.buffered || book.seconds || 1}
+                  max={timelineEnd || 1}
                   step="0.1"
-                  value={playing?.position ?? book.position}
+                  value={Math.min(timelinePosition, timelineEnd)}
                   disabled={!playing || busy}
                   onChange={(e) =>
                     run(() =>
@@ -266,10 +251,10 @@ export default function Audiobooks() {
                   }
                 />
                 <div>
-                  <span>{audioClock(playing?.position ?? book.position)}</span>
+                  <span>{audioClock(timelinePosition)}</span>
                   <span>
-                    {audioClock(playing?.buffered ?? book.seconds)}
-                    {book.complete ? "" : " buffered"}
+                    {audioClock(timelineEnd)}
+                    {book.complete ? "" : " playable"}
                   </span>
                 </div>
               </div>
@@ -297,12 +282,12 @@ export default function Audiobooks() {
                       title="Fill missing passages and reuse audio already prepared"
                       onClick={() => run(() => generateBook(book.id, true))}
                     >
-                      {book.fullPreparation ? "Resume full audiobook" : "Create full audiobook"}
+                      {book.fullPreparation?.transcriptReady ? "Prepare more chapters" : book.fullPreparation ? "Resume full audiobook" : "Create full audiobook"}
                     </button>
                   </div>
                 )
               )}
-              {!book.fromBeginning && (
+              {!book.fromBeginning && !book.fullPreparation && (
                 <p className="audiobook-hint">
                   Listening starts at your selected page. Only chapters recorded
                   from beginning to end are available to continue later.
@@ -312,10 +297,13 @@ export default function Audiobooks() {
           </div>
           <div className="audiobook-chapters">
             <h3>Completed chapters</h3>
+            {state.generating === book.id && (
+              <p role="status">Finished chapters appear here as they become ready. You can listen while the rest of the book is being prepared.</p>
+            )}
             {!chapters.length && <p>No completed chapters yet.</p>}
             {chapters.map((c) => (
               <button
-                key={c.id}
+                key={`${c.rangeId}:${c.id}`}
                 disabled={busy}
                 onClick={() =>
                   run(() => listenBook(book.id, c.seconds!, c.rangeId))

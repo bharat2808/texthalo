@@ -293,6 +293,20 @@ pub(super) fn recover_preparation(root: &Path, book: &mut Book) {
     }
 }
 impl FullScan {
+    pub(super) fn draft(&self) -> &Book {
+        &self.draft
+    }
+    pub(super) fn draft_mut(&mut self) -> &mut Book {
+        &mut self.draft
+    }
+    fn preserve_listening(&mut self, live: &FullScan) {
+        if self.draft.range_id == live.draft.range_id {
+            self.draft.position = live.draft.position;
+            self.draft.speed = live.draft.speed;
+            self.draft.bookmark_sentence = live.draft.bookmark_sentence.clone();
+            self.draft.bookmark_offset = live.draft.bookmark_offset;
+        }
+    }
     fn new(book: &Book) -> Self {
         let sources = std::iter::once(book)
             .chain(book.saved_ranges.iter().map(|b| b.as_ref()))
@@ -361,7 +375,7 @@ impl FullScan {
             }
         }
     }
-    fn folder(&self, root: &Path) -> Result<PathBuf, String> {
+    pub(super) fn folder(&self, root: &Path) -> Result<PathBuf, String> {
         uuid::Uuid::parse_str(&self.draft.range_id)
             .map_err(|_| "Invalid full audiobook identity")?;
         Ok(root.join(format!("full-{}", self.draft.range_id)))
@@ -380,6 +394,7 @@ impl FullScan {
             self.draft = Box::new(saved);
         }
         recover(&folder, &self.draft)?;
+        load_bookmark(&folder, &mut self.draft);
         if self.reuse_policy == 0 {
             let reused_partial = self
                 .draft
@@ -656,12 +671,32 @@ fn persist(
         return Err("Preparation stopped".into());
     }
     let book = l.books.get_mut(id).ok_or("Audiobook removed")?;
-    save(&scan.folder(root)?, &scan.draft)?;
+    let mut updated = scan.clone();
+    if let Some(live) = &book.full_scan {
+        updated.preserve_listening(live);
+    }
+    save(&updated.folder(root)?, &updated.draft)?;
     let mut next = book.clone();
-    next.full_scan = Some(Box::new(scan.clone()));
+    next.full_scan = Some(Box::new(updated));
     next.activity = Some("full-scan".into());
     save(root, &next)?;
     *book = next;
+    if let Some(playing) = l
+        .playing
+        .as_ref()
+        .filter(|p| p.book == id && p.range_id == scan.draft.range_id)
+    {
+        let audio = playing.player.snapshot();
+        if let Some((_, end, _)) = saved_playback(&scan.draft, Some(audio.start)) {
+            if end > (audio.buffered * RATE as f64).round() as u64 {
+                playing.player.update_file(
+                    &audio_path(&scan.folder(root)?, &scan.draft)?,
+                    end,
+                    true,
+                )?;
+            }
+        }
+    }
     Ok(())
 }
 fn prepare_transcript_with(
@@ -829,17 +864,36 @@ pub(super) fn producer(app: &AppHandle, id: &str, token: &str) -> Result<(), Str
                 .playing
                 .as_ref()
                 .filter(|p| p.book == id)
-                .map(|p| p.player.clone());
+                .map(|p| (p.player.clone(), p.range_id.clone()));
             let current = l.books.get_mut(id).ok_or("Audiobook removed")?;
-            if let Some(player) = &playing {
-                current.position = player.snapshot().position.min(current.seconds());
-                remember_position(current);
+            if let Some((player, range)) = &playing {
+                record_playback(&root, current, range, &player.snapshot())?;
             }
-            scan.publish(&root, current)?;
+            if let Some(live) = &current.full_scan {
+                scan.preserve_listening(live);
+            }
+            // Publish with the bookmark and source spans of the range the user actually heard.
+            let mut publication = if let Some((_, range)) = &playing {
+                current
+                    .ranges()
+                    .find(|b| &b.range_id == range)
+                    .cloned()
+                    .ok_or("Saved listening range unavailable")?
+            } else if scan.draft.bookmark_sentence.is_some() {
+                (*scan.draft).clone()
+            } else {
+                current.clone()
+            };
+            scan.publish(&root, &mut publication)?;
+            *current = publication;
             let path = audio_path(&root, current)?;
             let samples = current.committed_samples;
             let position = current.position;
-            if let Some(player) = playing {
+            let range_id = current.range_id.clone();
+            if let Some((player, _)) = playing {
+                if let Some(p) = l.playing.as_mut() {
+                    p.range_id = range_id;
+                }
                 if let Err(error) = player
                     .update_file(&path, samples, true)
                     .and_then(|_| player.seek(position))
@@ -897,6 +951,137 @@ mod tests {
         r["startOfBook"] = json!(page == 1);
         r["endOfBook"] = json!(end);
         r
+    }
+    #[test]
+    fn progress_uses_one_transcript_orders_opening_pages_and_excludes_unfinished_audio() {
+        let (root, mut original) = fixture();
+        let mut scan = FullScan::new(&original);
+        scan.recover(&root).unwrap();
+        let mut opening = scan_view(1, false);
+        opening["progress"] = json!("Location 1 of 1583 ● 0%");
+        scan.capture(
+            &opening,
+            "The opening dedication introduces this book and thanks everyone who helped.",
+            false,
+        )
+        .unwrap();
+        scan.capture(
+            &scan_view(8, false),
+            "PROLOGUE\nThe patient archivist found a map hidden beneath the heavy wooden chest.",
+            true,
+        )
+        .unwrap();
+        scan.capture(&scan_view(11, true), "Chapter One\nThe travelers left the village early in the morning. They reached the mountain trail just before sunset.", true).unwrap();
+        let boundary = scan.draft.checkpoints[2].sentence;
+        let folder = scan.folder(&root).unwrap();
+        while scan.draft.generated <= boundary {
+            commit(&folder, &mut scan.draft, &[0.4; 24000]).unwrap();
+        }
+        original.full_scan = Some(Box::new(scan.clone()));
+        let view = original.view();
+        let chapters = view["checkpoints"].as_array().unwrap();
+        assert_eq!(
+            chapters.len(),
+            3,
+            "Old recordings must not inflate the full transcript"
+        );
+        assert_eq!(chapters[0]["label"], "Opening pages");
+        assert_eq!(chapters[1]["label"], "PROLOGUE");
+        assert_eq!(chapters[2]["label"], "Chapter One");
+        assert_eq!(view["totalPages"], 3);
+        assert_eq!(view["totalGenerated"], scan.draft.generated);
+        assert_eq!(view["fullPreparation"]["completedChapters"], 2);
+        let ready = chapters
+            .iter()
+            .filter(|c| c["complete"] == true)
+            .map(|c| c["duration"].as_f64().unwrap())
+            .sum::<f64>();
+        assert_eq!(view["totalSeconds"].as_f64().unwrap(), ready);
+        assert!(view["generatedSeconds"].as_f64().unwrap() > ready);
+        let (_, previous_end, _) = saved_playback(&scan.draft, Some(0.)).unwrap();
+        while scan.draft.generated < scan.draft.sentences.len() {
+            commit(&folder, &mut scan.draft, &[0.4; 24000]).unwrap();
+        }
+        let (_, extended_end, _) = saved_playback(&scan.draft, Some(0.)).unwrap();
+        assert!(
+            extended_end > previous_end,
+            "The playlist grows when another chapter finishes"
+        );
+        assert_eq!(extended_end, scan.draft.committed_samples);
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn completed_draft_chapters_are_playable_before_publication_and_keep_live_bookmarks() {
+        let (root, mut original) = fixture();
+        let original_range = original.range_id.clone();
+        let original_bytes = fs::read(audio_path(&root, &original).unwrap()).unwrap();
+        let mut scan = FullScan::new(&original);
+        scan.recover(&root).unwrap();
+        scan.capture(&scan_view(1, false), &raw_page(&original.pages[0]), false)
+            .unwrap();
+        scan.capture(&scan_view(2, true), "Chapter Two\nThe travelers reached the mountain village and rested beside the warm fire.", true).unwrap();
+        let boundary = scan.draft.checkpoints[1].sentence;
+        let folder = scan.folder(&root).unwrap();
+        while scan.draft.generated < boundary {
+            commit(&folder, &mut scan.draft, &[0.4; 24000]).unwrap();
+        }
+        let range_id = scan.draft.range_id.clone();
+        original.full_scan = Some(Box::new(scan.clone()));
+        let view = original.view();
+        let ready = view["checkpoints"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["rangeId"] == range_id && c["complete"] == true)
+            .unwrap();
+        assert_eq!(ready["label"], "Chapter One");
+        assert!(!original.complete);
+        let (start, end, _) =
+            saved_playback(scan.draft(), Some(ready["seconds"].as_f64().unwrap())).unwrap();
+        assert_eq!(start, 0.);
+        assert_eq!(end, scan.draft.committed_samples);
+        assert!(saved_playback(scan.draft(), Some(end as f64 / RATE as f64 + 0.1)).is_none());
+        let service = Audiobooks::default();
+        {
+            let mut library = service.0.lock().unwrap();
+            library.books.insert(original.id.clone(), original.clone());
+            library.producing = Some((original.id.clone(), "test-producer".into(), true));
+            record_playback(
+                &root,
+                library.books.get_mut(&original.id).unwrap(),
+                &range_id,
+                &crate::pcm::PlaybackStatus {
+                    position: 0.5,
+                    speed: 1.5,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        }
+        // The producer's snapshot predates playback. Its next commit must keep the new bookmark.
+        commit(&folder, &mut scan.draft, &[0.5; 24000]).unwrap();
+        persist(&service, &original.id, "test-producer", &root, &scan).unwrap();
+        let mut live = service.0.lock().unwrap().books[&original.id].clone();
+        assert_eq!(live.range_id, original_range);
+        assert_eq!(live.full_scan.as_ref().unwrap().draft.position, 0.5);
+        assert_eq!(live.full_scan.as_ref().unwrap().draft.speed, 1.5);
+        assert!(service.0.lock().unwrap().producing.is_some());
+        assert_eq!(
+            fs::read(audio_path(&root, &original).unwrap()).unwrap(),
+            original_bytes
+        );
+        recover_preparation(&root, &mut live);
+        assert_eq!(live.full_scan.as_ref().unwrap().draft.position, 0.5);
+        scan.preserve_listening(live.full_scan.as_ref().unwrap());
+        let mut publication = live.clone();
+        publication.bookmark_sentence = scan.draft.bookmark_sentence.clone();
+        publication.bookmark_offset = scan.draft.bookmark_offset;
+        publication.speed = scan.draft.speed;
+        scan.publish(&root, &mut publication).unwrap();
+        assert_eq!(publication.position, 0.5);
+        assert_eq!(publication.speed, 1.5);
+        assert!(publication.complete);
+        fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn full_scan_fills_a_missing_chapter_reuses_pcm_and_preserves_the_bookmark() {

@@ -12,7 +12,7 @@ The native helper runs local Apple Vision OCR using `src-tauri/native/ScreenText
 
 ## App UX
 
-`src/Audiobooks.tsx` lists saved books, library playback controls and checkpoints, and offers a bundled extension ZIP download with setup instructions. A build with `VITE_READER_EXTENSION_URL` opens the actual Store listing instead. `src/SpeechOverlay.tsx` retains its playback, preparation and checkpoint controls while the extension is connected. The audiobook overlay hides when the extension is disconnected. Dismiss hides the notice for that book for the app session. Audiobook playback without a reader connection does not open the floating popup. Normal selected-text speech keeps its existing overlay controls.
+`src/Audiobooks.tsx` lists saved books, library playback controls and checkpoints, and links directly to the official TextHalo Reader Chrome Web Store listing. `src/SpeechOverlay.tsx` retains its playback, preparation and checkpoint controls while the extension is connected. The audiobook overlay hides when the extension is disconnected. Dismiss hides the notice for that book for the app session. Audiobook playback without a reader connection does not open the floating popup. Normal selected-text speech keeps its existing overlay controls.
 
 The extension offers exactly two audiobook actions: Listen from this page and Build complete audiobook. Playback and chapter controls remain in the connected app overlay and saved library. Native control requests use a separate helper process so they cannot block the persistent relay's capture/navigation pump. The app accepts actions only for the current relay and connected book, validates playback targets, and reports asynchronous action errors on the next control-state poll.
 
@@ -47,7 +47,7 @@ Rust tests cover chapter completion eligibility, rejection of imported fragments
 
 OCR text is preserved rather than rewritten. Decorative initials, printed headers/footers and OCR character/spacing errors still need broader evaluation. Chapter headings are recognized conservatively; unresolved text before a chapter stops generation for review. Rendering a full sentence at a time may change prosody compared with page-sized synthesis. Reader layout changes can invalidate stored page numbers/text matches.
 
-Store publication, app-bundled native-host installation and a signed production release remain deployment work. The unpacked relay helper can be installed with `node browser-extension/native/setup.mjs --install`; it is not yet a complete end-user installer. Do not publish a Store URL before an actual listing exists.
+Install [TextHalo Reader from the Chrome Web Store](https://chromewebstore.google.com/detail/texthalo-reader/jafnpokahhbldophkeogljemkblfmgmo). The Mac app installs and registers the native helper on launch. Launch TextHalo once, add the extension to Chrome, then open a supported Kindle book and choose **Connect to TextHalo** in the popup. Manual unpacked installation is only needed for local development. Store-installed extension testing with the distributed app and broader full-book verification remain to be exercised.
 
 Official references:
 - https://developer.chrome.com/docs/extensions/develop/concepts/activeTab

@@ -6,11 +6,13 @@ async function boot(page: Page) {
     const state = { phase: "speaking" };
     const audio = { position: 20, buffered: 60, duration: null as number | null, paused: false, speed: 1, available: true };
     const commands: any[] = [];
-    Object.assign(window, { __speech: state, __audio: audio, __commands: commands, __native: async (command: string, args: any) => {
+    const books = { books: [], tray: null, generating: null, playback: null };
+    Object.assign(window, { __speech: state, __audio: audio, __commands: commands, __books: books, __native: async (command: string, args: any) => {
       commands.push({ method: command, ...args });
       if (command === "localization_state") return { preference: "en", language: "en" };
       if (command === "get_speech_status") return structuredClone(state);
       if (command === "get_playback_status") return structuredClone(audio);
+      if (command === "audiobook_state") return structuredClone(books);
       if (command === "assistant_state") return { status: { phase: "idle" } };
       if (command === "stop_speaking") { state.phase = "idle"; audio.available = false; }
       if (command === "playback_control") {
@@ -102,4 +104,52 @@ test("native cursor events reveal controls without a click or DOM mouse-enter", 
     event: "texthalo:playback-hover", payload: false,
   }));
   await expect(page.getByRole("button", {name:"Pause", exact:true})).toHaveCount(0, {timeout:3000});
+});
+
+test("library playback shows live chapter checkpoints without a Kindle suggestion", async ({ page }) => {
+  await boot(page);
+  await page.setViewportSize({ width: 350, height: 344 });
+  await page.evaluate(() => {
+    const state = (window as any).__books;
+    state.playback = { bookId: "saved-book", audio: (window as any).__audio };
+    state.generating = "saved-book";
+    state.books = [{ id: "saved-book", title: "Saved Audiobook", activity: "full-scan",
+      fullPreparation: { phase: "rendering", transcriptReady: true, completedChapters: 1, chapters: 3 },
+      checkpoints: [
+        { id: "one", rangeId: "draft", label: "Chapter One", complete: true, seconds: 0, duration: 60 },
+        { id: "two", rangeId: "draft", label: "Chapter Two", complete: false, seconds: null, duration: 0 },
+      ],
+    }];
+  });
+  await page.locator(".speech-label").hover();
+  await expect(page.getByText("Saved Audiobook", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: /Chapter One/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: /Chapter Two/ })).toHaveCount(0);
+  await expect(page.getByText("Generating audiobook · 1/3 chapters ready")).toBeVisible();
+  await page.evaluate(() => {
+    const book = (window as any).__books.books[0];
+    Object.assign(book.checkpoints[1], { complete: true, seconds: 60, duration: 75 });
+    book.fullPreparation.completedChapters = 2;
+  });
+  await page.getByRole("button", { name: /Chapter Two/ }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).__commands.filter((c: any) => c.method === "audiobook_play"))).toEqual([
+    { method: "audiobook_play", id: "saved-book", seconds: 60, rangeId: "draft" },
+  ]);
+  expect(await page.evaluate(() => (window as any).__books.generating)).toBe("saved-book");
+  await expect(page.getByRole("button", { name: "Stop preparing" })).toBeVisible();
+  await page.evaluate(() => { (window as any).__books.generating = null; });
+  const prepare = page.getByRole("button", { name: "Prepare more chapters" });
+  await expect(prepare).toBeEnabled();
+  await prepare.click();
+  await expect.poll(() => page.evaluate(() => (window as any).__commands.filter((c: any) => c.method === "audiobook_generate"))).toEqual([
+    { method: "audiobook_generate", id: "saved-book", full: true },
+  ]);
+  await page.evaluate(() => { (window as any).__books.books[0].complete = true; });
+  await expect(prepare).toHaveCount(0);
+  await page.evaluate(() => {
+    const book = (window as any).__books.books[0];
+    book.complete = false;
+    book.fullPreparation.transcriptReady = false;
+  });
+  await expect(prepare).toHaveCount(0);
 });

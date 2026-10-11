@@ -22,6 +22,7 @@ export type Audiobook = {
   totalPages: number;
   totalGenerated: number;
   totalSeconds: number;
+  generatedSeconds?: number;
   seconds: number;
   position: number;
   speed: number;

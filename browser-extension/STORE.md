@@ -51,6 +51,6 @@ Completed October 10, 2026:
 Still required before submission:
 - Create a Store draft, verify its assigned ID against `extension-id.txt`, manifest key and helper origin/registration, and test the Store-installed extension with the distributed app (fresh Mac without the app: banner appears; install DMG, launch app once, reopen popup: banner clears).
 - Prepare listing screenshots, support details, and reviewer instructions/test content. Verify capture, page turns, connection loss, app restarts and audiobook playback with a real supported Kindle book.
-- Configure `VITE_READER_EXTENSION_URL` only after a real listing exists. Until then the app downloads its bundled ZIP for manual unpacked installation and links to setup instructions.
+- The app now opens the [official Chrome Web Store listing](https://chromewebstore.google.com/detail/texthalo-reader/jafnpokahhbldophkeogljemkblfmgmo) directly. No build-time URL configuration or manual ZIP installation is required.
 
-No Store submission or public publication has been performed. The development ZIP is suitable for local testing, not a claim that review requirements are complete.
+Update — October 11, 2026: The official listing is available at the link above. Its ID matches `extension-id.txt` and the native helper’s allowed origin. The submission checklist above records the earlier readiness audit; fresh-install and broader full-book validation still need verification.
