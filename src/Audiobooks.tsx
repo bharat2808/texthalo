@@ -35,6 +35,7 @@ export default function Audiobooks() {
     void action(fn).finally(() => setBusy(false));
   };
   const open = state.readerContext ?? state.tray;
+  const readerConnected = state.readerConnected === null ? null : state.readerConnected ?? !!open;
   const extensionUrl = "https://chromewebstore.google.com/detail/texthalo-reader/jafnpokahhbldophkeogljemkblfmgmo";
   return (
     <section className="audiobooks">
@@ -43,10 +44,18 @@ export default function Audiobooks() {
           <span className="audiobook-eyebrow">YOUR LISTENING LIBRARY</span>
           <h1>Audiobooks</h1>
           <p>Your books, ready to pick up where you left off.</p>
-          <button disabled={busy} onClick={() => run(() => openUrl(extensionUrl))}>
-            Get TextHalo Reader from the Chrome Web Store ↗
-          </button>
-          <p className="audiobook-hint">Add the extension to Chrome, open your Kindle book, then choose Connect to TextHalo in the extension.</p>
+          <p className={`audiobook-connection${readerConnected ? " connected" : ""}`} role="status">
+            <span className="audiobook-connection-dot" aria-hidden="true" />
+            {readerConnected === null ? "Checking TextHalo Reader…" : readerConnected ? "TextHalo Reader connected" : "TextHalo Reader disconnected"}
+          </p>
+          {readerConnected === false && (
+            <>
+              <button disabled={busy} onClick={() => run(() => openUrl(extensionUrl))}>
+                Get TextHalo Reader from the Chrome Web Store ↗
+              </button>
+              <p className="audiobook-hint">Open your Kindle book in Chrome, click TextHalo Reader, then choose Connect to TextHalo.</p>
+            </>
+          )}
         </div>
       </div>
       {error && (
@@ -75,7 +84,7 @@ export default function Audiobooks() {
               <p role="status">{preparationLabel(open.book)}</p>
             )}
             <p className="audiobook-hint">
-              Connected · Choose where to start or build the full audiobook in
+              Choose where to start or build the full audiobook in
               TextHalo Reader.
             </p>
           </div>

@@ -1794,7 +1794,7 @@ impl Audiobooks {
                 view
             })
             .collect::<Vec<_>>();
-        json!({"readerWarning":warning,"books":books,"tray":tray,"readerContext":reader_context,"generating":l.producing.as_ref().map(|(id,_,_)|id),"playback":playback})
+        json!({"readerConnected":reader["connected"] == true,"readerWarning":warning,"books":books,"tray":tray,"readerContext":reader_context,"generating":l.producing.as_ref().map(|(id,_,_)|id),"playback":playback})
     }
 }
 #[tauri::command]

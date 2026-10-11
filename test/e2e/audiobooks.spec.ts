@@ -11,7 +11,7 @@ test("finished chapters appear and can play while full-book generation continues
       fullPreparation: { chapters: 3, completedChapters: 0, transcriptReady: true,
         total: 30, phase: "rendering", pages: 20, page: "Page 20", generated: 0, reused: 0 },
     };
-    const state = { books: [book], tray: null, generating: "book", playback: null };
+    const state = { books: [book], tray: null, readerConnected: false, generating: "book", playback: null };
     const calls: unknown[] = [];
     Object.assign(window, { __books: state, __calls: calls, __native: async (command: string, args: any) => {
       calls.push({ command, args });
@@ -29,6 +29,12 @@ test("finished chapters appear and can play while full-book generation continues
     ` });
   });
   await page.goto("/");
+  await expect(page.getByText("TextHalo Reader disconnected", { exact: true })).toBeVisible();
+  await expect(page.getByText(/click TextHalo Reader, then choose Connect/)).toBeVisible();
+  // Connection status is independent of a readable book or a dismissed reader tray.
+  await page.evaluate(() => { (window as any).__books.readerConnected = true; });
+  await expect(page.getByText("TextHalo Reader connected", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: /Get TextHalo Reader/ })).toHaveCount(0);
   await page.getByRole("button", { name: /Growing Book/ }).click();
   await expect(page.getByText("No completed chapters yet.")).toBeVisible();
   await page.evaluate(() => {
@@ -58,7 +64,11 @@ test("finished chapters appear and can play while full-book generation continues
   ]);
   expect(await page.evaluate(() => (window as any).__books.generating)).toBe("book");
   expect(await page.evaluate(() => (window as any).__calls.some((c: any) => c.command === "audiobook_stop_generation"))).toBe(false);
-  await page.evaluate(() => { (window as any).__books.generating = null; });
+  await page.evaluate(() => {
+    (window as any).__books.generating = null;
+    (window as any).__books.readerConnected = false;
+  });
+  await expect(page.getByText("TextHalo Reader disconnected", { exact: true })).toBeVisible();
   const prepare = page.getByRole("button", { name: "Prepare more chapters" });
   await expect(prepare).toBeEnabled();
   await prepare.click();

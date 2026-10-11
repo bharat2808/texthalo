@@ -51,6 +51,7 @@ export type Audio = {
   available: boolean;
 };
 export type AudiobookState = {
+  readerConnected?: boolean | null;
   books: Audiobook[];
   tray: {
     reader: {
@@ -70,6 +71,7 @@ export type AudiobookState = {
   playback: { bookId: string; audio: Audio } | null;
 };
 const empty: AudiobookState = {
+  readerConnected: null,
   books: [],
   tray: null,
   generating: null,

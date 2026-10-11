@@ -19,6 +19,24 @@
   letter-spacing: 1.6px;
   color: var(--label-secondary);
 }
+.audiobooks .audiobook-connection {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+}
+.audiobook-connection-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--label-secondary);
+}
+.audiobooks .audiobook-connection.connected {
+  color: light-dark(#16805d, #5acda1);
+}
+.audiobook-connection.connected .audiobook-connection-dot {
+  background: currentColor;
+}
 .audiobooks button,
 .audiobooks select {
   font: inherit;
