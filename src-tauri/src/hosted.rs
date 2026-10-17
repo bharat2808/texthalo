@@ -862,7 +862,9 @@ where
                 pending.extend_from_slice(&bytes);
                 let count = pending.len() & !1;
                 let samples: Vec<f32> = pending[..count]
-                    .chunks_exact(2)
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
                     .map(|b| i16::from_le_bytes([b[0], b[1]]) as f32 / 32768.)
                     .collect();
                 if !samples.is_empty() {
