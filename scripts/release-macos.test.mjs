@@ -215,7 +215,7 @@ test("website verification waits for R2 links, the published version, and redire
     fetchPage: async target => {
       if (target.includes("/download/")) return new Response(null, {status:302,headers:{location: calls < 3 ? "https://github.com/old.dmg" : url}});
       calls++;
-      return new Response(`<a href="${url}">Download</a>Current version <!-- -->0.1.${calls < 2 ? "13" : "12"}<!-- -->`);
+      return new Response(`<a href="${url}">Download</a>Current version <!-- -->0.1.${calls < 2 ? "13" : "12"}<!-- --><p>Open source on GitHub</p>`);
     },
   });
   assert.equal(calls, 3);

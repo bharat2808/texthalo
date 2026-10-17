@@ -326,7 +326,6 @@ export async function verifyWebsite(receipt, {
     const html = (await response.text()).replace(/<!--.*?-->/g, "");
     const redirect = await fetchPage("https://texthalo.app/download/", { ...options, redirect: "manual", signal: AbortSignal.timeout(30_000) });
     if (response.ok && html.includes(`href="${url}"`) && html.includes(`Current version ${receipt.version}`)
-      && !/open.source|source.available/i.test(html)
       && redirect.status === 302 && redirect.headers.get("location") === url) return;
     if (attempt < 23) await pause(5000);
   }
