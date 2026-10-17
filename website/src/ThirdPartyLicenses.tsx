@@ -29,6 +29,7 @@ export function ThirdPartyLicenses() {
   return <article className="third-party-licenses">
     <header className="article-header"><h1>{t('Third-party licenses')}</h1>
       <p className="article-deck">{t('Licenses and attribution notices for the libraries, models, and language tools used by TextHalo.')}</p>
+      <p>{t('TextHalo itself is open source under Apache-2.0.')} <a href="https://github.com/bharat2808/texthalo" target="_blank" rel="noreferrer">{t('View the source code on GitHub.')}</a></p>
       <p>{t('These notices apply to third-party components only. Each component retains its original license.')}</p>
       <p>{t('Version {0}', [inventory.version])} · <a href="/licenses/dependencies.json" download>{t('Download dependency inventory')}</a></p>
     </header>

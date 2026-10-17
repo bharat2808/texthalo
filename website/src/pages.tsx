@@ -79,7 +79,7 @@ function EditorialHeader() {
 
 function EditorialFooter() {
   const i18n = useWebsiteI18n();
-  return <footer className="site-footer"><a className="wordmark footer-wordmark" href={i18n.href("/")}><Mark /><span>TextHalo</span></a><span className="footer-copy">{i18n.t("Listen. Dictate. Get a little help.")}</span><div className="footer-links"><a href={i18n.href("/privacy/")}>{i18n.t("Privacy")}</a><a href={i18n.href("/licenses/")}>{i18n.t("Third-party licenses")}</a><a href={i18n.href("/blog/")}>{i18n.t("Blog")}</a><a href={i18n.href("/stories/")}>{i18n.t("Stories")}</a></div><span className="copyright">© {new Date().getFullYear()} TextHalo</span></footer>;
+  return <footer className="site-footer"><a className="wordmark footer-wordmark" href={i18n.href("/")}><Mark /><span>TextHalo</span></a><span className="footer-copy">{i18n.t("Listen. Dictate. Get a little help.")}</span><div className="footer-links"><a href={i18n.href("/privacy/")}>{i18n.t("Privacy")}</a><a href={i18n.href("/licenses/")}>{i18n.t("Third-party licenses")}</a><a href="https://github.com/bharat2808/texthalo" target="_blank" rel="noreferrer">{i18n.t("Open source · Apache-2.0")}</a><a href={i18n.href("/blog/")}>{i18n.t("Blog")}</a><a href={i18n.href("/stories/")}>{i18n.t("Stories")}</a></div><span className="copyright">© {new Date().getFullYear()} TextHalo</span></footer>;
 }
 
 function PrivacyPolicyPage() {

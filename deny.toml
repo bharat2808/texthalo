@@ -1,6 +1,6 @@
 # cargo-deny configuration — the CI-enforced half of the licence decision.
 #
-# TextHalo uses its own proprietary terms. Third-party licenses remain unchanged.
+# TextHalo uses Apache-2.0. Third-party licenses remain unchanged.
 # This file makes "no GPL in the runtime graph"
 # a failing check rather than a promise. Run locally with:
 #     cargo install cargo-deny && cargo deny check

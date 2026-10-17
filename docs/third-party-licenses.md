@@ -1,6 +1,6 @@
 # Website third-party notices
 
-The website’s `/licenses/` page lists third-party licenses and attribution only. It does not publish or change TextHalo’s own proprietary terms. Page navigation and explanatory copy support all eight interface languages; original license texts are preserved.
+The website’s `/licenses/` page lists third-party licenses and attribution. TextHalo itself is licensed under Apache-2.0 in the repository root. Page navigation and explanatory copy support all eight interface languages; original dependency license texts are preserved.
 
 ## Inventory and regeneration
 

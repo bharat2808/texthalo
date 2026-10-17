@@ -5,7 +5,7 @@ version = "0.1.23"
 description = "Speak any selected text, from anywhere in macOS"
 authors = ["bharat2808 <vermabhrat642@gmail.com>"]
 edition = "2021"
-license-file = "../LICENSE-TEXTHALO.md"
+license = "Apache-2.0"
 publish = false
 
 [[bin]]
@@ -55,7 +55,7 @@ tauri-plugin-secure-storage = "1.5.0"
 tauri-plugin-autostart = "2"
 
 # Selection capture + synthetic key events.
-# Invariant: dependency licenses remain independent of TextHalo’s source-available terms. No GPL.
+# Invariant: dependency licenses remain independent of TextHalo’s Apache-2.0 license. No GPL.
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = "0.25.0"
 core-foundation = "0.10.1"

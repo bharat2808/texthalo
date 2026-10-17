@@ -488,5 +488,8 @@
   "Connect a Kindle for the web page to TextHalo on your Mac.": "Conecta Kindle para la web con TextHalo en tu Mac.",
   "Sample chapter excerpt": "Muestra de un capítulo",
   "Chapter I · Down the Rabbit-Hole": "Capítulo I · En la madriguera del conejo",
-  "Public-domain excerpt · Fish Audio narration": "Fragmento de dominio público · narración Fish Audio"
+  "Public-domain excerpt · Fish Audio narration": "Fragmento de dominio público · narración Fish Audio",
+  "Open source · Apache-2.0": "Código abierto · Apache-2.0",
+  "TextHalo itself is open source under Apache-2.0.": "TextHalo es de código abierto bajo Apache-2.0.",
+  "View the source code on GitHub.": "Ver el código fuente en GitHub."
 }

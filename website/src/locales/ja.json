@@ -488,5 +488,8 @@
   "Connect a Kindle for the web page to TextHalo on your Mac.": "Kindle for the webをMac上のTextHaloに接続します。",
   "Sample chapter excerpt": "サンプル章の抜粋",
   "Chapter I · Down the Rabbit-Hole": "第1章 · ウサギ穴へ",
-  "Public-domain excerpt · Fish Audio narration": "パブリックドメイン作品の抜粋 · Fish Audioナレーション"
+  "Public-domain excerpt · Fish Audio narration": "パブリックドメイン作品の抜粋 · Fish Audioナレーション",
+  "Open source · Apache-2.0": "オープンソース · Apache-2.0",
+  "TextHalo itself is open source under Apache-2.0.": "TextHalo は Apache-2.0 ライセンスのオープンソースです。",
+  "View the source code on GitHub.": "GitHub でソースコードを見る。"
 }

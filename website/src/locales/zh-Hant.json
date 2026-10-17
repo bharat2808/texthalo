@@ -488,5 +488,8 @@
   "Connect a Kindle for the web page to TextHalo on your Mac.": "將 Kindle 網頁版連接到 Mac 上的 TextHalo。",
   "Sample chapter excerpt": "章節試聽片段",
   "Chapter I · Down the Rabbit-Hole": "第一章 · 掉進兔子洞",
-  "Public-domain excerpt · Fish Audio narration": "公版作品片段 · Fish Audio 旁白"
+  "Public-domain excerpt · Fish Audio narration": "公版作品片段 · Fish Audio 旁白",
+  "Open source · Apache-2.0": "開源 · Apache-2.0",
+  "TextHalo itself is open source under Apache-2.0.": "TextHalo 依據 Apache-2.0 授權開源。",
+  "View the source code on GitHub.": "在 GitHub 上查看原始碼。"
 }

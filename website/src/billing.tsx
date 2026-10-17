@@ -218,7 +218,7 @@ function TurnstileWidget({ active, onToken }: { active: boolean; onToken: (token
 
 function BillingFooter() {
   const i18n = useWebsiteI18n();
-  return <footer className="site-footer"><a className="wordmark footer-wordmark" href={i18n.href("/")}><Mark /><span>TextHalo</span></a><span className="footer-copy">{i18n.t("Listen. Dictate. Get a little help.")}</span><div className="footer-links"><a href={i18n.href("/")}>{i18n.t("Home")}</a><a href={i18n.href("/demo/")}>{i18n.t("Demo")}</a></div><span className="copyright">© {new Date().getFullYear()} TextHalo</span></footer>;
+  return <footer className="site-footer"><a className="wordmark footer-wordmark" href={i18n.href("/")}><Mark /><span>TextHalo</span></a><span className="footer-copy">{i18n.t("Listen. Dictate. Get a little help.")}</span><div className="footer-links"><a href={i18n.href("/")}>{i18n.t("Home")}</a><a href={i18n.href("/demo/")}>{i18n.t("Demo")}</a><a href="https://github.com/bharat2808/texthalo" target="_blank" rel="noreferrer">{i18n.t("Open source · Apache-2.0")}</a></div><span className="copyright">© {new Date().getFullYear()} TextHalo</span></footer>;
 }
 
 export function createDesktopHandoffAttempt() {

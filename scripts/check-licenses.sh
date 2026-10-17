@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# TextHalo uses LICENSE-TEXTHALO.md. This script checks independent dependency licences:
+# TextHalo uses Apache-2.0. This script checks independent dependency licences:
 # it reads the licence of every crate in the resolved dependency graph and fails if
 # anything copyleft reaches the *runtime* graph.
 #

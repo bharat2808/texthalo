@@ -285,7 +285,7 @@ If kiegen depends on *no* third-party Kokoro wrapper — neither the Rust crate 
 
 ### Licence decision for TextHalo
 
-**Current terms (October 4, 2026):** TextHalo source revisions expressly distributed under the [TextHalo Source Available License 1.0](../LICENSE-TEXTHALO.md) use those terms. The v0.1.12 release published October 2, 2026 and previously distributed Apache-licensed copies retain Apache-2.0. The comparison below records the earlier licensing decision.
+**Current license (October 17, 2026):** TextHalo is licensed under Apache-2.0 ([`LICENSE`](../LICENSE)). The source-available license introduced on October 4, 2026 has been removed. Previously distributed versions remain subject to the license included with each version. The comparison below records the earlier licensing decision.
 
 The project license applies to kiegen's original code. Every bundled dependency, model, and separately installed tool keeps its own license and required notices. The historical alternatives considered were:
 
@@ -304,7 +304,7 @@ The project license applies to kiegen's original code. Every bundled dependency,
 
 - **`cargo-deny` 0.20.2** (`EmbarkStudios/cargo-deny`) in CI with an explicit license allowlist and named exceptions for the reviewed MPL-2.0 dependencies. Unknown or unapproved licenses fail the check, which also excludes GPL, AGPL, SSPL, and other unlisted licenses. A policy in a document does not survive six months; a failing CI job does.
 - **No vendored espeak-ng, ever** — not the binary, not the data, not a git submodule, not "just for tests". Its absence from the repo is the whole point.
-- **Check every runtime dependency's own licence and redistribute its notices.** The project itself now uses LICENSE-TEXTHALO.md; dependencies remain under their upstream licences, including MIT, BSD, and Apache-2.0.
+- **Check every runtime dependency's own licence and redistribute its notices.** TextHalo uses Apache-2.0; dependencies remain under their upstream licences, including MIT, BSD, and Apache-2.0.
 - Keep a `NOTICE` file and an "Open-source licences" screen — the third-party Apache-2.0 components require attribution, and it doubles as the required credit for Kokoro's two CC BY training corpora.
 - Write the **ARPAbet → IPA table yourself** rather than copying it out of a crate of uncertain provenance. It is a small, standard mapping, and re-deriving it is an hour of work that removes the question entirely.
 
@@ -493,7 +493,7 @@ Explicitly *not* in v0: history, streaming word-highlight, per-app shortcuts, th
 
 ## 9. Open product questions for you
 
-1. ~~Is kiegen closed-source/commercial?~~ **Current decision: source available under LICENSE-TEXTHALO.md; prior Apache-licensed releases retain their terms** — with independent dependency licence checks in `cargo-deny` (§5).
+1. ~~Is kiegen closed-source/commercial?~~ **Current decision: Apache-2.0** — with independent dependency license checks in `cargo-deny` (§5).
 2. ~~English-only for v1, or the full 9 languages?~~ **Decided: English only for v1.** **Superseded 2026-10-06:** native Mandarin/Japanese front ends are now integrated; the other five (Spanish, French, Hindi, Italian, Portuguese) use an optional separately installed espeak-ng runtime. **Partly superseded:** a second engine — Chatterbox Multilingual — now offers 23 languages, none of them through espeak, so the "which languages" question is answered twice over: Kokoro's 9 codes, and Chatterbox's 23 for everything Kokoro cannot reach without GPL code (§5).
 3. Does the audio **play** and/or get **written to a file** by default? "Speak" vs "Speak to file" as separate chords is the plan.
 4. Should the user be able to configure **per-app** shortcuts/voices, or is one global chord enough for v1?

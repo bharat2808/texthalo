@@ -192,9 +192,7 @@ This test plays audio and measures cold/warm playback startup, buffer underruns,
 
 ## License
 
-Current source revisions are licensed under the [TextHalo Source Available License 1.0](LICENSE-TEXTHALO.md). Private use and internal business use are permitted; redistribution, publishing derivative products, and providing hosted services require prior written permission. This is a source-available license, not an open-source license.
-
-The previously published [v0.1.12 release](https://github.com/bharat2808/texthalo/releases/tag/v0.1.12), released October 2, 2026, and earlier Apache-licensed copies retain their original [Apache-2.0](LICENSE-APACHE) terms. The new terms apply only to source revisions expressly distributed under the new license beginning October 4, 2026; the license-changing commit is the transition boundary, not the previous release commit.
+TextHalo is licensed under the [Apache License 2.0](LICENSE). You may use, modify, and redistribute it under those terms. Previously distributed versions remain subject to the license included with each version.
 
 Third-party libraries, downloaded models, separately installed tools, and their attribution notices retain their respective licenses. Dependency-license checks are defined in [`deny.toml`](deny.toml) and [`scripts/check-licenses.sh`](scripts/check-licenses.sh).
 
