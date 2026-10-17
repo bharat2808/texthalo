@@ -1,5 +1,5 @@
 {
-  "version": "0.1.23",
+  "version": "0.1.24",
   "entries": [
     {
       "name": "accessibility-sys",
@@ -5289,7 +5289,7 @@
     },
     {
       "name": "rustls",
-      "version": "0.23.45",
+      "version": "0.23.46",
       "license": "Apache-2.0 OR ISC OR MIT",
       "ecosystem": "Rust",
       "scope": "runtime",
@@ -5297,15 +5297,15 @@
       "notices": [
         {
           "name": "LICENSE-APACHE",
-          "href": "/licenses/dependencies/rust-rustls-0.23.45/LICENSE-APACHE.txt"
+          "href": "/licenses/dependencies/rust-rustls-0.23.46/LICENSE-APACHE.txt"
         },
         {
           "name": "LICENSE-ISC",
-          "href": "/licenses/dependencies/rust-rustls-0.23.45/LICENSE-ISC.txt"
+          "href": "/licenses/dependencies/rust-rustls-0.23.46/LICENSE-ISC.txt"
         },
         {
           "name": "LICENSE-MIT",
-          "href": "/licenses/dependencies/rust-rustls-0.23.45/LICENSE-MIT.txt"
+          "href": "/licenses/dependencies/rust-rustls-0.23.46/LICENSE-MIT.txt"
         }
       ]
     },
