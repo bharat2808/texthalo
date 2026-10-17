@@ -347,4 +347,24 @@
 .audiobook-chapter-row { display: flex; align-items: center; gap: 16px; border-bottom: 1px solid var(--hairline); }
 .audiobook-chapter-row > button { border-bottom: 0; }
 .audiobook-chapter-row > button:first-child { flex: 1; min-width: 0; }
-.audiobook-chapter-row > .chapter-export { width: auto; flex-shrink: 0; color: var(--label-secondary); }
+
+.audiobook-title-row { display: flex; align-items: center; gap: 16px; }
+.audiobook-title-row h2 { flex: 1; min-width: 0; }
+.audiobook-file-actions { display: flex; flex-shrink: 0; align-items: center; gap: 4px; }
+.audiobooks .audiobook-file-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--label-secondary);
+}
+.audiobooks .audiobook-file-action:hover:not(:disabled) { background: var(--hairline) !important; color: var(--label); }
+.audiobooks .audiobook-file-action:focus-visible { outline: 2px solid var(--accent, #83a9e8); outline-offset: 2px; }
+.audiobook-action-spinner { transform-origin: center; animation: audiobook-action-spin 0.8s linear infinite; }
+@keyframes audiobook-action-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .audiobook-action-spinner { animation: none; } }

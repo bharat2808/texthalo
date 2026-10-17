@@ -65,7 +65,8 @@ test("finished chapters appear and can play while full-book generation continues
   await expect.poll(() => page.evaluate(() => (window as any).__calls.filter((c: any) => c.command === "audiobook_export"))).toEqual([
     { command: "audiobook_export", args: { id: "book", rangeId: "draft", chapterId: "one", destination: "/Downloads/Chapter One.wav" } },
   ]);
-  await expect(page.getByText("Audio exported successfully.")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Export Chapter One", exact: true })).toHaveText("");
+  await expect(page.getByText(/Export completed chapters as WAV|Choose AirDrop|Audio exported successfully/)).toHaveCount(0);
   await page.getByRole("button", { name: "Share Chapter One", exact: true }).click();
   await expect.poll(() => page.evaluate(() => (window as any).__calls.filter((c: any) => c.command === "audiobook_share"))).toEqual([
     { command: "audiobook_share", args: { path: "/exports/chapter.wav" } },
@@ -89,7 +90,7 @@ test("finished chapters appear and can play while full-book generation continues
   ]);
   await page.evaluate(() => { (window as any).__books.books[0].complete = true; });
   await expect(page.getByRole("button", { name: "Export full audiobook", exact: true })).toBeEnabled();
-  await page.getByRole("button", { name: "Share full audiobook…", exact: true }).click();
+  await page.getByRole("button", { name: "Share full audiobook", exact: true }).click();
   await expect.poll(() => page.evaluate(() => (window as any).__calls.filter((c: any) => c.command === "audiobook_export").at(-1))).toEqual(
     { command: "audiobook_export", args: { id: "book", rangeId: null, chapterId: null, destination: null } },
   );

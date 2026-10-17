@@ -1,7 +1,7 @@
 //! TextHalo — a menu-bar app that speaks selected text.
 //!
-//! Shape (see docs/DESIGN.md §1): no Dock icon; a first-run setup and permission guidance
-//! appear when needed, then the tray is the persistent UI and settings open on demand. The
+//! Explicit launches open Settings with a Dock icon; closing Settings returns to
+//! the menu bar. Login launches stay quiet after setup and permission guidance. The
 //! real app is the Rust service below; the webview is a config editor and setup wizard.
 
 mod assistant;
@@ -637,6 +637,8 @@ fn speak_given(app: &AppHandle, id: u64, text: String) {
 
 fn show_settings(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
+        #[cfg(target_os = "macos")]
+        let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
         let _ = window.show();
         let _ = window.unminimize();
         let _ = window.set_focus();
@@ -1408,6 +1410,12 @@ pub fn run() {
                 if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                     api.prevent_close();
                     let _ = window.hide();
+                    #[cfg(target_os = "macos")]
+                    if !cfg!(debug_assertions) {
+                        let _ = window
+                            .app_handle()
+                            .set_activation_policy(tauri::ActivationPolicy::Accessory);
+                    }
                 }
             }
         })
@@ -1417,7 +1425,7 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
-            None,
+            Some(vec!["--background"]),
         ))
         // Both native/background and Settings checks inherit these headers and
         // the R2 latest.json endpoint from tauri.conf.json. Revalidate each check.
@@ -1468,7 +1476,7 @@ pub fn run() {
                 .build(),
         )
         .setup(|app| {
-            // Menu-bar agent, not a windowed app: no Dock icon, no app switcher entry.
+            // Stay unobtrusive until Settings opens; showing it restores normal app activation.
             #[cfg(target_os = "macos")]
             app.set_activation_policy(if cfg!(debug_assertions) {
                 tauri::ActivationPolicy::Regular
@@ -1481,8 +1489,13 @@ pub fn run() {
             reader_host::ensure_registered(&handle);
             let fresh_install = !config::settings_path(&handle).exists();
             let settings = config::load(&handle);
-            if fresh_install && !cfg!(debug_assertions) && settings.launch_at_login {
-                use tauri_plugin_autostart::ManagerExt;
+            // Refresh existing login entries with --background so explicit launches
+            // and login launches have different window behavior. Preserve disabled entries.
+            use tauri_plugin_autostart::ManagerExt;
+            if !cfg!(debug_assertions)
+                && settings.launch_at_login
+                && (fresh_install || handle.autolaunch().is_enabled().unwrap_or(false))
+            {
                 if let Err(error) = handle.autolaunch().enable() {
                     eprintln!("[TextHalo] enable launch at login: {error}");
                 }
@@ -1525,9 +1538,10 @@ pub fn run() {
                 eprintln!("[TextHalo] hold shortcut setup failed: {error}");
             }
 
-            // Show setup on a fresh install, and show permission guidance whenever access
-            // is missing. Existing installs keep their saved onboarding state.
-            if cfg!(debug_assertions) || first_run || !capture::is_trusted() {
+            // Finder/Applications launches always open Settings. Login launches
+            // remain in the menu bar unless setup or permissions need attention.
+            let background_launch = std::env::args().any(|arg| arg == "--background");
+            if !background_launch || cfg!(debug_assertions) || first_run || !capture::is_trusted() {
                 show_settings(&handle);
             }
 
@@ -1604,8 +1618,17 @@ pub fn run() {
             hosted::desktop_checkout,
             hosted::desktop_topup,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running TextHalo");
+        .build(tauri::generate_context!())
+        .expect("error while building TextHalo")
+        .run(|app, event| {
+            // macOS sends Reopen when an already-running app is opened from
+            // Applications, Spotlight, or its Dock icon. Overlay windows do not
+            // count as an open Settings window, so always bring main forward.
+            #[cfg(target_os = "macos")]
+            if matches!(event, tauri::RunEvent::Reopen { .. }) {
+                show_settings(app);
+            }
+        });
 }
 
 #[cfg(test)]

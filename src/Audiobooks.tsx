@@ -16,7 +16,7 @@ export default function Audiobooks() {
   const { state, error, action } = useAudiobooks();
   const [selected, setSelected] = useState<string | null>(null),
     [busy, setBusy] = useState(false),
-    [exportStatus, setExportStatus] = useState("");
+    [fileAction, setFileAction] = useState<string | null>(null);
   const libraryBooks = state.books.filter((b) =>
     b.checkpoints.some((c) => c.complete && c.seconds !== null) ||
     state.playback?.bookId === b.id || state.generating === b.id || b.fullPreparation,
@@ -48,22 +48,35 @@ export default function Audiobooks() {
   };
   const exportAudio = async (share: boolean, chapter?: Checkpoint) => {
     if (!book) return;
-    setExportStatus("");
     const name = `${book.title}${chapter ? ` - ${chapter.label}` : ""}`
       .replace(/[\\/:*?"<>|\u0000-\u001f]/g, "_").slice(0, 180) || "Audiobook";
     const destination = share ? null : await save({
       defaultPath: `${name}.wav`, filters: [{ name: "WAV audio", extensions: ["wav"] }],
     });
     if (!share && !destination) return;
-    setExportStatus(share ? "Preparing audio to share…" : "Exporting audio…");
+    setFileAction(`${share ? "share" : "export"}:${chapter?.id ?? "book"}`);
     try {
       const path = await invoke<string>("audiobook_export", {
         id: book.id, rangeId: chapter?.rangeId ?? null,
         chapterId: chapter?.id ?? null, destination,
       });
       if (share) await invoke("audiobook_share", { path });
-      setExportStatus(share ? "Choose AirDrop, Mail, or another app in the share menu." : "Audio exported successfully.");
-    } catch (error) { setExportStatus(""); throw error; }
+    } finally { setFileAction(null); }
+  };
+  const fileButton = (share: boolean, chapter?: Checkpoint) => {
+    const label = `${share ? "Share" : "Export"} ${chapter?.label ?? "full audiobook"}`;
+    const loading = fileAction === `${share ? "share" : "export"}:${chapter?.id ?? "book"}`;
+    return (
+      <button className="audiobook-file-action" aria-label={label} title={label}
+        aria-busy={loading} disabled={busy} onClick={() => run(() => exportAudio(share, chapter))}>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+          strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          {loading ? <circle className="audiobook-action-spinner" cx="12" cy="12" r="8" strokeDasharray="36 14" />
+            : share ? <><path d="M12 15V3m-4 4 4-4 4 4" /><path d="M8 10H5v11h14V10h-3" /></>
+            : <><path d="M12 3v12m-4-4 4 4 4-4" /><path d="M4 16v5h16v-5" /></>}
+        </svg>
+      </button>
+    );
   };
   const open = state.readerContext ?? state.tray;
   const readerConnected = state.readerConnected === null ? null : state.readerConnected ?? !!open;
@@ -190,7 +203,10 @@ export default function Audiobooks() {
               <span className="audiobook-eyebrow">
                 KINDLE · {book.complete ? "COMPLETE" : "GROWING AUDIOBOOK"}
               </span>
-              <h2>{book.title}</h2>
+              <div className="audiobook-title-row">
+                <h2>{book.title}</h2>
+                {book.complete && <div className="audiobook-file-actions">{fileButton(false)}{fileButton(true)}</div>}
+              </div>
               <p>{audioClock(book.totalSeconds)} ready</p>
               {book.resume && (
                 <p className="audiobook-location" title={book.resume.page}>
@@ -205,12 +221,6 @@ export default function Audiobooks() {
                   {book.message}
                 </p>
               )}
-              {book.complete && <div className="audiobook-actions">
-                <button disabled={busy} onClick={() => run(() => exportAudio(false))}>Export full audiobook</button>
-                <button disabled={busy} onClick={() => run(() => exportAudio(true))}>Share full audiobook…</button>
-              </div>}
-              <p className="audiobook-hint">Export completed chapters as WAV audio to listen on other devices. Share with AirDrop, Mail, or another app.</p>
-              {exportStatus && <p role="status">{exportStatus}</p>}
               <div className="audiobook-actions">
                 {(playing || book.resume) && <button
                   className="primary"
@@ -384,8 +394,7 @@ export default function Audiobooks() {
                     </small>
                     <span aria-hidden="true">▶</span>
                   </button>
-                  <button className="chapter-export" aria-label={`Export ${c.label}`} disabled={busy} onClick={() => run(() => exportAudio(false, c))}>Export</button>
-                  <button className="chapter-export" aria-label={`Share ${c.label}`} disabled={busy} onClick={() => run(() => exportAudio(true, c))}>Share…</button>
+                  <div className="audiobook-file-actions">{fileButton(false, c)}{fileButton(true, c)}</div>
                   </div>
                 ))}
               </div>
