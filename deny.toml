@@ -17,6 +17,7 @@ yanked = "warn"
 # replacement available through the current dependency tree. Revisit when tokenizers/Tauri
 # remove them; the Rustls vulnerability remains unignored and is fixed in Cargo.lock.
 ignore = [
+    { id = "RUSTSEC-2024-0449", reason = "unsafe-libyaml has no patched release and is required by serde_yaml_ng through pinned JPreprocess/Lindera. TextHalo constructs the Japanese tokenizer from the embedded dictionary and does not call Lindera's YAML config loader. Revisit when Lindera replaces its YAML parser." },
     { id = "RUSTSEC-2025-0141", reason = "bincode 2.0.1 is unmaintained with no patched version; required by pinned JPreprocess/Lindera to decode bundled dictionaries, not user-provided serialized data. Track an upstream serializer replacement." },
     { id = "RUSTSEC-2024-0436", reason = "paste is transitively required by tokenizers; no safe compatible replacement is available" },
     { id = "RUSTSEC-2025-0081", reason = "unic-char-property is pulled by Tauri urlpattern; no compatible upstream replacement is available" },
@@ -30,7 +31,7 @@ ignore = [
 version = 2
 # Confidence threshold: 0.9 is cargo-deny's default; lower only if CI is noisy.
 confidence-threshold = 0.9
-# The application has custom terms and is not published as a reusable crate.
+# The application is Apache-2.0 and is not published as a reusable crate.
 # Continue checking every third-party dependency against the policy below.
 private = { ignore = true }
 # Allowed third-party dependency licenses; these do not declare TextHalo’s own license.
