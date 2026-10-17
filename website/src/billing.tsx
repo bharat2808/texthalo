@@ -144,8 +144,6 @@ export function SiteHeader() {
       <a className="wordmark" href={i18n.href("/")}><Mark /><span>TextHalo</span></a>
       <nav className={menuOpen ? "nav-open" : ""} aria-label={i18n.t("Main navigation")}>
         <a href={i18n.href("/#how-it-works")} onClick={() => setMenuOpen(false)}>{i18n.t("How it works")}</a>
-        <a href={i18n.href("/#kindle")} onClick={() => setMenuOpen(false)}>{i18n.t("Listen to Kindle ebooks")}</a>
-        <a href={i18n.href("/#voices")} onClick={() => setMenuOpen(false)}>{i18n.t("Voices")}</a>
         <a href={i18n.href("/privacy/")} onClick={() => setMenuOpen(false)}>{i18n.t("Privacy")}</a>
         <a href={i18n.href("/pricing/")} onClick={() => setMenuOpen(false)}>{i18n.t("Pricing")}</a>
         <a href={i18n.href("/account/billing/")} onClick={() => setMenuOpen(false)}>{i18n.t("Billing")}</a>
