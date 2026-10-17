@@ -388,7 +388,7 @@ impl FullScan {
             {
                 return Err("Invalid full audiobook progress".into());
             }
-            self.draft = Box::new(saved);
+            *self.draft = saved;
         }
         recover(&folder, &self.draft)?;
         load_bookmark(&folder, &mut self.draft);

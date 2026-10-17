@@ -144,7 +144,7 @@ fn voice_at_position(book: &Book, seconds: f64) -> Option<String> {
         .iter()
         .take(book.generated)
         .find(|sentence| sentence.end_sample > sample)
-        .or_else(|| book.sentences.iter().take(book.generated).last())
+        .or_else(|| book.sentences.iter().take(book.generated).next_back())
         .map(|sentence| sentence_voice_key(book, sentence))
 }
 fn reset_recording(book: &mut Book, settings: &crate::config::Settings) {
@@ -351,6 +351,9 @@ struct Book {
     schema_version: u32,
     #[serde(default = "identity")]
     range_id: String,
+    // Saved ranges are boxed to keep large Book values from moving when ranges
+    // are added or removed from the parent book.
+    #[allow(clippy::vec_box)]
     #[serde(default)]
     saved_ranges: Vec<Box<Book>>,
     #[serde(default)]
@@ -1159,6 +1162,7 @@ fn recover(dir: &Path, book: &Book) -> Result<(), String> {
         .and_then(|_| file.sync_all())
         .map_err(|e| e.to_string())
 }
+#[cfg(test)]
 fn commit(dir: &Path, book: &mut Book, samples: &[f32]) -> Result<(), String> {
     if samples.is_empty() || samples.iter().any(|s| !s.is_finite()) {
         return Err("Sentence produced no valid audio".into());
@@ -1194,7 +1198,7 @@ fn commit_pcm(
     bytes: &[u8],
     voice: Option<&str>,
 ) -> Result<(), String> {
-    if bytes.is_empty() || bytes.len() % 2 != 0 {
+    if bytes.is_empty() || !bytes.len().is_multiple_of(2) {
         return Err("Sentence produced no valid PCM audio".into());
     }
     let mut next = book.clone();
@@ -1796,6 +1800,7 @@ fn locate_continuation_report(
     );
     Err("Could not confidently locate your saved sentence in nearby views. Your saved audio is available; locate your saved position or choose Listen from this page.".into())
 }
+#[allow(clippy::too_many_arguments)]
 fn locate_for_job(
     app: &AppHandle,
     bridge: &crate::reader_bridge::ReaderBridge,
@@ -2271,8 +2276,7 @@ impl Audiobooks {
                 // recording. Playback and resume state still follow the audible voice.
                 let mut view = book.view();
                 let resume_voice = display_voice.as_deref().unwrap_or(&active_voice);
-                view["resume"] = resume_for_voice(book, resume_voice)
-                    .map_or(Value::Null, |resume| resume);
+                view["resume"] = resume_for_voice(book, resume_voice).unwrap_or(Value::Null);
                 if let Some((range, audio)) = range_and_audio {
                     let sample = (audio.position * RATE as f64) as u64;
                     view["passage"] = range.sentences.iter().take(range.generated)
@@ -2929,7 +2933,9 @@ fn producer(
     loop {
         let (sentence, heading, buffer, active) = {
             let mut l = service.0.lock().unwrap();
-            let b = l.books.get(id).ok_or("Audiobook removed")?;
+            if !l.books.contains_key(id) {
+                return Err("Audiobook removed".into());
+            }
             let active = l
                 .producing
                 .as_ref()
@@ -3486,8 +3492,10 @@ mod tests {
     fn fresh_reader_book_does_not_deadlock_shared_settings() {
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
-            let mut chosen = crate::config::Settings::default();
-            chosen.engine = crate::config::Engine::Fish;
+            let mut chosen = crate::config::Settings {
+                engine: crate::config::Engine::Fish,
+                ..Default::default()
+            };
             chosen.fish.voice_id = "fresh-install-voice".into();
             let expected = synthesis_key(&chosen);
             let settings = Mutex::new(chosen);
@@ -4065,8 +4073,10 @@ mod tests {
     fn listening_from_a_cached_page_prepares_the_selected_fish_voice() {
         let dir = std::env::temp_dir().join(format!("texthalo-fish-page-{}", identity()));
         fs::create_dir_all(&dir).unwrap();
-        let mut settings = crate::config::Settings::default();
-        settings.engine = crate::config::Engine::Fish;
+        let mut settings = crate::config::Settings {
+            engine: crate::config::Engine::Fish,
+            ..Default::default()
+        };
         settings.fish.voice_id = "old-voice".into();
         let mut b = book();
         b.synthesis_key = synthesis_key(&settings);
