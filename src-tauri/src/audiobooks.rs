@@ -3271,6 +3271,53 @@ fn captured_reader(book: &Book, full: bool) -> Option<Value> {
             .is_some_and(|s| s.transcript_ready()))
     .then(|| json!({"status":"ready","url":book.url,"bookId":book.book_id,"title":book.title}))
 }
+fn new_reader_book(
+    id: String,
+    book_key: String,
+    reader: &Value,
+    settings: &Mutex<crate::config::Settings>,
+) -> Book {
+    // Release the shared lock before building the struct: temporary guards in
+    // separate fields otherwise live to the end of the same initializer.
+    let settings = settings.lock().unwrap().clone();
+    Book {
+        schema_version: 4,
+        range_id: identity(),
+        saved_ranges: Vec::new(),
+        pending_start: None,
+        reader_hint: None,
+        recovery: None,
+        full_scan: None,
+        continuous: false,
+        audio_file: default_audio(),
+        end_verified: false,
+        activity: None,
+        bookmark_sentence: None,
+        bookmark_offset: 0,
+        id,
+        key: book_key,
+        title: reader["title"]
+            .as_str()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or("Kindle book")
+            .into(),
+        url: reader["url"].as_str().unwrap().into(),
+        book_id: reader["bookId"].as_str().unwrap().into(),
+        pages: Vec::new(),
+        sentences: Vec::new(),
+        checkpoints: Vec::new(),
+        pending: Vec::new(),
+        committed_samples: 0,
+        generated: 0,
+        position: 0.0,
+        speed: 1.0,
+        complete: false,
+        from_beginning: reader["startOfBook"] == true,
+        message: None,
+        voice: settings.kokoro.clone(),
+        synthesis_key: synthesis_key(&settings),
+    }
+}
 fn generate_mode(
     app: &AppHandle,
     id: Option<String>,
@@ -3318,49 +3365,12 @@ fn generate_mode(
             return Err("This audiobook is already complete".into());
         }
     } else {
-        let book = Book {
-            schema_version: 4,
-            range_id: identity(),
-            saved_ranges: Vec::new(),
-            pending_start: None,
-            reader_hint: None,
-            recovery: None,
-            full_scan: None,
-            continuous: false,
-            audio_file: default_audio(),
-            end_verified: false,
-            activity: None,
-            bookmark_sentence: None,
-            bookmark_offset: 0,
-            id: id.clone(),
-            key: book_key,
-            title: reader["title"]
-                .as_str()
-                .filter(|s| !s.trim().is_empty())
-                .unwrap_or("Kindle book")
-                .into(),
-            url: reader["url"].as_str().unwrap().into(),
-            book_id: reader["bookId"].as_str().unwrap().into(),
-            pages: Vec::new(),
-            sentences: Vec::new(),
-            checkpoints: Vec::new(),
-            pending: Vec::new(),
-            committed_samples: 0,
-            generated: 0,
-            position: 0.0,
-            speed: 1.0,
-            complete: false,
-            from_beginning: reader["startOfBook"] == true,
-            message: None,
-            voice: app
-                .state::<crate::AppState>()
-                .settings
-                .lock()
-                .unwrap()
-                .kokoro
-                .clone(),
-            synthesis_key: synthesis_key(&app.state::<crate::AppState>().settings.lock().unwrap()),
-        };
+        let book = new_reader_book(
+            id.clone(),
+            book_key,
+            &reader,
+            &app.state::<crate::AppState>().settings,
+        );
         let dir = directory(&id)?;
         recover(&dir, &book)?;
         save(&dir, &book)?;
@@ -3472,6 +3482,29 @@ pub async fn audiobook_generate(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn fresh_reader_book_does_not_deadlock_shared_settings() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut chosen = crate::config::Settings::default();
+            chosen.engine = crate::config::Engine::Fish;
+            chosen.fish.voice_id = "fresh-install-voice".into();
+            let expected = synthesis_key(&chosen);
+            let settings = Mutex::new(chosen);
+            let reader = serde_json::json!({"title":"New book", "url":"https://read.amazon.ca/?asin=B012345678", "bookId":"B012345678", "startOfBook":true});
+            let book =
+                new_reader_book("fresh-book".into(), "reader-key".into(), &reader, &settings);
+            assert_eq!(book.synthesis_key, expected);
+            assert_eq!(book.voice.voice, settings.try_lock().unwrap().kokoro.voice);
+            assert!(book.from_beginning);
+            tx.send(book.id).unwrap();
+        });
+        assert_eq!(
+            rx.recv_timeout(Duration::from_secs(2))
+                .expect("new book initialization must release the settings lock"),
+            "fresh-book"
+        );
+    }
     #[test]
     fn narration_separates_titles_and_inserts_pcm_silence_without_changing_transcript() {
         for (text, heading, expected) in [
