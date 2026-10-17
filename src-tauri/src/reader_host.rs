@@ -8,8 +8,8 @@
 //!   Chromium browser's `NativeMessagingHosts` directory, allowlisting only
 //!   the TextHalo Reader extension ID.
 //!
-//! When the extension is installed without the Mac app, its `hello` probe
-//! fails with "host not found" and the popup offers a direct app download.
+//! The hello probe checks the recorded app executable as well as the host, so
+//! uninstalling the app offers a download even when the helper survives.
 
 #[cfg(target_os = "macos")]
 use std::path::PathBuf;
@@ -51,8 +51,7 @@ fn write_if_differ(path: &PathBuf, content: &[u8], mode: u32) -> Result<bool, St
         }
     }
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("create {}: {e}", parent.display()))?;
+        std::fs::create_dir_all(parent).map_err(|e| format!("create {}: {e}", parent.display()))?;
     }
     std::fs::write(path, content).map_err(|e| format!("write {}: {e}", path.display()))?;
     #[cfg(unix)]
@@ -80,6 +79,14 @@ fn register() -> Result<(), String> {
     let dir = install_dir()?;
     std::fs::create_dir_all(&dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
 
+    // The helper survives uninstall. Record the executable so it can distinguish
+    // an app that is closed from one that has been removed.
+    let executable = std::env::current_exe().map_err(|e| e.to_string())?;
+    write_if_differ(
+        &dir.join("app-path"),
+        executable.to_string_lossy().as_bytes(),
+        0o600,
+    )?;
     let source = host_binary_path()?;
     let binary = std::fs::read(&source)
         .map_err(|e| format!("read reader-host at {}: {e}", source.display()))?;
@@ -88,7 +95,10 @@ fn register() -> Result<(), String> {
 
     // Same launcher shape as browser-extension/native/setup.mjs: Chrome passes
     // the requesting origin as argv[1], which the host validates.
-    let launcher = format!("#!/bin/sh\nexec \"{}\" \"$@\"\n", dir.join("reader-host").display());
+    let launcher = format!(
+        "#!/bin/sh\nexec \"{}\" \"$@\"\n",
+        dir.join("reader-host").display()
+    );
     write_if_differ(&dir.join("launch-host"), launcher.as_bytes(), 0o700)?;
 
     let mut allowed_origins = vec![format!("chrome-extension://{}/", extension_id())];

@@ -54,3 +54,7 @@ Still required before submission:
 - The app now opens the [official Chrome Web Store listing](https://chromewebstore.google.com/detail/texthalo-reader/jafnpokahhbldophkeogljemkblfmgmo) directly. No build-time URL configuration or manual ZIP installation is required.
 
 Update — October 11, 2026: The official listing is available at the link above. Its ID matches `extension-id.txt` and the native helper’s allowed origin. The submission checklist above records the earlier readiness audit; fresh-install and broader full-book validation still need verification.
+
+Update — October 16, 2026: TextHalo Reader 0.5.2 checks whether the app executable is still installed, independently of the native helper. The popup offers the Mac download after uninstall and refreshes detection after reinstall. The companion app is TextHalo 0.1.21; permissions and supported sites are unchanged.
+
+TextHalo Reader 0.5.2 was uploaded and submitted for review through the vermabharat642 publisher profile on October 16, 2026, with automatic publication selected after approval.

@@ -17,6 +17,10 @@ A relay for TextHalo's desktop audiobook library. Currently supports Kindle web 
 4. Open the extension popup and choose **Connect to TextHalo** for that tab; Chrome requires this gesture for screenshot access.
 5. Choose **Listen from this page** or **Build complete audiobook** in the extension. Playback and chapter controls remain in the app overlay while the extension is connected. Only chapters recorded completely from beginning to end offer Continue in the **Audiobooks** library. A mid-chapter page session can play now without searching backward; its initial fragment is not resumable later. Choose **Disconnect** to end the reader connection.
 
+In the app’s **Audiobooks** library, completed chapters offer **Export** (WAV) and **Share** (the macOS share menu, including AirDrop and Mail). When the entire audiobook is complete, the same actions are available for the full book. Newly generated narration reads detected chapter titles separately and adds a 0.75-second pause before the body; existing audio is reused unchanged.
+
+The popup offers an app download when TextHalo is missing, including after uninstalling the app while its browser helper remains. Moving the app to Trash counts as uninstalling.
+
 The app’s **Audiobooks** section opens the official Chrome Web Store listing. End users do not need to download a ZIP, enable developer mode, or install the native helper manually.
 
 After updating source files, reload the installed extension and the reader tab. The popup reports a timeout or outdated worker rather than remaining on “Checking”. The native helper uses the stable extension ID in `extension-id.txt`; helper origin and Chrome registration must stay aligned.

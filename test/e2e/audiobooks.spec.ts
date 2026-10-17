@@ -16,6 +16,8 @@ test("finished chapters appear and can play while full-book generation continues
     Object.assign(window, { __books: state, __calls: calls, __native: async (command: string, args: any) => {
       calls.push({ command, args });
       if (command === "audiobook_state") return structuredClone(state);
+      if (command === "audiobook_export") return "/exports/chapter.wav";
+      if (command === "plugin:dialog|save") return "/Downloads/Chapter One.wav";
       return null;
     } });
   });
@@ -58,6 +60,16 @@ test("finished chapters appear and can play while full-book generation continues
   await expect(page.getByRole("slider", { name: "Audiobook playback position" })).toHaveValue("30");
   await expect(page.getByRole("button", { name: /Chapter Two/ })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Continue listening" })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "Export full audiobook", exact: true })).toHaveCount(0);
+  await page.getByRole("button", { name: "Export Chapter One", exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).__calls.filter((c: any) => c.command === "audiobook_export"))).toEqual([
+    { command: "audiobook_export", args: { id: "book", rangeId: "draft", chapterId: "one", destination: "/Downloads/Chapter One.wav" } },
+  ]);
+  await expect(page.getByText("Audio exported successfully.")).toBeVisible();
+  await page.getByRole("button", { name: "Share Chapter One", exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).__calls.filter((c: any) => c.command === "audiobook_share"))).toEqual([
+    { command: "audiobook_share", args: { path: "/exports/chapter.wav" } },
+  ]);
   await page.getByRole("button", { name: /Chapter One Complete/ }).click();
   await expect.poll(() => page.evaluate(() => (window as any).__calls.filter((c: any) => c.command === "audiobook_play"))).toEqual([
     { command: "audiobook_play", args: { id: "book", seconds: 0, rangeId: "draft" } },
@@ -75,4 +87,10 @@ test("finished chapters appear and can play while full-book generation continues
   await expect.poll(() => page.evaluate(() => (window as any).__calls.filter((c: any) => c.command === "audiobook_generate"))).toEqual([
     { command: "audiobook_generate", args: { id: "book", full: true } },
   ]);
+  await page.evaluate(() => { (window as any).__books.books[0].complete = true; });
+  await expect(page.getByRole("button", { name: "Export full audiobook", exact: true })).toBeEnabled();
+  await page.getByRole("button", { name: "Share full audiobook…", exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).__calls.filter((c: any) => c.command === "audiobook_export").at(-1))).toEqual(
+    { command: "audiobook_export", args: { id: "book", rangeId: null, chapterId: null, destination: null } },
+  );
 });

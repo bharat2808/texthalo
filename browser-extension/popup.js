@@ -26,18 +26,18 @@ async function request(type, payload = {}) {
   return response.data;
 }
 let controls = null, pending = false, refreshing = false, actionError = "", connectionError = "";
-// The native host is registered by the Mac app on launch. When it is absent,
-// the app was never installed (or never launched): offer a direct download.
-// Checked once per popup session: each probe spawns the host process.
-let bridgeChecked = false, bridgeAbsent = false;
+// The app registers the native host on launch. Its hello probe also checks
+// the app executable, because the helper can survive an uninstall.
+// Recheck periodically so an uninstall or reinstall is reflected in an open popup.
+let bridgeCheckedAt = 0, bridgeAbsent = false;
 async function bridgeMissing() {
-  if (bridgeChecked) return bridgeAbsent;
-  bridgeChecked = true;
+  if (Date.now() - bridgeCheckedAt < 5000) return bridgeAbsent;
+  bridgeCheckedAt = Date.now();
   try {
-    await request("bridge-status");
-    bridgeAbsent = false;
+    const status = await request("bridge-status");
+    bridgeAbsent = status?.appInstalled === false;
   } catch (error) {
-    bridgeAbsent = /not found/i.test(error.message);
+    bridgeAbsent = /not found|native host has exited|failed to start native messaging host/i.test(error.message);
   }
   return bridgeAbsent;
 }

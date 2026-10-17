@@ -345,3 +345,33 @@ test("connected polling preserves visible controls and disables duplicate full b
   assert.equal(element("full").disabled,true);
   assert.equal(element("page").disabled,false);
 });
+
+test("popup offers an app download when the surviving helper reports an uninstall and recovers after reinstall", async () => {
+  const elements = new Map();
+  const element = id => {
+    if (!elements.has(id)) elements.set(id, { hidden: true, textContent: "" });
+    return elements.get(id);
+  };
+  let installed = false, now = 10000;
+  const opened = [];
+  const context = {
+    document: { getElementById: element, querySelector: element },
+    Date: { now: () => now }, setTimeout, clearTimeout,
+    chrome: { tabs: { create: args => opened.push(args) }, runtime: { sendMessage: async message => ({ ok: true, data:
+      message.type === "bridge-status" ? { ok: true, appInstalled: installed } : { supported: true, status: "ready", connected: false }
+    }) } },
+  };
+  vm.runInNewContext(readFileSync(new URL("../browser-extension/popup.js", import.meta.url), "utf8") + "\nglobalThis.refreshPopup=refresh;", context);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(element("download").hidden, false);
+  assert.equal(element("connect").hidden, true);
+  element("download-app").onclick();
+  assert.equal(opened[0].url, "https://storage.texthalo.app/TextHalo-macOS-aarch64.dmg");
+  installed = true; now += 6000;
+  await context.refreshPopup();
+  assert.equal(element("download").hidden, true);
+  assert.equal(element("connect").hidden, false);
+  installed = false; now += 6000;
+  await context.refreshPopup();
+  assert.equal(element("download").hidden, false);
+});

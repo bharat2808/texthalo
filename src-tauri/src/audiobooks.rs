@@ -194,6 +194,7 @@ fn render_sentence(
     app: &AppHandle,
     settings: &crate::config::Settings,
     text: &str,
+    heading: Option<&str>,
     scratch: &Path,
     active: impl Fn() -> bool,
 ) -> Result<Vec<f32>, String> {
@@ -205,19 +206,76 @@ fn render_sentence(
     if let Some(reason) = crate::selected_engine_refusal(settings) {
         return Err(reason);
     }
-    if settings.engine == crate::config::Engine::Fish {
-        return tauri::async_runtime::block_on(crate::hosted::render_speech(
-            text,
-            &settings.fish,
-            active,
-        ));
+    render_narration(text, heading, |part| {
+        if !active() {
+            return Err("Preparation stopped".into());
+        }
+        if settings.engine == crate::config::Engine::Fish {
+            tauri::async_runtime::block_on(crate::hosted::render_speech(
+                part,
+                &settings.fish,
+                &active,
+            ))
+        } else {
+            let result = state
+                .spoken
+                .render(settings, part, scratch)
+                .and_then(|_| crate::spoken::Spoken::load_audio(scratch));
+            let _ = fs::remove_file(scratch);
+            result
+        }
+    })
+}
+fn render_narration(
+    text: &str,
+    heading: Option<&str>,
+    mut render: impl FnMut(&str) -> Result<Vec<f32>, String>,
+) -> Result<Vec<f32>, String> {
+    let parts = narration_parts(text, heading);
+    let title = heading.is_some_and(|h| {
+        parts.len() > 1 || text.trim() == h.trim() || chapter(text).as_deref() == Some(h)
+    });
+    let mut audio = Vec::new();
+    for (index, part) in parts.iter().enumerate() {
+        audio.extend(render(part)?);
+        if index == 0 && title {
+            audio.resize(audio.len() + RATE as usize * 3 / 4, 0.0);
+        }
     }
-    let result = state
-        .spoken
-        .render(settings, text, scratch)
-        .and_then(|_| crate::spoken::Spoken::load_audio(scratch));
-    let _ = fs::remove_file(scratch);
-    result
+    Ok(audio)
+}
+// Keep transcript/source offsets unchanged; only synthesis separates the title.
+fn narration_heading(book: &Book) -> Option<&str> {
+    let checkpoint = book
+        .checkpoints
+        .iter()
+        .find(|c| c.sentence == book.generated)?;
+    book.pages.get(checkpoint.page)?.heading.as_deref()
+}
+fn narration_parts<'a>(text: &'a str, heading: Option<&str>) -> Vec<&'a str> {
+    let Some(heading) = heading else {
+        return vec![text];
+    };
+    let normal_heading = heading.split_whitespace().collect::<Vec<_>>().join(" ");
+    if text.starts_with(&normal_heading) {
+        let end = normal_heading.len();
+        if end == text.len() || text[end..].starts_with(char::is_whitespace) {
+            return vec![&text[..end], text[end..].trim()]
+                .into_iter()
+                .filter(|s| !s.is_empty())
+                .collect();
+        }
+    }
+    // OCR can spell Chapter as “Cha ter” or “Chap ter”.
+    for (end, ch) in text.char_indices() {
+        if ch.is_whitespace() && chapter(&text[..end]).as_deref() == Some(heading) {
+            return vec![&text[..end], text[end..].trim()]
+                .into_iter()
+                .filter(|s| !s.is_empty())
+                .collect();
+        }
+    }
+    vec![text]
 }
 fn start_page_stream_playback(
     app: &AppHandle,
@@ -1466,6 +1524,8 @@ fn chapter(text: &str) -> Option<String> {
         && line.len() < 100)
         .then(|| line.to_owned())
 }
+#[path = "audiobooks/export.rs"]
+pub(crate) mod export;
 #[path = "audiobooks/full_scan.rs"]
 mod full_scan;
 #[path = "audiobooks/matching.rs"]
@@ -2867,7 +2927,7 @@ fn producer(
     };
     let mut need_next = !book.pages.is_empty();
     loop {
-        let (sentence, buffer, active) = {
+        let (sentence, heading, buffer, active) = {
             let mut l = service.0.lock().unwrap();
             let b = l.books.get(id).ok_or("Audiobook removed")?;
             let active = l
@@ -2889,7 +2949,12 @@ fn producer(
             } else {
                 b.sentences.get(b.generated).cloned()
             };
-            (sentence, listening_buffer(b), active)
+            (
+                sentence,
+                narration_heading(b).map(str::to_owned),
+                listening_buffer(b),
+                active,
+            )
         };
         if !active {
             return Ok(());
@@ -2904,7 +2969,7 @@ fn producer(
         if let Some(sentence) = sentence {
             let scratch = directory(id)?.join("sentence.tmp.wav");
             let mut streamed_samples = 0usize;
-            let samples = if stream_page_session {
+            let samples = if stream_page_session && heading.is_none() {
                 let sentence_start = service.0.lock().unwrap().books[id].committed_samples;
                 let mut startup = Vec::new();
                 let mut on_audio = |chunk: &[f32]| -> Result<(), String> {
@@ -3002,9 +3067,14 @@ fn producer(
                 }
                 samples
             } else {
-                render_sentence(app, &settings, &sentence.text, &scratch, || {
-                    generation_voice_active(app, &service, id, token, &expected_voice)
-                })?
+                render_sentence(
+                    app,
+                    &settings,
+                    &sentence.text,
+                    heading.as_deref(),
+                    &scratch,
+                    || generation_voice_active(app, &service, id, token, &expected_voice),
+                )?
             };
             if !generation_voice_active(app, &service, id, token, &expected_voice) {
                 return Err("Voice settings changed during generation. Resume to use the newly selected voice.".into());
@@ -3402,6 +3472,43 @@ pub async fn audiobook_generate(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn narration_separates_titles_and_inserts_pcm_silence_without_changing_transcript() {
+        for (text, heading, expected) in [
+            (
+                "Chapter One The traveler opened the gate.",
+                "Chapter One",
+                vec!["Chapter One", "The traveler opened the gate."],
+            ),
+            (
+                "Chapter 1: A New Day The sun rose.",
+                "Chapter 1: A New Day",
+                vec!["Chapter 1: A New Day", "The sun rose."],
+            ),
+            (
+                "Cha ter Three At dawn we left.",
+                "Chapter Three",
+                vec!["Cha ter Three", "At dawn we left."],
+            ),
+            ("PROLOGUE", "PROLOGUE", vec!["PROLOGUE"]),
+        ] {
+            let mut calls = Vec::new();
+            let audio = render_narration(text, Some(heading), |part| {
+                calls.push(part.to_owned());
+                Ok(vec![0.5; 10])
+            })
+            .unwrap();
+            assert_eq!(calls, expected);
+            assert_eq!(&audio[10..18010], &[0.0; 18000]);
+            assert_eq!(audio.len(), 18000 + calls.len() * 10);
+        }
+        assert_eq!(
+            render_narration("Ordinary prose.", None, |_| Ok(vec![0.5; 10]))
+                .unwrap()
+                .len(),
+            10
+        );
+    }
     #[test]
     fn split_ocr_chapter_headings_survive_line_breaks() {
         for heading in [

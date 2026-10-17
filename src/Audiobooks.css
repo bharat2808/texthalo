@@ -343,3 +343,8 @@
   text-transform: none;
   letter-spacing: 0;
 }
+
+.audiobook-chapter-row { display: flex; align-items: center; gap: 16px; border-bottom: 1px solid var(--hairline); }
+.audiobook-chapter-row > button { border-bottom: 0; }
+.audiobook-chapter-row > button:first-child { flex: 1; min-width: 0; }
+.audiobook-chapter-row > .chapter-export { width: auto; flex-shrink: 0; color: var(--label-secondary); }

@@ -1,4 +1,6 @@
 import { useState } from "react";
+import { save } from "@tauri-apps/plugin-dialog";
+import type { Checkpoint } from "./useAudiobooks";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { invoke } from "@tauri-apps/api/core";
 import {
@@ -13,7 +15,8 @@ import "./Audiobooks.css";
 export default function Audiobooks() {
   const { state, error, action } = useAudiobooks();
   const [selected, setSelected] = useState<string | null>(null),
-    [busy, setBusy] = useState(false);
+    [busy, setBusy] = useState(false),
+    [exportStatus, setExportStatus] = useState("");
   const libraryBooks = state.books.filter((b) =>
     b.checkpoints.some((c) => c.complete && c.seconds !== null) ||
     state.playback?.bookId === b.id || state.generating === b.id || b.fullPreparation,
@@ -42,6 +45,25 @@ export default function Audiobooks() {
     if (busy) return;
     setBusy(true);
     void action(fn).finally(() => setBusy(false));
+  };
+  const exportAudio = async (share: boolean, chapter?: Checkpoint) => {
+    if (!book) return;
+    setExportStatus("");
+    const name = `${book.title}${chapter ? ` - ${chapter.label}` : ""}`
+      .replace(/[\\/:*?"<>|\u0000-\u001f]/g, "_").slice(0, 180) || "Audiobook";
+    const destination = share ? null : await save({
+      defaultPath: `${name}.wav`, filters: [{ name: "WAV audio", extensions: ["wav"] }],
+    });
+    if (!share && !destination) return;
+    setExportStatus(share ? "Preparing audio to share…" : "Exporting audio…");
+    try {
+      const path = await invoke<string>("audiobook_export", {
+        id: book.id, rangeId: chapter?.rangeId ?? null,
+        chapterId: chapter?.id ?? null, destination,
+      });
+      if (share) await invoke("audiobook_share", { path });
+      setExportStatus(share ? "Choose AirDrop, Mail, or another app in the share menu." : "Audio exported successfully.");
+    } catch (error) { setExportStatus(""); throw error; }
   };
   const open = state.readerContext ?? state.tray;
   const readerConnected = state.readerConnected === null ? null : state.readerConnected ?? !!open;
@@ -183,6 +205,12 @@ export default function Audiobooks() {
                   {book.message}
                 </p>
               )}
+              {book.complete && <div className="audiobook-actions">
+                <button disabled={busy} onClick={() => run(() => exportAudio(false))}>Export full audiobook</button>
+                <button disabled={busy} onClick={() => run(() => exportAudio(true))}>Share full audiobook…</button>
+              </div>}
+              <p className="audiobook-hint">Export completed chapters as WAV audio to listen on other devices. Share with AirDrop, Mail, or another app.</p>
+              {exportStatus && <p role="status">{exportStatus}</p>}
               <div className="audiobook-actions">
                 {(playing || book.resume) && <button
                   className="primary"
@@ -335,8 +363,8 @@ export default function Audiobooks() {
                   </span>
                 </h4>
                 {voiceChapters.map((c) => (
+                  <div className="audiobook-chapter-row" key={`${c.rangeId}:${c.id}`}>
                   <button
-                    key={`${c.rangeId}:${c.id}`}
                     disabled={busy}
                     onClick={() =>
                       run(() => listenBook(book.id, c.seconds!, c.rangeId))
@@ -356,6 +384,9 @@ export default function Audiobooks() {
                     </small>
                     <span aria-hidden="true">▶</span>
                   </button>
+                  <button className="chapter-export" aria-label={`Export ${c.label}`} disabled={busy} onClick={() => run(() => exportAudio(false, c))}>Export</button>
+                  <button className="chapter-export" aria-label={`Share ${c.label}`} disabled={busy} onClick={() => run(() => exportAudio(true, c))}>Share…</button>
+                  </div>
                 ))}
               </div>
             ))}

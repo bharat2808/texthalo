@@ -1561,6 +1561,8 @@ pub fn run() {
             speak_text,
             preview_voice,
             audiobooks::audiobook_state,
+            audiobooks::export::audiobook_export,
+            audiobooks::export::audiobook_share,
             audiobooks::audiobook_generate,
             audiobooks::audiobook_play,
             audiobooks::audiobook_listen_page,

@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 import CoreGraphics
 import ImageIO
 import UniformTypeIdentifiers
@@ -44,9 +45,26 @@ import UniformTypeIdentifiers
         try FileHandle.standardOutput.write(contentsOf:withUnsafeBytes(of:&length){Data($0)})
         try FileHandle.standardOutput.write(contentsOf:data)
     }
+    static func installedExecutable(_ path: String) -> Bool {
+        let url = URL(fileURLWithPath: path).resolvingSymlinksInPath()
+        guard !url.pathComponents.contains(".Trash"), !url.pathComponents.contains(".Trashes") else { return false }
+        return FileManager.default.isExecutableFile(atPath: url.path)
+    }
+    static func appInstalled() -> Bool {
+        let marker = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/TextHalo Reader/app-path")
+        if let path = try? String(contentsOf: marker, encoding: .utf8),
+           installedExecutable(path.trimmingCharacters(in: .whitespacesAndNewlines)) {
+            return true
+        }
+        // Also support installs registered by older versions and moved app bundles.
+        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.kiegen.app"),
+              let executable = Bundle(url: url)?.executableURL else { return false }
+        return installedExecutable(executable.path)
+    }
     static func process(_ request: Request) async throws -> [String:Any] {
         guard request.protocolVersion==1, UUID(uuidString:request.requestId) != nil else {throw failure("Invalid protocol or request ID")}
-        if request.type=="hello" {return ["ok":true,"protocolVersion":1,"requestId":request.requestId,"capabilities":["local-ocr","app-relay"],"engine":"Apple Vision / TextHalo app relay"]}
+        if request.type=="hello" {return ["ok":true,"protocolVersion":1,"requestId":request.requestId,"appInstalled":appInstalled(),"capabilities":["local-ocr","app-relay"],"engine":"Apple Vision / TextHalo app relay"]}
         if request.type.hasPrefix("relay-") {return try await relay(request)}
         guard let string=request.url, let url=URL(string:string), url.scheme=="https",
               ["read.amazon.ca","read.amazon.com"].contains(url.host?.lowercased() ?? ""),

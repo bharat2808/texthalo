@@ -863,9 +863,14 @@ pub(super) fn producer(app: &AppHandle, id: &str, token: &str) -> Result<(), Str
             if !scan.reuse(&root)? {
                 let folder = scan.folder(&root)?;
                 let scratch = folder.join("sentence.tmp.wav");
-                let samples = render_sentence(app, &settings, &sentence.text, &scratch, || {
-                    generation_voice_active(app, &service, id, token, &requested_key)
-                })?;
+                let samples = render_sentence(
+                    app,
+                    &settings,
+                    &sentence.text,
+                    narration_heading(&scan.draft),
+                    &scratch,
+                    || generation_voice_active(app, &service, id, token, &requested_key),
+                )?;
                 if !generation_voice_active(app, &service, id, token, &requested_key) {
                     return Err("Voice settings changed during generation. Resume to use the newly selected voice.".into());
                 }
