@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { buildPlan, executePlan, validateAssetSet, verifyUpdaterSignature, productionBranch, publishRelease, verifyPublicFile, assetExists, verifyWebsite, parseReleaseArgs, runReleaseWorkflow, validateReleaseBuildEnvironment } from "./release-macos.mjs";
+import { buildPlan, executePlan, validateAssetSet, verifyUpdaterSignature, productionBranch, publishRelease, verifyPublicFile, assetExists, verifyWebsite, parseReleaseArgs, runReleaseWorkflow, validateReleaseBuildEnvironment, publishGitHubRelease } from "./release-macos.mjs";
 
 test("combined release accepts only explicit supported deployment flags", () => {
   assert.deepEqual(parseReleaseArgs(["release"]), { mode: "release", deployCloudflare: false });
@@ -19,14 +19,14 @@ test("combined release accepts only explicit supported deployment flags", () => 
 test("release workflow verifies before publishing and optionally deploys last", async () => {
   const receipt = { version: "1.2.3" };
   for (const [args, expected] of [
-    [["release"], ["prepare", "verify", "publish"]],
-    [["release", "--deploy-cloudflare"], ["prepare", "verify", "publish", "deploy"]],
-    [["publish", "--deploy-cloudflare"], ["verify", "publish", "deploy"]],
+    [["release"], ["prepare", "verify", "publish", "github"]],
+    [["release", "--deploy-cloudflare"], ["prepare", "verify", "publish", "github", "deploy"]],
+    [["publish", "--deploy-cloudflare"], ["verify", "publish", "github", "deploy"]],
     [["prepare"], ["prepare"]], [["verify"], ["verify"]], [["deploy"], ["verify", "deploy"]],
   ]) {
     const calls = [];
-    await runReleaseWorkflow(parseReleaseArgs(args), Object.fromEntries(["prepare", "verify", "publish", "deploy"].map(stage => [stage, async value => {
-      if (["publish", "deploy"].includes(stage)) assert.equal(value, receipt);
+    await runReleaseWorkflow(parseReleaseArgs(args), Object.fromEntries(["prepare", "verify", "publish", "github", "deploy"].map(stage => [stage, async value => {
+      if (["publish", "github", "deploy"].includes(stage)) assert.equal(value, receipt);
       calls.push(stage);
       return receipt;
     }])));
@@ -35,7 +35,7 @@ test("release workflow verifies before publishing and optionally deploys last", 
 });
 
 test("combined release stops on failures and gives a deployment-only retry command", async () => {
-  const stages = ["prepare", "verify", "publish", "deploy"];
+  const stages = ["prepare", "verify", "publish", "github", "deploy"];
   for (const failed of stages) {
     const calls = [];
     const operations = Object.fromEntries(stages.map(stage => [stage, async () => {
@@ -219,4 +219,57 @@ test("website verification waits for R2 links, the published version, and redire
     },
   });
   assert.equal(calls, 3);
+});
+
+async function githubFixture(callback) {
+  const dir = await mkdtemp(join(tmpdir(), "texthalo-github-test-"));
+  const receipt = { version: "1.2.3", commit: "a".repeat(40), files: {} };
+  const contents = {};
+  for (const name of ["TextHalo-macOS-aarch64.dmg", "TextHalo-aarch64.app.tar.gz", "TextHalo-aarch64.app.tar.gz.sig", "latest.json"]) {
+    contents[name] = name === "latest.json" ? JSON.stringify({notes: "Installer fix"}) : name;
+    await writeFile(join(dir, name), contents[name]);
+    receipt.files[name] = createHash("sha256").update(contents[name]).digest("hex");
+  }
+  try { await callback(dir, receipt, contents); }
+  finally { await rm(dir, { recursive: true, force: true }); }
+}
+
+test("GitHub publishes a verified draft at the exact source commit and supports immutable retries", async () => {
+  await githubFixture(async (dir, receipt, contents) => {
+    for (const existing of [null, {draft:true}, {draft:false}]) {
+      const actions = [];
+      await publishGitHubRelease(dir, receipt, { execute: async (command, args) => {
+        actions.push([command, ...args]);
+        if (args[0] === "ls-remote") return existing ? `${receipt.commit}\trefs/tags/v1.2.3` : "";
+        if (args[0] === "api") return existing ? JSON.stringify(existing) : "";
+        if (args[1] === "download") {
+          const target = args[args.indexOf("--dir") + 1];
+          for (const [name, bytes] of Object.entries(contents)) await writeFile(join(target, name), bytes);
+        }
+        return "";
+      }});
+      assert.equal(actions.some(a => a[1] === "push"), !existing);
+      if (!existing) assert.ok(actions.some(a => a.includes(`${receipt.commit}:refs/tags/v1.2.3`)));
+      assert.equal(actions.some(a => a[2] === "create"), !existing);
+      assert.equal(actions.some(a => a[2] === "upload"), existing?.draft !== false);
+      if (existing?.draft !== false) assert.ok(actions.findIndex(a => a[2] === "download") < actions.findIndex(a => a[2] === "edit"));
+    }
+  });
+});
+
+test("GitHub rejects conflicting tags and never publishes corrupted uploads", async () => {
+  await githubFixture(async (dir, receipt, contents) => {
+    await assert.rejects(publishGitHubRelease(dir, receipt, {execute: async () => `${"b".repeat(40)}\trefs/tags/v1.2.3`}), /different source commit/);
+    const actions = [];
+    await assert.rejects(publishGitHubRelease(dir, receipt, { execute: async (command, args) => {
+      actions.push(args);
+      if (args[0] === "ls-remote" || args[0] === "api") return "";
+      if (args[1] === "download") {
+        const target = args[args.indexOf("--dir") + 1];
+        for (const [name, bytes] of Object.entries(contents)) await writeFile(join(target, name), name.endsWith(".dmg") ? "corrupt" : bytes);
+      }
+      return "";
+    }}), /checksum/);
+    assert.ok(!actions.some(a => a[1] === "edit"));
+  });
 });

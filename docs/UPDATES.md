@@ -42,14 +42,14 @@ not part of the release workflow. The signed updater manifest contains only
 
 `scripts/release-macos.mjs` uses the existing Developer ID identity and a
 notarytool Keychain profile. Prerequisites are Xcode Command Line Tools, the
-`aarch64-apple-darwin` Rust target, Node dependencies, and authenticated Wrangler for R2 publication and Pages deployment.
+`aarch64-apple-darwin` Rust target, Node dependencies, authenticated GitHub CLI (`gh auth login`) with repository write access, and authenticated Wrangler for R2 publication and Pages deployment.
 Before any production build/deploy, also set `VITE_TEXTHALO_API_URL` to the
 HTTPS API origin and `VITE_TURNSTILE_SITE_KEY` to the public widget site key.
 The script refuses to make a production build if either is absent; these values
 are embedded in the desktop app and static website, respectively.
 
 For a single local command that builds, signs, notarizes, verifies, and publishes
-the R2 release:
+the R2 and GitHub releases:
 
 ```sh
 export NOTARY_KEYCHAIN_PROFILE="your-existing-profile-name"
@@ -62,11 +62,20 @@ npm run release:mac -- release --deploy-cloudflare
 
 The website is built/tested during preparation. Its stable download URL follows
 the stable R2 download object automatically; publishing the updated website itself
-requires `--deploy-cloudflare`. Publication and deployment run sequentially, not
+requires `--deploy-cloudflare`. R2 publication, GitHub publication, and website deployment run sequentially, not
 atomically: a failed website deployment does not roll back the R2 release.
 Resolve the deployment error and retry with `npm run release:mac -- deploy`,
 without rebuilding or republishing. If you already prepared the artifacts, use
 `npm run release:mac -- publish --deploy-cloudflare`.
+
+Both `release` and `publish` automatically push a `vVERSION` tag at the verified
+source commit and publish the same four assets on GitHub. GitHub assets are first
+uploaded to a draft, downloaded, and checksum-verified before publication as the
+latest release. A conflicting remote tag is rejected. Published assets are never
+overwritten; retries require identical checksums. If GitHub publication fails after
+R2 succeeds, resolve the error and retry `npm run release:mac -- publish` (add
+`--deploy-cloudflare` to also update the website). The tag makes the release source
+available on GitHub; branch updates remain a separate `git push` operation.
 
 The same stages remain available separately:
 

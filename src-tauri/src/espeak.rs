@@ -116,10 +116,57 @@ impl EspeakNg {
         Ok(clean_english(&raw, british))
     }
 
+    // eSpeak NG 1.52 has a 160-byte data-path buffer. Keep its path relative
+    // to the child's working directory, even for long/non-ASCII user folders.
+    // Resolve the executable first because changing cwd also affects relative binaries.
+    fn command(&self) -> Result<Command, String> {
+        let binary = std::path::absolute(&self.binary)
+            .map_err(|e| format!("could not resolve eSpeak NG executable: {e}"))?;
+        let mut command = Command::new(&binary);
+        if let Some(data) = &self.data {
+            command.current_dir(data).env("ESPEAK_DATA_PATH", ".");
+        }
+        if let Some(root) = binary.parent().and_then(Path::parent) {
+            let lib = root.join("lib");
+            if lib.join("libespeak-ng.1.dylib").is_file()
+                && lib.join("libpcaudio.0.dylib").is_file()
+            {
+                command.env("DYLD_LIBRARY_PATH", lib);
+            }
+        }
+        Ok(command)
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        let output = self
+            .command()?
+            .args(["-q", "--ipa", "-v", "en-us", "TextHalo"])
+            .output()
+            .map_err(|e| {
+                format!(
+                    "could not validate eSpeak NG at {}: {e}",
+                    self.binary.display()
+                )
+            })?;
+        if !output.status.success() || output.stdout.iter().all(u8::is_ascii_whitespace) {
+            return Err(format!(
+                "the downloaded eSpeak NG runtime did not start ({}): {}{}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr).trim(),
+                if output.stdout.iter().all(u8::is_ascii_whitespace) {
+                    " (no phonemes returned)"
+                } else {
+                    ""
+                }
+            ));
+        }
+        Ok(())
+    }
+
     /// One espeak-ng call. Returns the chunk's phonemes followed by the word separator,
     /// which is the shape phonemizer hands to `restore`.
     fn phonemize_chunk(&self, chunk: &str, voice: &str) -> Result<String, String> {
-        let mut command = Command::new(&self.binary);
+        let mut command = self.command()?;
         command
             .arg("-q") // no audio: phonemes only
             .arg("--ipa") // IPA rather than espeak's internal mnemonic alphabet
@@ -127,21 +174,6 @@ impl EspeakNg {
             .arg("-v")
             .arg(voice)
             .arg(chunk);
-        if let Some(data) = &self.data {
-            command.env("ESPEAK_DATA_PATH", data);
-        }
-        if let Some(lib) = self
-            .binary
-            .parent()
-            .and_then(Path::parent)
-            .map(|root| root.join("lib"))
-        {
-            if lib.join("libespeak-ng.1.dylib").is_file()
-                && lib.join("libpcaudio.0.dylib").is_file()
-            {
-                command.env("DYLD_LIBRARY_PATH", lib);
-            }
-        }
 
         let output = command
             .output()
@@ -674,16 +706,11 @@ fn install_managed_into(runtime_parent: &Path, arch: &str, major: u32) -> Result
             ),
         )
         .map_err(|e| e.to_string())?;
-        let binary = prepared.join("bin/espeak-ng");
-        let validation = Command::new(&binary)
-            .args(["-q", "--ipa", "-v", "en-us", "TextHalo"])
-            .env("ESPEAK_DATA_PATH", prepared.join("share/espeak-ng-data"))
-            .env("DYLD_LIBRARY_PATH", prepared.join("lib"))
-            .output()
-            .map_err(|e| format!("could not validate eSpeak NG: {e}"))?;
-        if !validation.status.success() {
-            return Err("the downloaded eSpeak NG runtime did not start".into());
+        EspeakNg {
+            binary: prepared.join("bin/espeak-ng"),
+            data: Some(prepared.join("share/espeak-ng-data")),
         }
+        .validate()?;
         let destination = runtime_parent.join("espeak-ng");
         let backup = runtime_parent.join(".espeak-ng-previous");
         let _ = fs::remove_dir_all(&backup);
@@ -753,6 +780,23 @@ pub fn install() -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     #[test]
+    #[cfg(unix)]
+    fn validation_preserves_exit_status_and_stderr() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!("espeak-error-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let binary = root.join("espeak-ng");
+        std::fs::write(&binary, "#!/bin/sh\necho 'missing phondata' >&2\nexit 7\n").unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let error = super::EspeakNg { binary, data: None }
+            .validate()
+            .unwrap_err();
+        assert!(error.contains("7"), "{error}");
+        assert!(error.contains("missing phondata"), "{error}");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn managed_bottles_cover_supported_macs() {
         let (espeak, pcaudio) = super::managed_bottles("aarch64", 26).unwrap();
         assert_eq!(espeak.version, "1.52.0");
@@ -771,24 +815,44 @@ mod tests {
     #[test]
     #[ignore = "downloads official Homebrew bottles"]
     fn managed_install_downloads_and_runs_in_isolation() {
-        let root = std::env::temp_dir().join(format!(
-            "kiegen-espeak-install-test-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let root = std::env::temp_dir()
+            .join(format!(
+                "kiegen-espeak-install-test-{}",
+                uuid::Uuid::new_v4()
+            ))
+            .join("deep-user-directory-".repeat(8));
+        assert!(root.as_os_str().len() > 160);
         let major = super::macos_major_version().unwrap();
         let result = super::install_managed_into(&root, std::env::consts::ARCH, major).unwrap();
         assert!(result.starts_with("Installed — ready at "));
 
         let runtime = root.join("espeak-ng");
-        let output = std::process::Command::new(runtime.join("bin/espeak-ng"))
-            .args(["-q", "--ipa", "--tie=^", "-v", "es", "hola"])
+        // Reproduce the old absolute-path failure using the very same bottle.
+        let old = std::process::Command::new(runtime.join("bin/espeak-ng"))
+            .args(["-q", "--ipa", "-v", "en-us", "TextHalo"])
             .env("ESPEAK_DATA_PATH", runtime.join("share/espeak-ng-data"))
             .env("DYLD_LIBRARY_PATH", runtime.join("lib"))
             .output()
             .unwrap();
-        assert!(output.status.success());
-        assert!(!output.stdout.is_empty());
-        std::fs::remove_dir_all(root).unwrap();
+        assert!(
+            !old.status.success(),
+            "pinned eSpeak must reproduce the long-path failure"
+        );
+        let engine = super::EspeakNg {
+            binary: runtime.join("bin/espeak-ng"),
+            data: Some(runtime.join("share/espeak-ng-data")),
+        };
+        engine.validate().unwrap();
+        for (voice, text) in [
+            ("es", "hola"),
+            ("fr-fr", "bonjour"),
+            ("hi", "नमस्ते"),
+            ("it", "ciao"),
+            ("pt-br", "olá"),
+        ] {
+            assert!(!engine.phonemize(text, voice).unwrap().trim().is_empty());
+        }
+        std::fs::remove_dir_all(root.parent().unwrap()).unwrap();
     }
 
     #[test]

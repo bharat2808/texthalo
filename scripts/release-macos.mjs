@@ -1,4 +1,4 @@
-// Production macOS release orchestration. No publication or deployment by default.
+// Production macOS release orchestration. Publishing updates R2 and GitHub.
 import { createHash, createPublicKey, verify } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { readFile, writeFile, mkdir, mkdtemp, rm, stat } from "node:fs/promises";
@@ -306,6 +306,43 @@ export async function publishRelease(directory, receipt, {
   await verifyFile(`${RELEASE_BASE_URL}/${RELEASE_MANIFEST_KEY}`, receipt.files["latest.json"]);
 }
 
+export const GITHUB_REPOSITORY = "bharat2808/texthalo";
+
+export async function publishGitHubRelease(directory, receipt, { execute = run } = {}) {
+  await validateAssetSet(directory, receipt);
+  const tag = `v${receipt.version}`;
+  if (!/^v\d+\.\d+\.\d+$/.test(tag) || !/^[a-f0-9]{40}$/.test(receipt.commit)) throw new Error("Invalid GitHub release version or source commit");
+  // Inspect the remote tag before pushing; never move a previously released tag.
+  const refs = await execute("git", ["ls-remote", "--tags", "origin", `refs/tags/${tag}`, `refs/tags/${tag}^{}`], { capture: true });
+  const lines = refs.trim().split("\n").filter(Boolean);
+  const taggedCommit = (lines.find(line => line.endsWith("^{}")) ?? lines[0])?.split(/\s+/)[0];
+  if (taggedCommit && taggedCommit !== receipt.commit) throw new Error(`GitHub tag ${tag} points to a different source commit`);
+  const raw = await execute("gh", ["api", `repos/${GITHUB_REPOSITORY}/releases`, "--paginate", "--jq", `.[] | select(.tag_name == "${tag}")`], { capture: true });
+  const existing = raw ? JSON.parse(raw) : null;
+  if (!taggedCommit) await execute("git", ["push", "origin", `${receipt.commit}:refs/tags/${tag}`]);
+  if (existing && !existing.draft) {
+    // A published release is immutable. Retry only succeeds for identical assets.
+    const downloaded = await mkdtemp(join(tmpdir(), "texthalo-github-verify-"));
+    try {
+      await execute("gh", ["release", "download", tag, "--repo", GITHUB_REPOSITORY, "--dir", downloaded]);
+      await validateAssetSet(downloaded, receipt);
+    } finally { await rm(downloaded, { recursive: true, force: true }); }
+    return;
+  }
+  const notes = join(directory, "github-release-notes.md");
+  const manifest = JSON.parse(await readFile(join(directory, "latest.json"), "utf8"));
+  await writeFile(notes, `${manifest.notes || `TextHalo ${receipt.version}`}\n\nSigned and notarized macOS release for Apple Silicon.\n`);
+  if (!existing) await execute("gh", ["release", "create", tag, "--repo", GITHUB_REPOSITORY, "--verify-tag", "--draft", "--title", `TextHalo ${tag}`, "--notes-file", notes]);
+  await execute("gh", ["release", "upload", tag, "--repo", GITHUB_REPOSITORY, "--clobber", ...assetNames().map(name => join(directory, name))]);
+  // Verify GitHub's actual uploaded bytes before making the draft public.
+  const downloaded = await mkdtemp(join(tmpdir(), "texthalo-github-verify-"));
+  try {
+    await execute("gh", ["release", "download", tag, "--repo", GITHUB_REPOSITORY, "--dir", downloaded]);
+    await validateAssetSet(downloaded, receipt);
+  } finally { await rm(downloaded, { recursive: true, force: true }); }
+  await execute("gh", ["release", "edit", tag, "--repo", GITHUB_REPOSITORY, "--draft=false", "--latest", "--title", `TextHalo ${tag}`, "--notes-file", notes]);
+}
+
 export async function deploy(receipt) {
   // Verify the published artifacts before deploying the download page.
   await verifyPublicAssets(receipt);
@@ -346,7 +383,13 @@ export async function runReleaseWorkflow({ mode, deployCloudflare }, operations)
   if (mode === "prepare" || mode === "release") await operations.prepare();
   if (mode === "prepare") return;
   const receipt = await operations.verify();
-  if (mode === "publish" || mode === "release") await operations.publish(receipt);
+  if (mode === "publish" || mode === "release") {
+    await operations.publish(receipt);
+    try { await operations.github(receipt); }
+    catch (error) {
+      throw new Error(`GitHub publication failed; the R2 release is not rolled back. Retry with npm run release:mac -- publish. ${error.message}`, { cause: error });
+    }
+  }
   if (mode === "deploy" || deployCloudflare) {
     try { await operations.deploy(receipt); }
     catch (error) {
@@ -361,12 +404,18 @@ async function main() {
   const { version, config } = await configuration();
   const directory = join(ROOT, "release-artifacts", version);
   if (mode === "plan") return console.log(JSON.stringify(buildPlan({ root: ROOT, output: directory, version, identity: config.bundle.macOS.signingIdentity, profile: process.env.NOTARY_KEYCHAIN_PROFILE ?? "<keychain-profile>" }), null, 2));
+  if (["prepare", "release", "publish"].includes(mode)) {
+    if (run("gh", ["api", `repos/${GITHUB_REPOSITORY}`, "--jq", ".permissions.push"], { capture: true }) !== "true") {
+      throw new Error("Authenticate GitHub CLI with write access to the TextHalo repository before releasing.");
+    }
+  }
   validateReleaseBuildEnvironment(process.env);
   if (process.platform !== "darwin") throw new Error("Signed macOS releases must run on macOS");
   await runReleaseWorkflow(options, {
     prepare: () => prepare(directory, version, config),
     verify: () => receiptFor(directory, version, config),
     publish: receipt => publishRelease(directory, receipt),
+    github: receipt => publishGitHubRelease(directory, receipt),
     deploy,
   });
   console.log(`${mode} completed for ${version}`);
