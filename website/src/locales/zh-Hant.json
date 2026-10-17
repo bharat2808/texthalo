@@ -484,5 +484,9 @@
   "Browser extension": "瀏覽器擴充功能",
   "The optional TextHalo Reader browser extension connects a supported Kindle web reader tab to the Mac app. After you choose Connect, the extension reads the open book's title, reading position, and page-image bounds, and — only when you start an audiobook action — captures the visible page and verifies page turns. Capture and text recognition run on your Mac through a local helper that only accepts requests from the TextHalo extension; the helper relays results to the desktop app over a private authenticated connection on your Mac. No reading content is sent to TextHalo servers.": "可選的 TextHalo Reader 瀏覽器擴充功能將支援的 Kindle 網頁版分頁連接到 Mac 應用程式。選擇 Connect 後，擴充功能會讀取已開啟書籍的標題、閱讀位置和頁面影像範圍。只有在你啟動有聲書操作時，才會擷取可見頁面並驗證翻頁。擷取和文字辨識透過本機輔助程式在 Mac 上執行，該程式僅接受 TextHalo 擴充功能的請求，並透過 Mac 上經過驗證的私人連線將結果傳給應用程式。閱讀內容不會傳送到 TextHalo 伺服器。",
   "If the Mac app is not detected, the extension offers a direct download link for the app. Checking for the app happens entirely on your Mac and does not transmit personal data. Removing the extension does not remove desktop-app files.": "如果未偵測到 Mac 應用程式，擴充功能會提供直接下載連結。應用程式偵測完全在 Mac 上進行，不傳輸個人資料。移除擴充功能不會刪除桌面應用程式的檔案。",
-  "Updating from an earlier release? Install 0.1.18 manually once to enable future automatic updates.": "從舊版本升級？請手動安裝一次 0.1.18，以啟用日後的自動更新。"
+  "Updating from an earlier release? Install 0.1.18 manually once to enable future automatic updates.": "從舊版本升級？請手動安裝一次 0.1.18，以啟用日後的自動更新。",
+  "Connect a Kindle for the web page to TextHalo on your Mac.": "將 Kindle 網頁版連接到 Mac 上的 TextHalo。",
+  "Sample chapter excerpt": "章節試聽片段",
+  "Chapter I · Down the Rabbit-Hole": "第一章 · 掉進兔子洞",
+  "Public-domain excerpt · Fish Audio narration": "公版作品片段 · Fish Audio 旁白"
 }

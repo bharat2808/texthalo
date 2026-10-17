@@ -88,9 +88,21 @@ function Website() {
             <article className="step-card"><div className="step-top"><span>02</span><span className="step-icon selection-icon">⌖</span></div><h3>{i18n.t("Listen while chapters are prepared")}</h3><p>{i18n.t("Completed chapters appear as they finish. Play them and jump between chapters in TextHalo while the rest of the book is prepared.")}</p></article>
             <article className="step-card step-card-accent"><div className="step-top"><span>03</span><span className="step-icon chatter-icon">♫</span></div><h3>{i18n.t("Keep listening on your Mac")}</h3><p>{i18n.t("Your transcript, audio, and listening position stay on your Mac. Once the transcript is captured, prepare more chapters without the reader connection and play saved audio offline.")}</p></article>
           </div>
-          <div className="kindle-setup">
-            <a className="button button-dark" href="https://chromewebstore.google.com/detail/texthalo-reader/jafnpokahhbldophkeogljemkblfmgmo" target="_blank" rel="noreferrer">{i18n.t("Get TextHalo Reader")} <Arrow /></a>
-            <p>{i18n.t("Install and launch TextHalo, add the extension to Chrome, then open a Kindle book and choose Connect to TextHalo.")}</p>
+          <div className="kindle-showcase">
+            <article className="kindle-sample-card">
+              <span className="kindle-extension-kicker">{i18n.t("Sample chapter excerpt")}</span>
+              <h3>Alice’s Adventures in Wonderland</h3>
+              <p>{i18n.t("Chapter I · Down the Rabbit-Hole")}</p>
+              <audio controls preload="none" aria-label={i18n.t("Sample chapter excerpt")}>
+                <source src="/audio/alice-chapter-one-sample.mp3" type="audio/mpeg" />
+              </audio>
+              <span className="kindle-sample-credit">{i18n.t("Public-domain excerpt · Fish Audio narration")}</span>
+            </article>
+            <article className="kindle-extension-card">
+              <div className="kindle-extension-icon" aria-hidden="true"><svg viewBox="0 0 32 32" fill="none"><rect x="3.5" y="5" width="25" height="22" rx="4"/><path d="M4 11h24M9 8h.01M12 8h.01"/><path d="m12 18 3 3 6-6"/></svg></div>
+              <div className="kindle-extension-copy"><span className="kindle-extension-kicker">{i18n.t("Browser extension")}</span><h3>TextHalo Reader</h3><p>{i18n.t("Connect a Kindle for the web page to TextHalo on your Mac.")}</p></div>
+              <a className="button button-dark" href="https://chromewebstore.google.com/detail/texthalo-reader/jafnpokahhbldophkeogljemkblfmgmo" target="_blank" rel="noreferrer">{i18n.t("Get TextHalo Reader")} <Arrow /></a>
+            </article>
           </div>
           <p className="workflow-note">{i18n.t("Supports Kindle for the web on read.amazon.com and read.amazon.ca. Chapter recognition depends on the book’s layout and text capture.")}</p>
         </section>
